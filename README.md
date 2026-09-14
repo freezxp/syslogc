@@ -69,4 +69,4 @@ Requires Go 1.27+, Docker, and util-linux `logger` for end-to-end tests.
 
 ## License
 
-Not yet chosen (see [open questions](docs/roadmap.md#open-questions-for-review)).
+[Apache License 2.0](LICENSE).

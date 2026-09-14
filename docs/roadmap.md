@@ -93,7 +93,7 @@ VictoriaLogs with full accounting, deployable with Docker Compose.
 - Integration tests use a VictoriaLogs service container (`make vl-up`, CI `services:`) instead of `testcontainers-go`.
 - UDP uses one `recvmsg` per datagram; `recvmmsg` batching deferred to Phase 6 benchmarks.
 - The filter AST package skeleton was not created; it lands with the query compiler in Phase 3 to avoid an untested placeholder.
-- No commit-message lint in CI yet (commits follow Conventional Commits by convention); license file pending open question Q9.
+- No commit-message lint in CI yet (commits follow Conventional Commits by convention). License: Apache-2.0.
 - Spikes S1–S5 and S7 done ([results](storage-comparison.md#81-results-phase-1-victorialogs-v1520-4-vcpu-vm)); S6 (stream cardinality) moved to Phase 6.
 
 **Commit plan (illustrative):**
@@ -275,11 +275,11 @@ Each has a recommended default so work is not blocked; please confirm or overrid
 |---|---|---|
 | Q1 | Product/binary name: keep working name **Syslogc**? Go module path (`github.com/freezxp/syslogc`?) | Keep "syslogc" until a product name is chosen |
 | Q2 | Accept **PostgreSQL** as a required dependency (vs SQLite single-node + Postgres later)? | PostgreSQL from Phase 2 ([ADR-0004](decisions/0004-postgresql-metadata-store.md)) |
-| Q3 | `raw_message` default `always` (fidelity) vs `on_error` (storage)? | `always` until Phase 6 measurement ([ADR-0013](decisions/0013-raw-message-policy.md)) |
+| Q3 | `raw_message` default `always` (fidelity) vs `on_error` (storage)? | **Decided: `on_error`** after S7 showed ~2× storage for `always` ([ADR-0013](decisions/0013-raw-message-policy.md)) |
 | Q4 | Default VictoriaLogs stream fields `source,hostname,app_name` acceptable for your device estate (hostname cardinality)? | Yes, configurable |
 | Q5 | Can crash-time loss of in-memory buffers (seconds of data) be accepted for MVP? | Yes; disk spool in Phase 7 ([ADR-0005](decisions/0005-bounded-in-memory-pipeline.md)) |
 | Q6 | Should Viewers be allowed native LogsQL and export? | No for both (configurable per role) |
 | Q7 | Default retention for compose: 30 d? | 30 d, disk cap 85 % |
 | Q8 | Audit every search (privacy vs accountability)? | Off by default; exports and native queries always audited |
-| Q9 | License (Apache-2.0, AGPL-3.0, proprietary)? | Needs owner decision before first public push |
+| Q9 | License (Apache-2.0, AGPL-3.0, proprietary)? | **Decided: Apache-2.0** (`LICENSE`) |
 | Q10 | Hosting: GitHub repo under the `freezxp` account, public or private? | Private until MVP |
