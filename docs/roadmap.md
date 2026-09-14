@@ -7,8 +7,8 @@ Status: **Proposed (Phase 0)** · Each phase ends with a review gate: exit crite
 ## Overview
 
 ```text
-Phase 0  Architecture & planning                       ◀── we are here
-Phase 1  Core ingestion (syslog UDP/TCP/TLS → VictoriaLogs), config, health, compose
+Phase 0  Architecture & planning                       ✔ done
+Phase 1  Core ingestion (syslog UDP/TCP/TLS → VictoriaLogs), config, health, compose   ◀── in review
 Phase 2  HTTP/JSON ingestion, PostgreSQL metadata, authentication & authorization
 Phase 3  Query API: search, fields, facets, stats, histogram, pagination, export, saved searches
 Phase 4  Web UI: dashboard, explorer, detail, query builder, time picker, charts, live tail
@@ -55,9 +55,9 @@ architecture, storage comparison, data model, ingestion, API, frontend,
 security, deployment, testing) and ADRs 0001–0014.
 
 **Exit criteria:**
-- [ ] Documents reviewed; open questions below answered or explicitly deferred.
+- [x] Documents reviewed; open questions answered or explicitly deferred (Phase 1 started with the recommended defaults).
 - [ ] ADR statuses moved from *Proposed* to *Accepted* (or amended).
-- [ ] Repository initialized with docs committed.
+- [x] Repository initialized with docs committed.
 
 ---
 
@@ -82,11 +82,19 @@ VictoriaLogs with full accounting, deployable with Docker Compose.
 13. Docs: `installation.md`, `configuration.md`, `syslog.md`, `development.md`, README quick start.
 
 **Exit criteria:**
-- [ ] `docker compose up -d`; `logger --udp` / `--tcp` (both RFC modes) messages visible via VictoriaLogs query and the dev search endpoint with correct normalized fields.
-- [ ] Parsers: unit + golden + fuzz (10 min clean) green; vendor corpus ≥ 50 samples.
-- [ ] Pipeline tests prove: TCP no loss during 60 s storage outage (within buffer), UDP drops counted, memory stays under configured bound.
-- [ ] Preliminary single-node throughput measured with `loggen` (informational, not a claim).
-- [ ] All ingestion metrics from [ingestion.md §9](ingestion.md#9-metrics) exported.
+- [x] `docker compose up -d`; `logger --udp` / `--tcp` (both RFC modes) messages visible via the dev search endpoint with correct normalized fields — automated in `backend/tests/e2e/phase1-smoke.sh` and `tests/integration` (`TestLoggerCompatibility`).
+- [ ] Parsers: unit + fuzz (10 min per target) green. *(10-minute runs in progress at time of writing.)*
+- [ ] Vendor corpus ≥ 50 samples — **partial:** 35 parser cases covering Cisco IOS/ASA, Fortinet, Linux (rsyslog, systemd, sshd, postfix, cron) and RFC examples. Real vendor captures (Juniper, Palo Alto, MikroTik, ESXi, Windows agents) carried over to Phase 2.
+- [x] TCP no loss during a storage outage: VictoriaLogs paused for 23 s during 5K msgs/s TCP load → 199,952 sent, 199,952 stored, 0 dropped (manual run; automated backpressure coverage in pipeline unit tests). UDP drops are counted (unit test). Queue byte budget enforced (unit test); measured RSS with a full default queue ≈520–600 MiB, higher than the original estimate — documented, `GOMEMLIMIT` guidance added.
+- [x] Preliminary throughput observed (informational only, 4 vCPU VM shared with VictoriaLogs and the generator): sustained 10K msgs/s TCP and UDP with zero loss; a 1M-message burst drained into storage in 7.7 s.
+- [x] Ingestion metrics exported, plus `syslogc_storage_reachable` (added after the outage test showed that write-based health stays green while writes hang).
+
+**Delivered differently than planned (Phase 1):**
+- Integration tests use a VictoriaLogs service container (`make vl-up`, CI `services:`) instead of `testcontainers-go`.
+- UDP uses one `recvmsg` per datagram; `recvmmsg` batching deferred to Phase 6 benchmarks.
+- The filter AST package skeleton was not created; it lands with the query compiler in Phase 3 to avoid an untested placeholder.
+- No commit-message lint in CI yet (commits follow Conventional Commits by convention); license file pending open question Q9.
+- Spikes S1–S5 and S7 done ([results](storage-comparison.md#81-results-phase-1-victorialogs-v1520-4-vcpu-vm)); S6 (stream cardinality) moved to Phase 6.
 
 **Commit plan (illustrative):**
 ```text

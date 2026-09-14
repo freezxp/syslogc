@@ -32,4 +32,5 @@ the storage abstraction ([ADR-0002](0002-storage-abstraction.md)).
 - Phases 3–4 build on native endpoints, reducing custom aggregation code.
 - Per-tenant retention is unavailable; handled later via instance routing or ClickHouse ([architecture.md D11](../architecture.md#10-deviations-from-the-original-brief)).
 - Validation spikes S1–S7 run early in Phase 1; if S1 (tie paging), S3 (scoping) or S6 (stream cardinality) fail, this ADR is revisited before Phase 3.
+  **Phase 1 outcome:** S1–S5 and S7 passed or produced usable data; S6 moved to Phase 6. Findings that affect implementation (form content type silently dropping inserts, approximate `field_names` counts, half-open time ranges, distroless image) are listed in [storage-comparison.md §8.1](../storage-comparison.md#81-results-phase-1-victorialogs-v1520-4-vcpu-vm).
 - The version is pinned; a weekly CI job runs the integration suite against the latest release.

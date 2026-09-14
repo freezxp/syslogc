@@ -27,6 +27,22 @@ ingestion and exploration rank higher, and SOC use cases value raw evidence.
 | `never` | Lowest storage | "Copy raw" impossible; no re-parse path |
 | Reconstruct raw from fields | No storage | Not byte-exact; misleading as evidence |
 
+## Measurement (spike S7, Phase 1)
+
+500K synthetic rows (60 % RFC 5424 / 40 % RFC 3164, three custom fields) in
+VictoriaLogs v1.52.0:
+
+| Policy | Compressed | Per row | Uncompressed JSON per row |
+|---|---|---|---|
+| `always` | 41.1 MB | ≈82 B | ≈750 B |
+| `never` | 20.4 MB | ≈41 B | ≈545 B |
+
+Retaining raw messages roughly **doubles** compressed storage. Real device
+logs are less repetitive than templated synthetic data, so absolute sizes will
+be higher; the ratio is the decision input. The default stays `always` pending
+review (open question Q3); `on_error` is the recommended setting for
+high-volume sources where forensic fidelity is not required.
+
 ## Consequences
 
 - Storage sizing guidance must state the raw policy assumption.

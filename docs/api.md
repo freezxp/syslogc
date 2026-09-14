@@ -339,6 +339,8 @@ Body: selection + `fields` + `limit` (≤ role max) + `order`.
 
 `/fields` response marks `kind: core | label | dynamic` and `type_hint: string | number | ip | time` (heuristic from values sample) so the query builder can offer suitable operators.
 
+VictoriaLogs' `field_names` hit counts are block-level approximations (spike S4), so `/fields` returns `count_approximate: true`; exact counts for a single field are available from `/logs/stats` (`count` with an `exists` filter).
+
 ### 6.5 Dashboard
 
 | Method | Path | Permission | Description |

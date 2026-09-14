@@ -1,8 +1,8 @@
 # Syslogc Documentation
 
-> **Status: Phase 0 — Architecture & Planning.** No production code exists yet.
-> These documents are the design baseline. They are expected to be reviewed,
-> challenged and amended *before* Phase 1 implementation starts.
+> **Status: Phase 1 — core ingestion implemented.** Planning documents are the
+> design baseline; where the implementation deliberately differs, the
+> document says so in an "As built" note.
 
 "Syslogc" is the working name of the project (taken from the repository
 directory). Renaming is a search-and-replace exercise and is tracked as an open
@@ -34,10 +34,10 @@ not exist.
 
 | Document | Written in |
 |---|---|
-| `installation.md` | Phase 1 (updated each phase) |
-| `configuration.md` | Phase 1 (generated reference + narrative) |
-| `syslog.md` | Phase 1 |
-| `development.md` | Phase 1 |
+| [installation.md](installation.md) | Phase 1 ✔ (updated each phase) |
+| [configuration.md](configuration.md) | Phase 1 ✔ |
+| [syslog.md](syslog.md) | Phase 1 ✔ |
+| [development.md](development.md) | Phase 1 ✔ |
 | `json-ingestion.md` | Phase 2 |
 | `querying.md` | Phase 3 |
 | `openapi.yaml` | Phase 2 (auth + ingest), completed Phase 3 |

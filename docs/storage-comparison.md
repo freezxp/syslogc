@@ -265,3 +265,18 @@ VictoriaLogs version and record results in the ADR:
 | S5 | `/insert/jsonline` throughput with gzip vs zstd vs none, 8 MiB batches | Pick default compression |
 | S6 | Stream cardinality: 100K hostnames × 50 apps | Acceptable ingest/query latency; document limits |
 | S7 | Storage size per 1M typical syslog rows with/without `raw_message` | Inform [ADR-0013](decisions/0013-raw-message-policy.md) default |
+
+### 8.1 Results (Phase 1, VictoriaLogs v1.52.0, 4 vCPU VM)
+
+| Spike | Result | Consequence |
+|---|---|---|
+| S1 | **Passed with a twist.** `sort by (_time desc)` is *not* stable for rows with identical timestamps (3,000 rows at the same second came back in arbitrary order). `start == end` query args match nothing, but the filter `_time:[t, t]` returns the complete tie group (3,000/3,000), also at nanosecond precision. | Confirms [ADR-0010](decisions/0010-time-boundary-cursor-pagination.md): offset paging over ties would be wrong; the tie group must be fetched with a `_time:[t, t]` filter. |
+| S1b | `start`/`end` HTTP args form the half-open interval **[start, end)** at nanosecond precision. | Matches `storage.TimeRange`; no adjustment needed. |
+| S2 | Values quoted with Go `strconv.Quote` round-trip exactly, including quotes, backslashes, `|`, `:`, `*`, control characters and non-ASCII; a value designed to escape its quotes (`") OR hostname:* OR ("`) matched exactly its own row. Automated in `tests/integration`. | Quoting approach for the compiler validated. |
+| S3 | `extra_filters={"hostname":"h1"}` is enforced even when the user query contains `OR` alternatives and `stats` pipes; `AccountID` header isolates tenants. | Server-side scoping design validated. |
+| S4 | `/select/logsql/hits` with `field=` returns per-value series with aligned buckets. `/select/logsql/field_names` hit counts are **approximate** (block-level: a field present in 10 rows was reported with 1,010 hits). | The fields API must label counts as approximate or compute exact counts with `stats` when needed (Phase 3). |
+| S5 | Draining a 1M-message burst from syslogc into a co-located VictoriaLogs: 7.7 s uncompressed vs 8.4 s gzip. VictoriaLogs accepts `gzip`, `deflate` and uncompressed bodies. | Default `compression: none`; recommend `gzip` for remote storage. |
+| S6 | Not run in Phase 1 (stream cardinality at 100K hosts). | Moved to Phase 6 benchmarks. |
+| S7 | 500K synthetic rows (60 % RFC 5424 / 40 % RFC 3164, 3 custom fields): **41.1 MB compressed with `raw_message: always` (≈82 B/row) vs 20.4 MB with `never` (≈41 B/row)**; uncompressed JSON ≈750 vs ≈545 B/row. Synthetic templated data compresses better than real logs, so treat absolute numbers as optimistic; the ~2× ratio is the useful signal. | Recorded in [ADR-0013](decisions/0013-raw-message-policy.md); default reconsidered at review. |
+| — | **Gotcha:** `/insert/jsonline` returns HTTP 200 but silently ingests nothing when the body is sent with a form content type (curl's default). `Content-Type: application/stream+json` is required. | Adapter always sets it; covered by a unit test. |
+| — | The v1.52 image is distroless (no shell), so container health checks cannot run inside it. | Compose uses `service_started`; Syslogc reports storage state in `/ready` and `syslogc_storage_reachable`. |

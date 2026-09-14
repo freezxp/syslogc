@@ -1,6 +1,6 @@
 # ADR-0010: Time-boundary cursor pagination with tie-group completion
 
-- **Status:** Proposed (pending spike S1)
+- **Status:** Proposed — spike S1 passed (see [storage-comparison.md §8.1](../storage-comparison.md#81-results-phase-1-victorialogs-v1520-4-vcpu-vm)): VictoriaLogs sort order is unstable among equal timestamps, and `_time:[t, t]` returns complete tie groups
 - **Date:** 2026-09-14
 - **Related:** [api.md §6.3](../api.md#post-apiv1logssearch), [storage-comparison.md §8](../storage-comparison.md#8-validation-spikes-early-phase-1)
 
