@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/app"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/logentry"
+	"github.com/freezxp/syslogc/backend/internal/metadata/postgres/pgtest"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 	"github.com/freezxp/syslogc/backend/internal/storage/victorialogs"
 )
@@ -152,6 +154,11 @@ func TestWriteSearchRoundTrip(t *testing.T) {
 
 func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	t.Helper()
+	_, dsn := pgtest.OpenDSN(t)
+	secretDir := t.TempDir()
+	adminPw := filepath.Join(secretDir, "admin")
+	_ = os.WriteFile(adminPw, []byte(adminPassword), 0o600)
+
 	cfg := config.Default()
 	cfg.Node.ID = "integration"
 	cfg.Server.HTTP.Address = "127.0.0.1:0"
@@ -160,10 +167,13 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	cfg.Ingestion.Batch.MaxWait = config.Duration(100 * time.Millisecond)
 	cfg.Shutdown.DrainDelay = 0
 	cfg.Shutdown.Timeout = config.Duration(10 * time.Second)
-	cfg.Dev.SearchEndpoint = true
+	cfg.Metadata.Postgres.DSN = dsn
+	cfg.Auth.BootstrapAdmin.PasswordFile = adminPw
+	cfg.Auth.CookieSecure = false
 	cfg.Ingestion.Sources = []config.Source{
 		{Name: "it-udp", Protocol: "udp", Address: "127.0.0.1:0", UDP: config.UDPConfig{Sockets: 2}},
 		{Name: "it-tcp", Protocol: "tcp", Address: "127.0.0.1:0", Labels: map[string]string{"site": "lab"}},
+		{Name: "it-http", Type: "http_json"},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -175,11 +185,12 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	if testing.Verbose() {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	a, err := app.New(&cfg, app.BuildInfo{Version: "test"}, log)
+	ctx, cancel := context.WithCancel(context.Background())
+	a, err := app.New(ctx, &cfg, app.BuildInfo{Version: "test"}, log)
 	if err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx, func() { close(ready) }) }()
@@ -187,7 +198,7 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	case <-ready:
 	case err := <-done:
 		t.Fatalf("app exited during startup: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("app did not start")
 	}
 	t.Cleanup(func() {
@@ -199,29 +210,28 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	return a
 }
 
+const adminPassword = "it-bootstrap-secret-9471"
+
 // applyDefaultsAndValidate mimics config.Load for programmatic configs.
 func applyDefaultsAndValidate(cfg *config.Config) error {
-	path := writeTemp(cfg)
-	loaded, err := config.Load(config.LoadOptions{File: path, Environ: []string{}})
+	dsn := cfg.Metadata.Postgres.DSN
+	out, err := cfg.YAML()
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp("", "syslogc-it-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	_, _ = f.Write([]byte(strings.Replace(string(out), "[REDACTED]", dsn, 1)))
+	_ = f.Close()
+	loaded, err := config.Load(config.LoadOptions{File: f.Name(), Environ: []string{}})
 	if err != nil {
 		return err
 	}
 	*cfg = *loaded
 	return nil
-}
-
-func writeTemp(cfg *config.Config) string {
-	out, err := cfg.YAML()
-	if err != nil {
-		panic(err)
-	}
-	f, err := os.CreateTemp("", "syslogc-it-*.yaml")
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	_, _ = f.Write(out)
-	return f.Name()
 }
 
 // TestSyslogToStorage covers Syslog → Parser → Normalizer → Storage over
@@ -294,16 +304,15 @@ func TestSyslogToStorage(t *testing.T) {
 		}
 	}
 
-	// The same data through the HTTP dev search endpoint.
-	url := fmt.Sprintf("http://%s/api/v1/dev/search?query=%s&from=48h&fields=_msg,hostname", a.Server().Addr(), id)
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	// The same data through the authenticated search API.
+	c := login(t, a)
+	resp, body := c.post(t, "/api/v1/logs/search", map[string]any{
+		"time_range": map[string]string{"from": "now-48h", "to": "now+1h"},
+		"filter":     map[string]any{"op": "text", "value": id},
+		"fields":     []string{"timestamp", "message", "hostname"},
+	})
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":6`) || strings.Contains(string(body), "raw_message") {
-		t.Errorf("dev search: HTTP %d %s", resp.StatusCode, body)
+		t.Errorf("search API: HTTP %d %s", resp.StatusCode, body)
 	}
 
 	// Readiness and metrics reflect the ingestion.
@@ -321,6 +330,7 @@ func TestSyslogToStorage(t *testing.T) {
 	resp.Body.Close()
 	for _, want := range []string{
 		`syslogc_ingest_messages_stored_total{source="it-tcp"} 4`,
+		`syslogc_storage_reachable{backend="victorialogs"} 1`,
 		`syslogc_ingest_messages_stored_total{source="it-udp"} 2`,
 		`syslogc_storage_healthy{backend="victorialogs"} 1`,
 	} {
