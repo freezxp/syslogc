@@ -259,7 +259,7 @@ func TestSearch(t *testing.T) {
 	if got[0][0].Key != "_time" || got[0][1].Key != "_msg" {
 		t.Errorf("field order not preserved: %v", got[0])
 	}
-	wantQuery := `hostname:="fw01" | sort by (_time desc) limit 50 | fields "_time", "weird key"`
+	wantQuery := `(hostname:="fw01") | sort by (_time desc) limit 50 | fields "_time", "weird key"`
 	if form["query"][0] != wantQuery {
 		t.Errorf("query = %q, want %q", form["query"][0], wantQuery)
 	}
