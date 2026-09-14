@@ -74,6 +74,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request, p *auth.Pr
 	peer := netip.AddrPort{}
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
 		peer = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+		if client := s.clientAddr(r); client != peer.Addr() {
+			peer = netip.AddrPortFrom(client, 0) // forwarded by a trusted proxy
+		}
 	}
 	m := src.Metrics
 	reject := func(line int, msg string) {
@@ -247,10 +250,12 @@ func (s *Server) handleSystemIngestion(w http.ResponseWriter, _ *http.Request, _
 	}
 	type sourceJSON struct {
 		*metrics.SourceTotals
-		State string `json:"state,omitempty"`
-		Error string `json:"error,omitempty"`
+		State             string  `json:"state,omitempty"`
+		Error             string  `json:"error,omitempty"`
+		ReceivedPerSecond float64 `json:"received_per_second"`
+		StoredPerSecond   float64 `json:"stored_per_second"`
 	}
-	var sources []sourceJSON
+	sources := []sourceJSON{}
 	seen := map[string]bool{}
 	if s.opts.API.Sources != nil {
 		for _, st := range s.opts.API.Sources() {
@@ -267,7 +272,13 @@ func (s *Server) handleSystemIngestion(w http.ResponseWriter, _ *http.Request, _
 			sources = append(sources, sourceJSON{SourceTotals: t})
 		}
 	}
-	body := map[string]any{"node": s.opts.NodeID, "sources": sources,
+	if received, stored, ok := s.rates.rates(time.Now(), snap); ok {
+		for i := range sources {
+			sources[i].ReceivedPerSecond = received[sources[i].Name]
+			sources[i].StoredPerSecond = stored[sources[i].Name]
+		}
+	}
+	body := map[string]any{"node": s.opts.NodeID, "sources": sources, "storage_healthy": snap.StorageHealthy,
 		"e2e_latency_p50_seconds": finite(snap.E2EP50), "e2e_latency_p99_seconds": finite(snap.E2EP99)}
 	if s.opts.API.Queue != nil {
 		body["queue"] = s.opts.API.Queue()
@@ -314,11 +325,11 @@ func (s *Server) handleSystemStorage(w http.ResponseWriter, r *http.Request, _ *
 // UI for everything else.
 func (s *Server) handleFallback(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
 	if strings.HasPrefix(r.URL.Path, "/api/") || s.opts.API.WebUI == nil {
-		securityHeaders(w, false, r.TLS != nil)
+		securityHeaders(w, false, r.TLS != nil, s.secureOrigin(r))
 		return errStatus(http.StatusNotFound, "not_found", "no such endpoint")
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		securityHeaders(w, false, r.TLS != nil)
+		securityHeaders(w, false, r.TLS != nil, s.secureOrigin(r))
 		return errStatus(http.StatusMethodNotAllowed, "bad_request", "method not allowed")
 	}
 	return s.handleWebUI(w, r, p)

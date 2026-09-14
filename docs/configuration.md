@@ -49,6 +49,8 @@ Value formats:
 | `address` | `:8080` | HTTP listen address. |
 | `read_header_timeout` | `10s` | Slowloris protection. |
 | `idle_timeout` | `2m` | Keep-alive idle timeout. |
+| `allowed_origins` | `[]` | Extra browser origins (`https://logs.example.com`) accepted for state-changing requests. Needed behind a reverse proxy that does not forward the original `Host` header; requests whose `Origin` matches `Host` are always accepted. |
+| `trusted_proxies` | `[]` | Proxy IPs/CIDRs whose `X-Forwarded-For` and `X-Forwarded-Proto` headers are trusted. The client IP (audit log, login throttling, JSON `source_ip`) is the right-most untrusted address. |
 
 ### `log`
 

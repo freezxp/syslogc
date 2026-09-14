@@ -88,6 +88,13 @@ type HTTPConfig struct {
 	Address           string   `koanf:"address"`
 	ReadHeaderTimeout Duration `koanf:"read_header_timeout"`
 	IdleTimeout       Duration `koanf:"idle_timeout"`
+	// AllowedOrigins lists extra browser origins (scheme://host[:port]) accepted
+	// for state-changing requests, e.g. the public URL of a reverse proxy that
+	// does not preserve the Host header.
+	AllowedOrigins []string `koanf:"allowed_origins"`
+	// TrustedProxies lists proxy addresses/CIDRs whose X-Forwarded-For header
+	// is trusted to determine the client IP.
+	TrustedProxies []string `koanf:"trusted_proxies"`
 }
 
 type LogConfig struct {

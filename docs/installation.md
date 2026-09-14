@@ -51,6 +51,42 @@ logger --server 127.0.0.1 --tcp --port 514 --rfc3164 -p local4.err -t vpnd "VPN 
 make e2e    # logs in, searches, tails, exports; see backend/tests/e2e/smoke.sh
 ```
 
+### Reverse proxy
+
+Serve the UI under a hostname with TLS by putting a reverse proxy in front of
+port 8080, and tell Syslogc about it in `.env`:
+
+```bash
+SYSLOGC_ALLOWED_ORIGINS=https://logs.example.com   # public URL(s), comma-separated
+SYSLOGC_TRUSTED_PROXIES=192.168.0.10               # the proxy's address
+SYSLOGC_AUTH_COOKIE_SECURE=false                   # true once plain-HTTP LAN access is not needed
+```
+
+Example nginx server block (SSE for live tail needs buffering off and a long
+read timeout):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name logs.example.com;
+    # ssl_certificate ...; ssl_certificate_key ...;
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://192.168.0.53:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_buffering off;          # live tail (server-sent events) and exports
+        proxy_read_timeout 1h;
+    }
+}
+```
+
+`Secure` session cookies (`SYSLOGC_AUTH_COOKIE_SECURE=true`) stop logins over
+plain `http://<ip>:8080`, so enable them only when all access goes through HTTPS.
+
 ### Retention
 
 Set `SYSLOGC_RETENTION` (for example in a `.env` file next to

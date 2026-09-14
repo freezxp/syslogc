@@ -165,7 +165,7 @@ api POST "/api/v1/logs/export?format=csv" "{${SEL},\"fields\":[\"timestamp\",\"h
 log "export verified"
 
 # ---- saved search -----------------------------------------------------------------------
-body="$(api POST /api/v1/saved-searches "{\"name\":\"smoke ${RUN}\",\"query\":{\"time_range\":${RANGE},\"filter\":{\"op\":\"text\",\"value\":\"${RUN}\"}}}")"
+body="$(api POST /api/v1/saved-searches "{\"name\":\"smoke ${RUN}\",\"query\":{\"filter\":{\"op\":\"text\",\"value\":\"${RUN}\"}},\"default_time_range\":${RANGE},\"columns\":[\"timestamp\",\"message\"]}")"
 id="$(json 'd["id"]' <<<"$body")"
 api GET /api/v1/saved-searches | grep -q "smoke ${RUN}" || fail "saved search not listed"
 api DELETE "/api/v1/saved-searches/${id}" >/dev/null

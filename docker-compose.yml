@@ -37,8 +37,14 @@ services:
       - "514:5514/tcp"
       # - "6514:6514/tcp"   # enable together with the syslog-tls source
     environment:
+      # Stable across container re-creation (ingestion-rate history is per node).
+      SYSLOGC_NODE_ID: ${SYSLOGC_NODE_ID:-syslogc-1}
       SYSLOGC_RETENTION_PERIOD: ${SYSLOGC_RETENTION:-30d}
       SYSLOGC_AUTH_COOKIE_SECURE: ${SYSLOGC_AUTH_COOKIE_SECURE:-false}
+      # Public URL(s) of a reverse proxy, comma-separated, e.g. https://logs.example.com
+      SYSLOGC_SERVER_HTTP_ALLOWED_ORIGINS: ${SYSLOGC_ALLOWED_ORIGINS:-}
+      # Proxy addresses allowed to set X-Forwarded-For, comma-separated IPs/CIDRs
+      SYSLOGC_SERVER_HTTP_TRUSTED_PROXIES: ${SYSLOGC_TRUSTED_PROXIES:-}
     volumes:
       - ./deploy/compose/syslogc.yaml:/etc/syslogc/syslogc.yaml:ro
       - secrets:/secrets:ro

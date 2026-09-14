@@ -24,6 +24,9 @@ type SourceTotals struct {
 type Totals struct {
 	Sources     map[string]*SourceTotals
 	BytesStored int64
+	// StorageHealthy is false if any storage backend's last write failed;
+	// nil before the gauge is set.
+	StorageHealthy *bool
 	// E2E latency quantile estimates in seconds (NaN when no data).
 	E2EP50, E2EP99 float64
 }
@@ -96,6 +99,9 @@ func (m *Metrics) Snapshot() (Totals, error) {
 				}
 			case namespace + "_ingest_active_connections":
 				src(metric).ActiveConnections += int64(metric.GetGauge().GetValue())
+			case namespace + "_storage_healthy":
+				healthy := metric.GetGauge().GetValue() == 1 && (t.StorageHealthy == nil || *t.StorageHealthy)
+				t.StorageHealthy = &healthy
 			case namespace + "_ingest_bytes_stored_total":
 				t.BytesStored += v
 			case namespace + "_ingest_e2e_latency_seconds":

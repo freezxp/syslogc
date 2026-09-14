@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -157,7 +158,7 @@ func (s *Server) wrap(rt route) http.Handler {
 			}
 		}()
 
-		securityHeaders(rec, rt.raw, r.TLS != nil)
+		securityHeaders(rec, rt.raw, r.TLS != nil, s.secureOrigin(r))
 
 		var p *auth.Principal
 		if rt.access != public {
@@ -181,7 +182,7 @@ func (s *Server) wrap(rt route) http.Handler {
 				return
 			}
 			r = r.WithContext(auth.WithPrincipal(r.Context(), p))
-		} else if !safeMethod(r.Method) && !sameOrigin(r) && rt.pattern != "/" {
+		} else if !safeMethod(r.Method) && !s.sameOrigin(r) && rt.pattern != "/" {
 			s.writeError(rec, r, errStatus(http.StatusForbidden, "csrf_failed", "cross-origin request rejected"))
 			return
 		}
@@ -228,7 +229,7 @@ func (s *Server) authService() *auth.Service {
 // checkCSRF enforces the synchronizer token and same-origin checks for
 // cookie-authenticated unsafe requests.
 func (s *Server) checkCSRF(r *http.Request, p *auth.Principal) error {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		return errStatus(http.StatusForbidden, "csrf_failed", "cross-origin request rejected")
 	}
 	token := r.Header.Get("X-CSRF-Token")
@@ -249,7 +250,7 @@ func (s *Server) checkCSRF(r *http.Request, p *auth.Principal) error {
 
 // sameOrigin rejects browser requests whose Sec-Fetch-Site or Origin show a
 // different site. Requests without these headers (non-browser clients) pass.
-func sameOrigin(r *http.Request) bool {
+func (s *Server) sameOrigin(r *http.Request) bool {
 	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		return false
 	}
@@ -261,19 +262,32 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return strings.EqualFold(u.Host, r.Host)
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	for _, allowed := range s.opts.AllowedOrigins {
+		if strings.EqualFold(allowed, u.Scheme+"://"+u.Host) {
+			return true
+		}
+	}
+	return false
 }
 
 func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
-func securityHeaders(w http.ResponseWriter, ui, tls bool) {
+// securityHeaders sets response hardening headers. tls means this server
+// terminated TLS; secure means the browser sees an HTTPS origin (directly or
+// through a trusted proxy). Browsers ignore and warn about COOP otherwise.
+func securityHeaders(w http.ResponseWriter, ui, tls, secure bool) {
 	h := w.Header()
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	if secure {
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+	}
 	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 	if ui {
 		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
@@ -307,17 +321,59 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // clientIP returns the request's remote IP (proxies are not trusted yet).
-func clientIP(r *http.Request) string {
-	host := r.RemoteAddr
-	if i := strings.LastIndexByte(host, ':'); i > 0 {
-		host = strings.Trim(host[:i], "[]")
+// clientIP returns the peer address, or with a trusted proxy peer the
+// right-most untrusted address in X-Forwarded-For.
+func (s *Server) clientIP(r *http.Request) string {
+	if a := s.clientAddr(r); a.IsValid() {
+		return a.String()
 	}
-	return host
+	return r.RemoteAddr
+}
+
+func (s *Server) clientAddr(r *http.Request) netip.Addr {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.Addr{}
+	}
+	addr := ap.Addr().Unmap()
+	if !s.trusted(addr) {
+		return addr
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			break
+		}
+		addr = hop.Unmap()
+		if !s.trusted(addr) {
+			break
+		}
+	}
+	return addr
+}
+
+// secureOrigin reports whether the client reached us over HTTPS.
+func (s *Server) secureOrigin(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	return err == nil && s.trusted(ap.Addr().Unmap()) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+func (s *Server) trusted(a netip.Addr) bool {
+	for _, p := range s.opts.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // audit records a security-relevant action; failures are logged, not returned.
 func (s *Server) audit(r *http.Request, p *auth.Principal, action, outcome string, details map[string]any) {
-	attrs := []any{"component", "audit", "action", action, "outcome", outcome, "request_id", requestID(r.Context()), "ip", clientIP(r)}
+	attrs := []any{"component", "audit", "action", action, "outcome", outcome, "request_id", requestID(r.Context()), "ip", s.clientIP(r)}
 	if p != nil {
 		attrs = append(attrs, "actor", p.Username)
 	}
@@ -325,7 +381,7 @@ func (s *Server) audit(r *http.Request, p *auth.Principal, action, outcome strin
 	if s.opts.API == nil {
 		return
 	}
-	ev := newAuditEvent(r, p, action, outcome, details)
+	ev := newAuditEvent(r, s.clientIP(r), p, action, outcome, details)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
 	defer cancel()
 	if err := s.opts.API.Store.InsertAuditEvent(ctx, ev); err != nil {

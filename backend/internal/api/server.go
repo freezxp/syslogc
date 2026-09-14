@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -86,6 +88,10 @@ type Options struct {
 	Ingest *IngestDeps
 	// IngestOnly restricts API to key authentication for HTTP ingestion.
 	IngestOnly bool
+	// AllowedOrigins are extra accepted Origin values (lower-case scheme://host).
+	AllowedOrigins []string
+	// TrustedProxies may set X-Forwarded-For.
+	TrustedProxies []netip.Prefix
 }
 
 // Server is the HTTP server.
@@ -95,13 +101,16 @@ type Server struct {
 	ln       net.Listener
 	draining atomic.Bool
 	log      *slog.Logger
+	rates    rateTracker
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 func New(opts Options) *Server {
 	if opts.StartedAt.IsZero() {
 		opts.StartedAt = time.Now()
 	}
-	s := &Server{opts: opts, log: opts.Log}
+	s := &Server{opts: opts, log: opts.Log, stop: make(chan struct{})}
 	mux := http.NewServeMux()
 	s.register(mux)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(opts.Metrics.Registry, promhttp.HandlerOpts{
@@ -136,6 +145,7 @@ func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 // Serve serves until Shutdown. It returns nil on graceful shutdown.
 func (s *Server) Serve() error {
 	s.log.Info("http server started", "address", s.ln.Addr().String())
+	go s.sampleRates()
 	if err := s.srv.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -147,7 +157,10 @@ func (s *Server) SetDraining() { s.draining.Store(true) }
 
 // Shutdown gracefully stops the server. Long-lived streams (live tail) are
 // cancelled via their request contexts.
-func (s *Server) Shutdown(ctx context.Context) error { return s.srv.Shutdown(ctx) }
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopOnce.Do(func() { close(s.stop) })
+	return s.srv.Shutdown(ctx)
+}
 
 type componentStatus struct {
 	Name   string `json:"name"`

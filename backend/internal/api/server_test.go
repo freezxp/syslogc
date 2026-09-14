@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -610,6 +611,14 @@ func TestExport(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || lines != 2 {
 		t.Errorf("ndjson: %d, %d lines", resp.StatusCode, lines)
 	}
+	// A limit equal to the row count is not a truncation; a smaller one is.
+	for limit, wantMarker := range map[int]bool{2: false, 1: true} {
+		limited := map[string]any{"time_range": req["time_range"], "fields": req["fields"], "limit": limit}
+		_, body := ops.do("POST", "/api/v1/logs/export?format=ndjson", limited, nil)
+		if got := strings.Contains(string(body), `"truncated":true`); got != wantMarker || bytes.Count(body, []byte("\n")) != limit+btoi(wantMarker) {
+			t.Errorf("limit %d: truncation marker = %v, body %s", limit, got, body)
+		}
+	}
 	resp, body = ops.do("POST", "/api/v1/logs/export?format=json", req, nil)
 	var arr []map[string]any
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(body, &arr) != nil || len(arr) != 2 {
@@ -815,4 +824,62 @@ func TestWebUIAndSystemEndpoints(t *testing.T) {
 func mustURL(s string) *url.URL {
 	u, _ := url.Parse(s)
 	return u
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func TestOriginAndClientIP(t *testing.T) {
+	s := &Server{opts: Options{
+		AllowedOrigins: []string{"https://syslogc.example.com"},
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	}}
+	req := func(remote, origin, host string, xff ...string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "http://"+host+"/api/v1/auth/login", nil)
+		r.RemoteAddr, r.Host = remote, host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		for _, v := range xff {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		return r
+	}
+	origins := []struct {
+		origin, host string
+		want         bool
+	}{
+		{"http://192.168.0.53:8080", "192.168.0.53:8080", true},
+		{"https://syslogc.example.com", "192.168.0.53:8080", true}, // proxy rewrote Host
+		{"https://SYSLOGC.example.com", "127.0.0.1:8080", true},
+		{"http://syslogc.example.com", "192.168.0.53:8080", false}, // scheme differs
+		{"https://evil.example.com", "192.168.0.53:8080", false},
+		{"", "192.168.0.53:8080", true},
+	}
+	for _, o := range origins {
+		if got := s.sameOrigin(req("1.2.3.4:5", o.origin, o.host)); got != o.want {
+			t.Errorf("sameOrigin(%q, host %q) = %v", o.origin, o.host, got)
+		}
+	}
+	ips := []struct {
+		remote string
+		xff    []string
+		want   string
+	}{
+		{"203.0.113.9:4000", []string{"1.1.1.1"}, "203.0.113.9"},                       // untrusted peer: header ignored
+		{"10.0.0.2:4000", []string{"198.51.100.7"}, "198.51.100.7"},                    // trusted proxy
+		{"10.0.0.2:4000", []string{"6.6.6.6, 198.51.100.7, 10.0.0.9"}, "198.51.100.7"}, // spoofed left-most entry ignored
+		{"10.0.0.2:4000", []string{"6.6.6.6", "198.51.100.7"}, "198.51.100.7"},         // multiple headers
+		{"10.0.0.2:4000", nil, "10.0.0.2"},
+		{"[::ffff:10.0.0.2]:4000", []string{"garbage"}, "10.0.0.2"},
+	}
+	for _, c := range ips {
+		if got := s.clientIP(req(c.remote, "", "h", c.xff...)); got != c.want {
+			t.Errorf("clientIP(%s, %v) = %s, want %s", c.remote, c.xff, got, c.want)
+		}
+	}
 }

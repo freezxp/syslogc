@@ -115,6 +115,13 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 		Log:               log.With("component", "http"),
 		Extra:             a.readyExtra,
 	}
+	for _, o := range cfg.Server.HTTP.AllowedOrigins {
+		opts.AllowedOrigins = append(opts.AllowedOrigins, strings.TrimSuffix(o, "/"))
+	}
+	for _, p := range cfg.Server.HTTP.TrustedProxies {
+		prefix, _ := config.ParsePrefixOrAddr(p) // validated
+		opts.TrustedProxies = append(opts.TrustedProxies, prefix)
+	}
 
 	if cfg.Node.HasRole(config.RoleIngest) {
 		a.wireIngest()

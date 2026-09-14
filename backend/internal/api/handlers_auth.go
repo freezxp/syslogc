@@ -50,7 +50,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, _ *auth.Pri
 	if req.Username == "" || req.Password == "" || len(req.Username) > 128 || len(req.Password) > auth.MaxPasswordBytes {
 		return badRequest("validation_failed", "/username", "username and password are required")
 	}
-	res, err := s.opts.API.Auth.Login(r.Context(), strings.TrimSpace(req.Username), req.Password, clientIP(r), r.UserAgent())
+	res, err := s.opts.API.Auth.Login(r.Context(), strings.TrimSpace(req.Username), req.Password, s.clientIP(r), r.UserAgent())
 	if err != nil {
 		if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, auth.ErrRateLimited) {
 			s.audit(r, nil, "auth.login", "failure", map[string]any{"username": truncate(req.Username, 128), "reason": err.Error()})
@@ -105,9 +105,9 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, p 
 	return nil
 }
 
-func newAuditEvent(r *http.Request, p *auth.Principal, action, outcome string, details map[string]any) *metadata.AuditEvent {
+func newAuditEvent(r *http.Request, ip string, p *auth.Principal, action, outcome string, details map[string]any) *metadata.AuditEvent {
 	ev := &metadata.AuditEvent{
-		Tenant: "default", ActorType: "anonymous", IP: clientIP(r), UserAgent: truncate(r.UserAgent(), 256),
+		Tenant: "default", ActorType: "anonymous", IP: ip, UserAgent: truncate(r.UserAgent(), 256),
 		Action: action, Outcome: outcome, RequestID: requestID(r.Context()),
 	}
 	if p != nil {

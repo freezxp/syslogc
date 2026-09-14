@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,16 @@ func (c *Config) Validate() error {
 
 	if err := validateAddress(c.Server.HTTP.Address); err != nil {
 		add("server.http.address: %v", err)
+	}
+	for _, o := range c.Server.HTTP.AllowedOrigins {
+		if u, err := url.Parse(o); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") {
+			add("server.http.allowed_origins: %q must be scheme://host[:port]", o)
+		}
+	}
+	for _, p := range c.Server.HTTP.TrustedProxies {
+		if _, err := ParsePrefixOrAddr(p); err != nil {
+			add("server.http.trusted_proxies: %q: %v", p, err)
+		}
 	}
 
 	switch c.Log.Level {
@@ -262,4 +273,18 @@ func validateAddress(addr string) error {
 		return fmt.Errorf("invalid port in %q", addr)
 	}
 	return nil
+}
+
+// ParsePrefixOrAddr parses a CIDR or a single IP address (as a /32 or /128).
+func ParsePrefixOrAddr(s string) (netip.Prefix, error) {
+	if strings.Contains(s, "/") {
+		p, err := netip.ParsePrefix(s)
+		return p.Masked(), err
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), nil
 }
