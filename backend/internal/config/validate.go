@@ -93,6 +93,23 @@ func (c *Config) Validate() error {
 		add("ingestion.limits: all limits must be positive")
 	}
 
+	pg := c.Metadata.Postgres
+	if c.Node.HasRole(RoleAPI) && pg.DSN == "" && pg.DSNFile == "" {
+		add("metadata.postgres: dsn or dsn_file is required for the api role")
+	}
+	if pg.MaxConns < 1 {
+		add("metadata.postgres.max_conns: must be positive")
+	}
+	if c.Auth.SessionTTL <= 0 || c.Auth.SessionIdleTimeout <= 0 {
+		add("auth: session_ttl and session_idle_timeout must be positive")
+	}
+	if c.Query.MaxTieGroup < 100 || c.Query.MaxTailSessions < 1 {
+		add("query: max_tie_group must be >= 100 and max_tail_sessions >= 1")
+	}
+	if in.HTTP.MaxBodyBytes < 1<<20 || in.HTTP.MaxEvents < 1 || in.HTTP.EnqueueTimeout <= 0 {
+		add("ingestion.http: max_body_bytes >= 1MiB, max_events >= 1 and enqueue_timeout > 0 are required")
+	}
+
 	if c.Retention.Period < Duration(24*time.Hour) {
 		add("retention.period: must be at least 1d")
 	}

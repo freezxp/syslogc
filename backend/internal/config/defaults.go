@@ -32,9 +32,18 @@ func Default() Config {
 			Retry:        RetryConfig{InitialBackoff: Duration(250 * time.Millisecond), MaxBackoff: Duration(30 * time.Second)},
 			Time:         TimeConfig{MaxFutureSkew: Duration(10 * time.Minute)},
 			Limits:       LimitsConfig{MaxFields: 256, MaxFieldValueBytes: 32 << 10, MaxFieldNameBytes: 256},
+			HTTP:         HTTPIngestConfig{MaxBodyBytes: 10 << 20, MaxEvents: 10_000, EnqueueTimeout: Duration(2 * time.Second)},
 		},
 		Retention: RetentionConfig{Period: Duration(30 * 24 * time.Hour)},
-		Shutdown:  ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},
+		Metadata:  MetadataConfig{Postgres: PostgresConfig{MaxConns: 20}},
+		Auth: AuthConfig{
+			SessionTTL:         Duration(12 * time.Hour),
+			SessionIdleTimeout: Duration(time.Hour),
+			CookieSecure:       true,
+			BootstrapAdmin:     BootstrapConfig{Username: "admin"},
+		},
+		Query:    QueryConfig{MaxTieGroup: 5000, MaxTailSessions: 200},
+		Shutdown: ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},
 	}
 }
 
