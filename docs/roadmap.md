@@ -83,7 +83,7 @@ VictoriaLogs with full accounting, deployable with Docker Compose.
 
 **Exit criteria:**
 - [x] `docker compose up -d`; `logger --udp` / `--tcp` (both RFC modes) messages visible via the dev search endpoint with correct normalized fields — automated in `backend/tests/e2e/phase1-smoke.sh` and `tests/integration` (`TestLoggerCompatibility`).
-- [ ] Parsers: unit + fuzz (10 min per target) green. *(10-minute runs in progress at time of writing.)*
+- [x] Parsers and framing: unit tests + 10-minute fuzz runs per target clean (≈9.5M RFC 3164, ≈8.4M RFC 5424, ≈9.1M framing executions after two fuzz-found bugs were fixed).
 - [ ] Vendor corpus ≥ 50 samples — **partial:** 35 parser cases covering Cisco IOS/ASA, Fortinet, Linux (rsyslog, systemd, sshd, postfix, cron) and RFC examples. Real vendor captures (Juniper, Palo Alto, MikroTik, ESXi, Windows agents) carried over to Phase 2.
 - [x] TCP no loss during a storage outage: VictoriaLogs paused for 23 s during 5K msgs/s TCP load → 199,952 sent, 199,952 stored, 0 dropped (manual run; automated backpressure coverage in pipeline unit tests). UDP drops are counted (unit test). Queue byte budget enforced (unit test); measured RSS with a full default queue ≈520–600 MiB, higher than the original estimate — documented, `GOMEMLIMIT` guidance added.
 - [x] Preliminary throughput observed (informational only, 4 vCPU VM shared with VictoriaLogs and the generator): sustained 10K msgs/s TCP and UDP with zero loss; a 1M-message burst drained into storage in 7.7 s.
