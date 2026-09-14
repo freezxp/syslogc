@@ -1,24 +1,28 @@
-// Package api serves Syslogc's HTTP endpoints.
-//
-// Phase 1 provides operational endpoints (/health, /ready, /metrics) and a
-// development-only search endpoint. The versioned, authenticated API with
-// its route/permission table arrives in Phase 2.
+// Package api serves Syslogc's HTTP interface: operational endpoints
+// (/health, /ready, /metrics), the versioned REST API under /api/v1 and the
+// embedded web UI. Every API route declares the permission it requires in a
+// single route table (routes.go); handlers never check roles.
 package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/freezxp/syslogc/backend/internal/auth"
+	"github.com/freezxp/syslogc/backend/internal/ingestion/listener"
+	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
+	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
+	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
+	"github.com/freezxp/syslogc/backend/internal/query"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 )
 
@@ -29,6 +33,41 @@ type ReadinessCheck struct {
 	Check func(ctx context.Context) error
 }
 
+// APIDeps are the dependencies of the REST API (api role).
+type APIDeps struct {
+	Auth    *auth.Service
+	Store   metadata.Store
+	Query   *query.Service
+	Storage storage.Backend
+	// Retention returns the current retention status (for /system/storage).
+	Retention func() any
+	// Sources returns source statuses; nil without the ingest role.
+	Sources func() []supervisor.Status
+	// Queue returns ingest queue occupancy; nil without the ingest role.
+	Queue        func() QueueInfo
+	CookieSecure bool
+	AuditAll     bool
+	// WebUI is the built frontend; nil or empty disables UI serving.
+	WebUI fs.FS
+}
+
+// IngestDeps are the dependencies of HTTP ingestion (ingest role).
+type IngestDeps struct {
+	Sink           listener.Sink
+	Source         func() *source.Settings
+	MaxBodyBytes   int64
+	MaxEvents      int
+	EnqueueTimeout time.Duration
+}
+
+// QueueInfo describes ingest queue occupancy.
+type QueueInfo struct {
+	Messages         int   `json:"messages"`
+	Bytes            int64 `json:"bytes"`
+	CapacityMessages int   `json:"capacity_messages"`
+	CapacityBytes    int64 `json:"capacity_bytes"`
+}
+
 // Options configures the server.
 type Options struct {
 	Address           string
@@ -36,13 +75,17 @@ type Options struct {
 	IdleTimeout       time.Duration
 	Version           string
 	NodeID            string
+	Roles             []string
+	StartedAt         time.Time
 	Metrics           *metrics.Metrics
 	Log               *slog.Logger
 	Checks            []ReadinessCheck
-	// Querier enables the development search endpoint when non-nil.
-	DevQuerier storage.LogQuerier
 	// Extra returns additional JSON for /ready (e.g. source statuses).
-	Extra func() map[string]any
+	Extra  func() map[string]any
+	API    *APIDeps
+	Ingest *IngestDeps
+	// IngestOnly restricts API to key authentication for HTTP ingestion.
+	IngestOnly bool
 }
 
 // Server is the HTTP server.
@@ -51,22 +94,22 @@ type Server struct {
 	srv      *http.Server
 	ln       net.Listener
 	draining atomic.Bool
+	log      *slog.Logger
 }
 
 func New(opts Options) *Server {
-	s := &Server{opts: opts}
+	if opts.StartedAt.IsZero() {
+		opts.StartedAt = time.Now()
+	}
+	s := &Server{opts: opts, log: opts.Log}
 	mux := http.NewServeMux()
-	s.handle(mux, "GET /health", s.health)
-	s.handle(mux, "GET /ready", s.ready)
+	s.register(mux)
 	mux.Handle("GET /metrics", promhttp.HandlerFor(opts.Metrics.Registry, promhttp.HandlerOpts{
 		EnableOpenMetrics: true,
 		Timeout:           10 * time.Second,
 	}))
-	if opts.DevQuerier != nil {
-		s.handle(mux, "GET /api/v1/dev/search", s.devSearch)
-	}
 	s.srv = &http.Server{
-		Handler:           secureHeaders(mux),
+		Handler:           mux,
 		ReadHeaderTimeout: opts.ReadHeaderTimeout,
 		IdleTimeout:       opts.IdleTimeout,
 		ErrorLog:          slog.NewLogLogger(opts.Log.Handler(), slog.LevelWarn),
@@ -74,25 +117,8 @@ func New(opts Options) *Server {
 	return s
 }
 
-// handle registers h with request metrics and panic recovery.
-func (s *Server) handle(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
-	m := s.opts.Metrics
-	mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		defer func() {
-			if v := recover(); v != nil {
-				s.opts.Log.Error("panic in HTTP handler", "route", pattern, "panic", v)
-				if !rec.wrote {
-					writeJSON(rec, http.StatusInternalServerError, map[string]string{"error": "internal error"})
-				}
-			}
-			m.HTTPRequests.WithLabelValues(pattern, r.Method, strconv.Itoa(rec.status)).Inc()
-			m.HTTPDuration.WithLabelValues(pattern, r.Method).Observe(time.Since(start).Seconds())
-		}()
-		h(rec, r)
-	})
-}
+// Handler returns the root handler (for tests).
+func (s *Server) Handler() http.Handler { return s.srv.Handler }
 
 // Listen binds the configured address.
 func (s *Server) Listen() error {
@@ -109,7 +135,7 @@ func (s *Server) Addr() net.Addr { return s.ln.Addr() }
 
 // Serve serves until Shutdown. It returns nil on graceful shutdown.
 func (s *Server) Serve() error {
-	s.opts.Log.Info("http server started", "address", s.ln.Addr().String())
+	s.log.Info("http server started", "address", s.ln.Addr().String())
 	if err := s.srv.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -119,42 +145,47 @@ func (s *Server) Serve() error {
 // SetDraining makes /ready fail so load balancers stop sending traffic.
 func (s *Server) SetDraining() { s.draining.Store(true) }
 
-// Shutdown gracefully stops the server.
+// Shutdown gracefully stops the server. Long-lived streams (live tail) are
+// cancelled via their request contexts.
 func (s *Server) Shutdown(ctx context.Context) error { return s.srv.Shutdown(ctx) }
 
-func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+type componentStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
-func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+// readiness runs all checks.
+func (s *Server) readiness(ctx context.Context) (status string, components []componentStatus, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	type component struct {
-		Name   string `json:"name"`
-		Status string `json:"status"`
-		Error  string `json:"error,omitempty"`
-	}
-	ok := !s.draining.Load()
-	var components []component
+	ok = !s.draining.Load()
 	for _, c := range s.opts.Checks {
-		comp := component{Name: c.Name, Status: "ok"}
+		comp := componentStatus{Name: c.Name, Status: "ok"}
 		if err := c.Check(ctx); err != nil {
 			ok = false
 			comp.Status, comp.Error = "fail", err.Error()
 		}
 		components = append(components, comp)
 	}
-	body := map[string]any{
-		"status":     "ready",
-		"node":       s.opts.NodeID,
-		"version":    s.opts.Version,
-		"components": components,
+	switch {
+	case s.draining.Load():
+		status = "draining"
+	case !ok:
+		status = "not_ready"
+	default:
+		status = "ready"
 	}
-	if s.draining.Load() {
-		body["status"] = "draining"
-	} else if !ok {
-		body["status"] = "not_ready"
-	}
+	return status, components, ok
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	status, components, ok := s.readiness(r.Context())
+	body := map[string]any{"status": status, "node": s.opts.NodeID, "version": s.opts.Version, "components": components}
 	if s.opts.Extra != nil {
 		for k, v := range s.opts.Extra() {
 			body[k] = v
@@ -166,43 +197,3 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, code, body)
 }
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetEscapeHTML(true)
-	_ = enc.Encode(v)
-}
-
-func secureHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		next.ServeHTTP(w, r)
-	})
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-	wrote  bool
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wrote {
-		r.status, r.wrote = code, true
-	}
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *statusRecorder) Write(b []byte) (int, error) {
-	r.wrote = true
-	return r.ResponseWriter.Write(b)
-}
-
-func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
