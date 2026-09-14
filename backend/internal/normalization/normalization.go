@@ -75,8 +75,17 @@ func (n *Normalizer) Apply(e *logentry.Entry, src *Source, m *Meta) {
 	e.Truncated = e.Truncated || m.Truncated
 
 	if m.Peer.IsValid() {
-		e.SourceIP = m.Peer.Addr().Unmap()
-		e.SourcePort = m.Peer.Port()
+		peer := m.Peer.Addr().Unmap()
+		if e.SourceIP.IsValid() {
+			// The payload named the originating device (e.g. a log shipper
+			// forwarding on its behalf); keep the transport peer separately.
+			if peer != e.SourceIP {
+				e.PeerIP = peer
+			}
+		} else {
+			e.SourceIP = peer
+			e.SourcePort = m.Peer.Port()
+		}
 	}
 	if e.Hostname == "" && src.HostnameFallbackIP && e.SourceIP.IsValid() {
 		e.Hostname = e.SourceIP.String()

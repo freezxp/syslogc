@@ -25,6 +25,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 	"github.com/freezxp/syslogc/backend/internal/normalization"
 	"github.com/freezxp/syslogc/backend/internal/parser"
+	"github.com/freezxp/syslogc/backend/internal/parser/jsonlog"
 	"github.com/freezxp/syslogc/backend/internal/parser/rfc3164"
 	"github.com/freezxp/syslogc/backend/internal/parser/rfc5424"
 	"github.com/freezxp/syslogc/backend/internal/storage"
@@ -106,7 +107,7 @@ func New(cfg Config, w storage.LogWriter, backendName string, m *metrics.Metrics
 		backend:  backendName,
 		metrics:  m,
 		log:      log,
-		registry: parser.NewRegistry(rfc5424.New(), rfc3164.New()),
+		registry: parser.NewRegistry(rfc5424.New(), rfc3164.New(), jsonlog.New()),
 		fallback: rfc3164.New(),
 		norm:     normalization.New(cfg.Normalization),
 		queue:    make(chan RawMessage, cfg.QueueMaxMessages),
@@ -209,6 +210,19 @@ func (p *Pipeline) waitErr(ctx context.Context) error {
 		return ctx.Err()
 	}
 	return ErrClosed
+}
+
+// QueueStats describes ingest queue occupancy.
+type QueueStats struct {
+	Messages         int
+	Bytes            int64
+	CapacityMessages int
+	CapacityBytes    int64
+}
+
+// QueueStats returns current queue occupancy.
+func (p *Pipeline) QueueStats() QueueStats {
+	return QueueStats{Messages: len(p.queue), Bytes: p.queueBytes.Load(), CapacityMessages: cap(p.queue), CapacityBytes: p.cfg.QueueMaxBytes}
 }
 
 // Saturated reports whether the ingest queue is more than 95% full.
