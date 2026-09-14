@@ -87,6 +87,40 @@ export function buildSelection(
   return sel
 }
 
+/**
+ * Splits LogsQL at the first `|` outside string literals, mirroring the
+ * server's split: the part before it is a filter, the rest are pipes.
+ */
+export function splitNativePipes(text: string): { filter: string; pipes: string } {
+  let quote = ''
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!
+    if (quote) {
+      if (c === '\\' && quote !== '`') i++
+      else if (c === quote) quote = ''
+      continue
+    }
+    if (c === '"' || c === "'" || c === '`') quote = c
+    else if (c === '|') return { filter: text.slice(0, i).trim(), pipes: text.slice(i + 1).trim() }
+  }
+  return { filter: text.trim(), pipes: '' }
+}
+
+/**
+ * Returns the selection for side panels (histogram, facets, fields), which
+ * accept filters only: pipes are dropped from a native query so the panels
+ * describe the logs the pipeline starts from.
+ */
+export function withoutPipes(sel: Selection | null): Selection | null {
+  if (!sel?.native) return sel
+  const { filter, pipes } = splitNativePipes(sel.native.text)
+  if (!pipes) return sel
+  const next: Selection = { ...sel }
+  if (filter && filter !== '*') next.native = { ...sel.native, text: filter }
+  else delete next.native
+  return next
+}
+
 /** Removes undefined/empty values so URLs stay short. */
 export function cleanSearch<T extends Record<string, unknown>>(s: T): Partial<T> {
   const out: Partial<T> = {}

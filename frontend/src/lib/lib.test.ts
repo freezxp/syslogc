@@ -13,7 +13,15 @@ import vectors from './filter-text.vectors.json'
 import { safeNext } from './redirect'
 import { RingBuffer } from './ring-buffer'
 import { TimeRangeError, parseQuickInput, resolveExpr, resolveRange } from './time-range'
-import { parseColumns, formatColumns, parseSearchParams, stringifySearchParams } from './url-state'
+import { formatAxisCount } from './format'
+import {
+  parseColumns,
+  formatColumns,
+  parseSearchParams,
+  splitNativePipes,
+  stringifySearchParams,
+  withoutPipes,
+} from './url-state'
 
 describe('filter text', () => {
   it.each(vectors)('parses and formats $text losslessly', ({ text, ast }) => {
@@ -156,5 +164,35 @@ describe('misc', () => {
     expect(exportFilename('ndjson', new Date('2026-09-14T10:00:00.123Z'))).toBe(
       'syslogc-export-20260914T100000Z.ndjson',
     )
+  })
+})
+
+describe('native query pipes', () => {
+  it.each([
+    ['hostname:fw01', 'hostname:fw01', ''],
+    ['error | stats count()', 'error', 'stats count()'],
+    ['_msg:~"a|b" | top 5 by (x)', '_msg:~"a|b"', 'top 5 by (x)'],
+    ['"escaped \\" | quote" | limit 1', '"escaped \\" | quote"', 'limit 1'],
+    ["`raw | x` and 'single | y'", "`raw | x` and 'single | y'", ''],
+  ])('splits %s', (text, filter, pipes) => {
+    expect(splitNativePipes(text)).toEqual({ filter, pipes })
+  })
+
+  it('drops pipes from panel selections', () => {
+    const tr = { from: 'now-1h', to: 'now' }
+    const native = (text: string) => ({ time_range: tr, native: { dialect: 'logsql' as const, text } })
+    expect(withoutPipes(native('app:sshd | stats count()'))).toEqual(native('app:sshd'))
+    expect(withoutPipes(native('* | stats count()'))).toEqual({ time_range: tr })
+    const plain = native('app:sshd')
+    expect(withoutPipes(plain)).toBe(plain)
+    expect(withoutPipes(null)).toBeNull()
+  })
+})
+
+describe('axis counts', () => {
+  it('abbreviates large values', () => {
+    expect(formatAxisCount(3500)).toBe('3,500')
+    expect(formatAxisCount(14000)).toBe('14K')
+    expect(formatAxisCount(10500)).toBe('10.5K')
   })
 })

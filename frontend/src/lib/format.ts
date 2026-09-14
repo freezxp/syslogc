@@ -30,6 +30,11 @@ export function formatCount(n: number | undefined | null): string {
   return Math.abs(n) >= 100_000 ? compact.format(n) : integer.format(Math.round(n))
 }
 
+/** Short axis labels: 950, 9,500, 95K, 1.2M. */
+export function formatAxisCount(n: number): string {
+  return Math.abs(n) >= 10_000 ? compact.format(n) : integer.format(Math.round(n))
+}
+
 export function formatExact(n: number | undefined | null): string {
   if (n === undefined || n === null || Number.isNaN(n)) return '—'
   return integer.format(n)

@@ -35,6 +35,7 @@ import {
   encodeFilter,
   formatColumns,
   parseColumns,
+  withoutPipes,
   type ExplorerSearch,
 } from '@/lib/url-state'
 
@@ -108,9 +109,12 @@ export function ExplorerPage() {
     [range.value, filter, native, parseError, search.tz],
   )
 
+  // Histogram, facets and fields accept filters only; pipes apply to the results table.
+  const panelSelection = useMemo(() => withoutPipes(selection), [selection])
+
   // All fields are fetched so the detail drawer can show dynamic fields without a second request.
   const results = useLogSearch(selection, undefined, runId)
-  const histogram = useHistogram(histogramOpen ? selection : null, search.split ?? 'severity', runId)
+  const histogram = useHistogram(histogramOpen ? panelSelection : null, search.split ?? 'severity', runId)
   const saved = useSavedSearch(search.saved)
 
   const rows: LogRow[] = useMemo(() => results.data?.pages.flatMap((p) => p.rows ?? []) ?? [], [results.data])
@@ -267,7 +271,7 @@ export function ExplorerPage() {
           </Button>
         )}
         {can('logs:export') && (
-          <Button size="sm" onClick={() => setExportOpen(true)} disabled={!selection}>
+          <Button size="sm" onClick={() => setExportOpen(true)} disabled={!selection || tableMode}>
             <Download /> Export
           </Button>
         )}
@@ -374,7 +378,7 @@ export function ExplorerPage() {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <FieldSidebar selection={selection} runId={runId} columns={columns} actions={fieldActions} />
+        <FieldSidebar selection={panelSelection} runId={runId} columns={columns} actions={fieldActions} />
         <div className="min-w-0 flex-1">
           {results.isError && !nativeError ? (
             <ErrorPanel error={results.error} onRetry={() => results.refetch()} />

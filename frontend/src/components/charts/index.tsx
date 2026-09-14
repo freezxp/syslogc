@@ -16,7 +16,7 @@ import {
 } from 'recharts'
 
 import type { HistogramResponse } from '@/api/types'
-import { formatCount, formatTimestamp } from '@/lib/format'
+import { formatAxisCount, formatCount, formatTimestamp } from '@/lib/format'
 import { severityColor, severityRank } from '@/lib/severity'
 
 const AXIS = { stroke: 'var(--fg-subtle)', fontSize: 11 }
@@ -147,7 +147,7 @@ export function VolumeHistogram({
           minTickGap={48}
         />
         <YAxis
-          tickFormatter={(v: number) => formatCount(v)}
+          tickFormatter={(v: number) => formatAxisCount(v)}
           tick={AXIS}
           tickLine={false}
           axisLine={false}
@@ -211,7 +211,13 @@ export function RateAreaChart({
           axisLine={false}
           minTickGap={48}
         />
-        <YAxis tickFormatter={(v: number) => formatCount(v)} tick={AXIS} tickLine={false} axisLine={false} width={44} />
+        <YAxis
+          tickFormatter={(v: number) => formatAxisCount(v)}
+          tick={AXIS}
+          tickLine={false}
+          axisLine={false}
+          width={44}
+        />
         <Tooltip content={<ChartTooltip tz={tz} unit={unit} />} isAnimationActive={false} />
         {series.map((s) => (
           <Area
