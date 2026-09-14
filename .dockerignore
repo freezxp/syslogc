@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+docs
+**/testdata/fuzz
+**/*_test.go
+deploy/compose/secrets
+*.md
+!deploy/**/*.yaml
