@@ -1,40 +1,82 @@
 # Syslogc single-node stack.
 #
 #   docker compose up -d
+#   docker compose logs syslogc | grep -A3 "initial administrator"   # first login
 #   logger --server 127.0.0.1 --udp --port 514 "Test syslog message"
-#   curl "http://127.0.0.1:8080/api/v1/dev/search?query=Test&from=15m"
+#   open http://<host>:8080
 #
 # Retention: set SYSLOGC_RETENTION (e.g. in .env) — it configures both
 # VictoriaLogs and Syslogc so they stay in sync.
 name: syslogc
 
+x-syslogc-image: &syslogc-image
+  image: ghcr.io/freezxp/syslogc:${SYSLOGC_VERSION:-dev}
+  build:
+    context: .
+    target: syslogc
+    args:
+      VERSION: ${SYSLOGC_VERSION:-dev}
+
 services:
   syslogc:
-    image: ghcr.io/freezxp/syslogc:${SYSLOGC_VERSION:-dev}
-    build:
-      context: .
-      target: syslogc
-      args:
-        VERSION: ${SYSLOGC_VERSION:-dev}
+    <<: *syslogc-image
     restart: unless-stopped
     depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       victorialogs:
         condition: service_started
     ports:
-      # HTTP is bound to localhost only during Phase 1: the development search
-      # endpoint enabled in deploy/compose/syslogc.yaml is unauthenticated.
-      - "127.0.0.1:8080:8080"
+      # The UI and API require login. Put a TLS reverse proxy in front before
+      # exposing this beyond a trusted network, then set
+      # SYSLOGC_AUTH_COOKIE_SECURE=true. Restrict with SYSLOGC_HTTP_BIND=127.0.0.1.
+      - "${SYSLOGC_HTTP_BIND:-0.0.0.0}:${SYSLOGC_HTTP_PORT:-8080}:8080"
       - "514:5514/udp"
       - "514:5514/tcp"
       # - "6514:6514/tcp"   # enable together with the syslog-tls source
     environment:
       SYSLOGC_RETENTION_PERIOD: ${SYSLOGC_RETENTION:-30d}
+      SYSLOGC_AUTH_COOKIE_SECURE: ${SYSLOGC_AUTH_COOKIE_SECURE:-false}
     volumes:
       - ./deploy/compose/syslogc.yaml:/etc/syslogc/syslogc.yaml:ro
+      - secrets:/secrets:ro
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     stop_grace_period: 45s
+
+  # Generates the database password, DSN and signing key once (never overwrites).
+  init:
+    <<: *syslogc-image
+    user: "0:0"
+    command: ["init-secrets", "--dir", "/secrets", "--db-host", "postgres:5432", "--owner", "65532:65532"]
+    volumes:
+      - secrets:/secrets
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  postgres:
+    image: postgres:17.6-trixie
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: syslogc
+      POSTGRES_DB: syslogc
+      POSTGRES_PASSWORD_FILE: /secrets/postgres_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - secrets:/secrets:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "syslogc", "-d", "syslogc"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    shm_size: 128m
 
   victorialogs:
     image: victoriametrics/victoria-logs:v1.52.0
@@ -54,3 +96,5 @@ services:
 
 volumes:
   vlogs-data: {}
+  postgres-data: {}
+  secrets: {}

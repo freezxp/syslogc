@@ -18,8 +18,15 @@ services:
     environment:
       SYSLOGC_STORAGE_VICTORIALOGS_INSERT_URL: http://127.0.0.1:9428
       SYSLOGC_STORAGE_VICTORIALOGS_SELECT_URL: http://127.0.0.1:9428
-      # Keep HTTP on localhost while the unauthenticated dev endpoint exists.
-      SYSLOGC_SERVER_HTTP_ADDRESS: 127.0.0.1:8080
+      SYSLOGC_METADATA_POSTGRES_DSN_FILE: /secrets/postgres_dsn_hostnet
+
+  init:
+    command: ["init-secrets", "--dir", "/secrets", "--owner", "65532:65532",
+              "--db-host", "127.0.0.1:${SYSLOGC_POSTGRES_PORT:-5432}", "--dsn-name", "postgres_dsn_hostnet"]
+
+  postgres:
+    ports:
+      - "127.0.0.1:${SYSLOGC_POSTGRES_PORT:-5432}:5432"
 
   victorialogs:
     ports:
