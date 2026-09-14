@@ -1,0 +1,107 @@
+[
+  { "text": "hostname=fw01", "ast": { "op": "eq", "field": "hostname", "value": "fw01" } },
+  { "text": "severity!=debug", "ast": { "op": "ne", "field": "severity", "value": "debug" } },
+  { "text": "message~VPN", "ast": { "op": "contains", "field": "message", "value": "VPN" } },
+  { "text": "app_name^=ssh", "ast": { "op": "starts_with", "field": "app_name", "value": "ssh" } },
+  { "text": "message=~\"timeout|refused\"", "ast": { "op": "regex", "field": "message", "value": "timeout|refused" } },
+  { "text": "http.status>499", "ast": { "op": "gt", "field": "http.status", "value": "499" } },
+  { "text": "severity_code<=3", "ast": { "op": "lte", "field": "severity_code", "value": "3" } },
+  { "text": "severity_code>=1", "ast": { "op": "gte", "field": "severity_code", "value": "1" } },
+  { "text": "duration_ms<100", "ast": { "op": "lt", "field": "duration_ms", "value": "100" } },
+  { "text": "vpn_name:*", "ast": { "op": "exists", "field": "vpn_name" } },
+  { "text": "!vpn_name:*", "ast": { "op": "not_exists", "field": "vpn_name" } },
+  {
+    "text": "severity in (error, critical)",
+    "ast": { "op": "in", "field": "severity", "values": ["error", "critical"] }
+  },
+  {
+    "text": "hostname not in (fw01, \"fw 02\")",
+    "ast": { "op": "not_in", "field": "hostname", "values": ["fw01", "fw 02"] }
+  },
+  { "text": "source_ip cidr 10.0.0.0/8", "ast": { "op": "cidr", "field": "source_ip", "value": "10.0.0.0/8" } },
+  { "text": "\"connection refused\"", "ast": { "op": "text", "value": "connection refused" } },
+  {
+    "text": "\"weird key\"=\"say \\\"hi\\\" \\\\ bye\"",
+    "ast": { "op": "eq", "field": "weird key", "value": "say \"hi\" \\ bye" }
+  },
+  {
+    "text": "_time=\"2026-09-14T10:00:00Z\"",
+    "ast": { "op": "eq", "field": "_time", "value": "2026-09-14T10:00:00Z" }
+  },
+  { "text": "hostname=\"\"", "ast": { "op": "eq", "field": "hostname", "value": "" } },
+  { "text": "app_name=\"and\"", "ast": { "op": "eq", "field": "app_name", "value": "and" } },
+  { "text": "sd.meta@32473.vpn=HQ-VPN", "ast": { "op": "eq", "field": "sd.meta@32473.vpn", "value": "HQ-VPN" } },
+  {
+    "text": "hostname=fw01 AND severity=error",
+    "ast": {
+      "op": "and",
+      "args": [
+        { "op": "eq", "field": "hostname", "value": "fw01" },
+        { "op": "eq", "field": "severity", "value": "error" }
+      ]
+    }
+  },
+  {
+    "text": "hostname=fw01 OR hostname=fw02",
+    "ast": {
+      "op": "or",
+      "args": [
+        { "op": "eq", "field": "hostname", "value": "fw01" },
+        { "op": "eq", "field": "hostname", "value": "fw02" }
+      ]
+    }
+  },
+  {
+    "text": "(hostname=fw01 OR hostname=fw02) AND severity=error",
+    "ast": {
+      "op": "and",
+      "args": [
+        {
+          "op": "or",
+          "args": [
+            { "op": "eq", "field": "hostname", "value": "fw01" },
+            { "op": "eq", "field": "hostname", "value": "fw02" }
+          ]
+        },
+        { "op": "eq", "field": "severity", "value": "error" }
+      ]
+    }
+  },
+  {
+    "text": "hostname=fw01 AND severity=error OR \"panic\"",
+    "ast": {
+      "op": "or",
+      "args": [
+        {
+          "op": "and",
+          "args": [
+            { "op": "eq", "field": "hostname", "value": "fw01" },
+            { "op": "eq", "field": "severity", "value": "error" }
+          ]
+        },
+        { "op": "text", "value": "panic" }
+      ]
+    }
+  },
+  {
+    "text": "NOT app_name=cron",
+    "ast": { "op": "not", "arg": { "op": "eq", "field": "app_name", "value": "cron" } }
+  },
+  {
+    "text": "NOT (app_name=cron OR app_name=systemd)",
+    "ast": {
+      "op": "not",
+      "arg": {
+        "op": "or",
+        "args": [
+          { "op": "eq", "field": "app_name", "value": "cron" },
+          { "op": "eq", "field": "app_name", "value": "systemd" }
+        ]
+      }
+    }
+  },
+  {
+    "text": "NOT vpn_name:*",
+    "ast": { "op": "not", "arg": { "op": "exists", "field": "vpn_name" } }
+  }
+]
