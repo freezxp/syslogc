@@ -1,0 +1,57 @@
+version: "2"
+
+run:
+  build-tags: [integration]
+
+linters:
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gosec
+    - misspell
+    - nolintlint
+    - unconvert
+    - usestdlibvars
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    depguard:
+      rules:
+        storage-adapters:
+          # ADR-0002: only the composition root may depend on concrete storage adapters.
+          files:
+            - "!**/internal/app/**"
+            - "!**/internal/storage/victorialogs/**"
+            - "!**/tests/**"
+          deny:
+            - pkg: github.com/freezxp/syslogc/backend/internal/storage/victorialogs
+              desc: import internal/storage interfaces instead; adapters are wired in internal/app (ADR-0002)
+        logentry-leaf:
+          # The log model must stay dependency-free.
+          files:
+            - "**/internal/logentry/**"
+          allow:
+            - $gostd
+    gosec:
+      excludes:
+        - G104 # unchecked errors are covered by errcheck
+        - G404 # math/rand is fine for load generation and jitter
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [gosec, bodyclose, errcheck]
+      - path: cmd/loggen/
+        linters: [gosec, errcheck]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/freezxp/syslogc
