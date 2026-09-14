@@ -98,7 +98,7 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	udp := cfg.Ingestion.Sources[0]
 	if udp.Type != SourceTypeSyslog || udp.Format != FormatAuto || udp.MaxMessageBytes != DefaultUDPMaxMessageBytes ||
-		udp.RawMessage != RawAlways || udp.Tenant != DefaultTenant || udp.Labels["site"] != "dc1" || !udp.IsEnabled() {
+		udp.RawMessage != RawOnError || udp.Tenant != DefaultTenant || udp.Labels["site"] != "dc1" || !udp.IsEnabled() {
 		t.Errorf("udp source defaults not applied: %+v", udp)
 	}
 	tcp := cfg.Ingestion.Sources[1]

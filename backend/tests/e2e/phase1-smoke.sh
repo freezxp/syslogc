@@ -60,9 +60,12 @@ def check(kind, **expected):
     for k, v in expected.items():
         if row.get(k) != v:
             sys.exit(f"{kind}: {k}={row.get(k)!r}, want {v!r}")
-    for k in ("hostname", "source_ip", "received_at", "raw_message"):
+    for k in ("hostname", "source_ip", "received_at"):
         if not row.get(k):
             sys.exit(f"{kind}: missing {k}")
+    # Default raw_message policy is on_error: cleanly parsed logs keep no raw copy.
+    if "raw_message" in row or "parse_error" in row:
+        sys.exit(f"{kind}: unexpected raw_message/parse_error for a clean parse")
 check("udp", format="rfc5424", protocol="udp", source="syslog-udp", facility="user", severity="notice")
 check("tcp", format="rfc5424", protocol="tcp", source="syslog-tcp")
 check("bsd", format="rfc3164", facility="local4", severity="error", priority="163", app_name="vpnd")

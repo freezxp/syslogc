@@ -267,12 +267,12 @@ All limit actions increment `syslogc_ingest_normalization_limits_total{limit}`.
 
 `sources[].raw_message: always | on_error | never`
 
-- `always` (**MVP default**): forensic fidelity; "Copy raw message" always exact.
-- `on_error`: store raw only when parsing failed or was partial. Recommended for very high volume sources once storage cost is measured.
+- `always`: forensic fidelity; "Copy raw message" always exact. Roughly doubles compressed storage (spike S7).
+- `on_error` (**default for syslog sources**): store raw only when parsing failed or was partial.
 - `never`: for sources where raw is redundant (e.g. HTTP JSON, where the parsed fields *are* the data).
 
 HTTP JSON sources default to `never` (the JSON body is fully represented by
-the fields). Decision and the benchmark that may revisit it:
+the fields). Decision and measurements:
 [ADR-0013](decisions/0013-raw-message-policy.md).
 
 ---

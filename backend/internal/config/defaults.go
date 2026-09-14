@@ -61,7 +61,7 @@ func applySourceDefaults(s *Source) {
 		if s.Type == SourceTypeHTTPJSON {
 			s.RawMessage = RawNever
 		} else {
-			s.RawMessage = RawAlways
+			s.RawMessage = RawOnError
 		}
 	}
 	if s.HostnameFallback == "" {

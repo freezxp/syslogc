@@ -80,7 +80,7 @@ ingestion:
       timezone: UTC                # for RFC 3164 timestamps without offset
       allowed_cidrs: []            # empty = allow all
       max_message_bytes: 65535
-      raw_message: always          # always | on_error | never
+      raw_message: on_error        # always | on_error | never
       hostname_fallback: none      # none | ip
       sd_flatten: full             # full | short
       labels: { site: dc1 }
@@ -272,7 +272,7 @@ Parsing never drops data. On failure:
 ```text
 format        = unknown
 _msg          = input (UTF-8 sanitized, truncated to limit)
-raw_message   = input (if policy on_error|always)
+raw_message   = input (default policy on_error, or always)
 parse_error   = "rfc5424: invalid STRUCTURED-DATA at offset 57"
 _time         = received_at, time_source=received
 severity      = info, severity_source=default

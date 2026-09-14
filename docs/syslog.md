@@ -90,7 +90,7 @@ one becomes a test case in `backend/internal/parser/rfc3164/rfc3164_test.go`.
 | `source_ip`, `source_port` | network peer |
 | `facility`, `facility_code`, `severity`, `severity_code`, `priority` | PRI |
 | `protocol`, `format`, `source`, `source_type` | receiver |
-| `raw_message` | original input (per `raw_message` policy) |
+| `raw_message` | original input — by default only when parsing failed or was partial (`raw_message` policy) |
 | `labels.<name>` | source `labels` |
 | `sd.…`, `sequence`, … | dynamic fields |
 | `parse_error`, `time_source`, `severity_source`, `timestamp_raw`, `truncated`, `fields_dropped` | present only when relevant |

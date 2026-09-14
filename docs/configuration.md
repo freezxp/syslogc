@@ -106,7 +106,7 @@ ingestion:
       timezone: Europe/London   # for RFC 3164 timestamps without an offset
       allowed_cidrs: [10.10.0.0/16]
       max_message_bytes: 65535
-      raw_message: always       # always | on_error | never
+      raw_message: on_error     # always | on_error | never
       hostname_fallback: none   # none | ip (use source IP when no hostname)
       sd_flatten: full          # full: sd.<id>.<param>; short: <param> when unique
       labels: {site: dc1, env: prod}
@@ -131,7 +131,7 @@ ingestion:
 | Key | Default | Notes |
 |---|---|---|
 | `max_message_bytes` | UDP `65535`, TCP/TLS `64KiB` | Longer messages are truncated and marked `truncated=true`. |
-| `raw_message` | `always` | Measured on synthetic data: storing raw messages roughly doubles compressed storage (≈82 vs ≈41 bytes/row). See [ADR-0013](decisions/0013-raw-message-policy.md). |
+| `raw_message` | `on_error` | `on_error` keeps the original input only when parsing failed or was partial. Use `always` for byte-exact forensic copies of every message — measured on synthetic data this roughly doubles compressed storage (≈82 vs ≈41 bytes/row). See [ADR-0013](decisions/0013-raw-message-policy.md). |
 | `allowed_cidrs` | empty (allow all) | Datagrams/connections from other addresses are dropped and counted (`reason="denied"`). |
 
 A UDP and a TCP source may share a port number; two sources of the same

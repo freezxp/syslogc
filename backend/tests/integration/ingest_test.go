@@ -248,20 +248,21 @@ func TestSyslogToStorage(t *testing.T) {
 	fmt.Fprintf(tcp, "%d %s", len(msg), msg)
 	fmt.Fprintf(tcp, "<11>%s db01 postgres[77]: tcplf %s\n", time.Now().UTC().Format("Jan _2 15:04:05"), id)
 	fmt.Fprintf(tcp, "garbage without any structure %s\n", id)
+	fmt.Fprintf(tcp, "<14>1 - h app - - [x@1 k=\"unterminated] badsd %s\n", id)
 	tcp.Close()
 
 	be := newBackend(t, "none")
-	rows := search(t, be, id, 5)
+	rows := search(t, be, id, 6)
 	byKind := map[string]storage.Row{}
 	for _, r := range rows {
 		msg := field(t, r, "_msg")
-		for _, kind := range []string{"udp5424", "udp3164", "tcpoctet", "tcplf", "garbage"} {
+		for _, kind := range []string{"udp5424", "udp3164", "tcpoctet", "tcplf", "garbage", "badsd"} {
 			if strings.Contains(msg, kind) {
 				byKind[kind] = r
 			}
 		}
 	}
-	if len(byKind) != 5 {
+	if len(byKind) != 6 {
 		t.Fatalf("missing messages: have %v", byKind)
 	}
 
@@ -273,6 +274,7 @@ func TestSyslogToStorage(t *testing.T) {
 		"tcpoctet": {"format": "rfc5424", "protocol": "tcp", "source": "it-tcp", "app_name": "app", "time_source": "received", "labels.site": "lab"},
 		"tcplf":    {"format": "rfc3164", "hostname": "db01", "app_name": "postgres", "severity": "error"},
 		"garbage":  {"format": "rfc3164", "severity_source": "default", "severity": "notice"},
+		"badsd":    {"format": "rfc5424", "hostname": "h", "app_name": "app"},
 	}
 	for kind, fields := range expect {
 		for k, v := range fields {
@@ -280,8 +282,15 @@ func TestSyslogToStorage(t *testing.T) {
 				t.Errorf("%s: %s = %q, want %q", kind, k, got, v)
 			}
 		}
-		if _, ok := byKind[kind].Get("raw_message"); !ok {
-			t.Errorf("%s: raw_message not stored", kind)
+		// Default raw_message policy is on_error: only the partial parse keeps raw input.
+		_, hasRaw := byKind[kind].Get("raw_message")
+		_, hasErr := byKind[kind].Get("parse_error")
+		if kind == "badsd" {
+			if !hasRaw || !hasErr {
+				t.Errorf("badsd: raw_message stored = %v, parse_error = %v; want both", hasRaw, hasErr)
+			}
+		} else if hasRaw || hasErr {
+			t.Errorf("%s: raw_message stored = %v, parse_error = %v; want neither", kind, hasRaw, hasErr)
 		}
 	}
 
@@ -293,7 +302,7 @@ func TestSyslogToStorage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":5`) || strings.Contains(string(body), "raw_message") {
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":6`) || strings.Contains(string(body), "raw_message") {
 		t.Errorf("dev search: HTTP %d %s", resp.StatusCode, body)
 	}
 
@@ -311,7 +320,7 @@ func TestSyslogToStorage(t *testing.T) {
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
 	for _, want := range []string{
-		`syslogc_ingest_messages_stored_total{source="it-tcp"} 3`,
+		`syslogc_ingest_messages_stored_total{source="it-tcp"} 4`,
 		`syslogc_ingest_messages_stored_total{source="it-udp"} 2`,
 		`syslogc_storage_healthy{backend="victorialogs"} 1`,
 	} {
