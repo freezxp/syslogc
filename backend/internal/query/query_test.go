@@ -210,3 +210,46 @@ func TestGuards(t *testing.T) {
 		r2()
 	}
 }
+
+func TestIngestionRatePartialBucket(t *testing.T) {
+	// Only two minutes of history in a 24h range (15m steps): the rate must
+	// reflect the covered time, not be averaged over the whole bucket.
+	var snaps statsSource
+	start := now.Add(-2 * time.Minute)
+	for i := range 13 {
+		snaps = append(snaps, metadata.NodeStats{NodeID: "a", Time: start.Add(time.Duration(i) * 10 * time.Second), Received: int64(i * 1000)})
+	}
+	svc := NewService(Options{NodeStats: snaps, Limits: DefaultLimits(30 * 24 * time.Hour), Now: func() time.Time { return now }})
+	resp, err := svc.IngestionRate(context.Background(), principal(auth.RoleViewer), DashboardRequest{TimeRange: TimeRange{From: "now-24h", To: "now"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range resp.Series {
+		if p.ReceivedPerSecond != 100 {
+			t.Errorf("point %s: %.1f/s, want 100/s (step %ds)", p.T, p.ReceivedPerSecond, resp.StepSeconds)
+		}
+	}
+}
+
+func TestIngestionRateNodeRestart(t *testing.T) {
+	// Node "old" runs for the first minute, "new" (after a restart with a new
+	// ID) for the second; both at 300/s. The bucket must show 300/s, not 600.
+	var snaps statsSource
+	start := now.Add(-2 * time.Minute)
+	for i := range 7 {
+		ts := time.Duration(i) * 10 * time.Second
+		snaps = append(snaps,
+			metadata.NodeStats{NodeID: "old", Time: start.Add(ts), Received: int64(i * 3000)},
+			metadata.NodeStats{NodeID: "new", Time: start.Add(time.Minute + ts), Received: int64(i * 3000)})
+	}
+	svc := NewService(Options{NodeStats: snaps, Limits: DefaultLimits(30 * 24 * time.Hour), Now: func() time.Time { return now }})
+	resp, err := svc.IngestionRate(context.Background(), principal(auth.RoleViewer), DashboardRequest{TimeRange: TimeRange{From: "now-24h", To: "now"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range resp.Series {
+		if p.ReceivedPerSecond != 300 {
+			t.Errorf("point %s: %.1f/s, want 300/s", p.T, p.ReceivedPerSecond)
+		}
+	}
+}

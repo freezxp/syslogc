@@ -241,7 +241,14 @@ func (s *Service) IngestionRate(ctx context.Context, p *auth.Principal, req Dash
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrStorageUnavailable, err)
 	}
-	type acc struct{ received, stored, dropped, parseErrors float64 }
+	// Deltas in a bucket are divided by the time the snapshots actually
+	// cover (the union of snapshot intervals across nodes), so partially
+	// covered buckets are not diluted over the whole step, concurrent nodes
+	// add up, and consecutive nodes (a restart with a new node ID) average.
+	type acc struct {
+		received, stored, dropped, parseErrors float64
+		intervals                              [][2]time.Time
+	}
 	buckets := map[int64]*acc{}
 	byNode := map[string][]metadata.NodeStats{}
 	for _, sn := range snaps {
@@ -263,6 +270,7 @@ func (s *Service) IngestionRate(ctx context.Context, p *auth.Principal, req Dash
 				a = &acc{}
 				buckets[k] = a
 			}
+			a.intervals = append(a.intervals, [2]time.Time{prev.Time, cur.Time})
 			a.received += float64(cur.Received - prev.Received)
 			a.stored += float64(cur.Stored - prev.Stored)
 			a.dropped += float64(cur.Dropped - prev.Dropped)
@@ -274,15 +282,40 @@ func (s *Service) IngestionRate(ctx context.Context, p *auth.Principal, req Dash
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	secs := step.Seconds()
 	for _, k := range keys {
 		a := buckets[k]
-		resp.Series = append(resp.Series, RatePoint{
-			T: time.Unix(0, k).UTC(), ReceivedPerSecond: a.received / secs, StoredPerSecond: a.stored / secs,
-			DroppedPerSecond: a.dropped / secs, ParseErrorsPerSecond: a.parseErrors / secs,
-		})
+		pt := RatePoint{T: time.Unix(0, k).UTC()}
+		if secs := unionSeconds(a.intervals); secs > 0 {
+			pt.ReceivedPerSecond = a.received / secs
+			pt.StoredPerSecond = a.stored / secs
+			pt.DroppedPerSecond = a.dropped / secs
+			pt.ParseErrorsPerSecond = a.parseErrors / secs
+		}
+		resp.Series = append(resp.Series, pt)
 	}
 	return resp, nil
+}
+
+// unionSeconds returns the total length of the union of time intervals.
+func unionSeconds(iv [][2]time.Time) float64 {
+	sort.Slice(iv, func(i, j int) bool { return iv[i][0].Before(iv[j][0]) })
+	var total time.Duration
+	var curStart, curEnd time.Time
+	for i, v := range iv {
+		switch {
+		case i == 0:
+			curStart, curEnd = v[0], v[1]
+		case v[0].After(curEnd):
+			total += curEnd.Sub(curStart)
+			curStart, curEnd = v[0], v[1]
+		case v[1].After(curEnd):
+			curEnd = v[1]
+		}
+	}
+	if len(iv) > 0 {
+		total += curEnd.Sub(curStart)
+	}
+	return total.Seconds()
 }
 
 // currentRate returns the ingest rate over the last minute across all nodes.

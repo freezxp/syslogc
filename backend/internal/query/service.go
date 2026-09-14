@@ -247,9 +247,9 @@ type SearchStats struct {
 type SearchResponse struct {
 	ResolvedRange  ResolvedRange       `json:"resolved_range"`
 	Mode           string              `json:"mode"`
-	Rows           []LogRow            `json:"rows,omitempty"`
-	Columns        []string            `json:"columns,omitempty"`
-	TableRows      []map[string]string `json:"table_rows,omitempty"`
+	Rows           []LogRow            `json:"rows,omitzero"`    // non-nil in logs mode
+	Columns        []string            `json:"columns,omitzero"` // non-nil in table mode
+	TableRows      []map[string]string `json:"table_rows,omitzero"`
 	Page           *Page               `json:"page,omitempty"`
 	NativeCompiled string              `json:"native_compiled,omitempty"`
 	Stats          SearchStats         `json:"stats"`
@@ -379,6 +379,7 @@ func (s *Service) table(ctx context.Context, r *resolved, limit int, resp *Searc
 	defer func() { _ = rows.Close() }()
 	seen := map[string]bool{}
 	resp.Mode = "table"
+	resp.Columns = []string{}
 	resp.TableRows = []map[string]string{}
 	for rows.Next() {
 		m := make(map[string]string, len(rows.Row()))
@@ -914,7 +915,7 @@ func (s *Service) OpenExport(ctx context.Context, p *auth.Principal, req ExportR
 		}
 		s.mu.Unlock()
 	}
-	rows, err := s.opts.Querier.Search(ctx, storage.SearchQuery{Selection: r.sel, Fields: storageFields, Limit: limit})
+	rows, err := s.opts.Querier.Search(ctx, storage.SearchQuery{Selection: r.sel, Fields: storageFields, Limit: limit + 1}) // +1 detects truncation
 	if err != nil {
 		release()
 		return nil, mapErr(ctx, err)

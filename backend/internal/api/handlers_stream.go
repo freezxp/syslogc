@@ -205,6 +205,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, p *auth.Pr
 	_ = rc.SetWriteDeadline(time.Time{})
 	var rows int64
 	var writeErr error
+	truncated := false
 
 	switch format {
 	case "csv":
@@ -212,6 +213,10 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		_ = cwr.Write(exp.Fields)
 		record := make([]string, len(exp.Fields))
 		for exp.Rows.Next() {
+			if int(rows) == exp.Limit {
+				truncated = true
+				break
+			}
 			for i, f := range exp.Fields {
 				record[i] = neutralizeCSV(query.RowValue(exp.Rows.Row(), f))
 			}
@@ -232,6 +237,10 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, p *auth.Pr
 			_, _ = bw.WriteString("[\n")
 		}
 		for exp.Rows.Next() {
+			if int(rows) == exp.Limit {
+				truncated = true
+				break
+			}
 			if format == "json" && rows > 0 {
 				_, _ = bw.WriteString(",\n")
 			}
@@ -252,7 +261,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, p *auth.Pr
 				_ = rc.Flush()
 			}
 		}
-		if int(rows) == exp.Limit {
+		if truncated {
 			marker := map[string]any{"_export": map[string]any{"truncated": true, "rows": rows, "limit": exp.Limit}}
 			b, _ := json.Marshal(marker)
 			if format == "json" {
@@ -273,7 +282,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		outcome = "failure"
 	}
 	s.audit(r, p, "logs.export", outcome, map[string]any{
-		"format": format, "rows": rows, "bytes": cw.n, "limit": exp.Limit,
+		"format": format, "rows": rows, "bytes": cw.n, "limit": exp.Limit, "truncated": truncated,
 		"from": exp.ResolvedRange.Start, "to": exp.ResolvedRange.End,
 		"duration_ms": time.Since(start).Milliseconds(), "native": req.Native != nil,
 	})
