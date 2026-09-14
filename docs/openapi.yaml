@@ -1,0 +1,1122 @@
+openapi: 3.1.0
+info:
+  title: Syslogc API
+  version: 0.2.0
+  description: |
+    REST API of Syslogc. The web UI uses only this API.
+
+    **Authentication.** Browsers use the `slc_session` cookie set by
+    `POST /api/v1/auth/login`; unsafe methods (POST, PUT, DELETE) must send the
+    CSRF token from the login or `/auth/me` response in `X-CSRF-Token`.
+    Automation uses API keys: `Authorization: Bearer slc_<id>_<secret>`.
+
+    **Time ranges.** Every log read takes a `time_range` whose `from`/`to` are
+    RFC 3339 timestamps or relative expressions (`now`, `now-15m`, `now-1h`,
+    `now-7d`, `now/d` = start of day in `tz`). Responses echo the absolute
+    `resolved_range`; send it back unchanged in parallel requests so all panels
+    cover exactly the same window.
+
+    **Errors** use RFC 9457 problem details (`application/problem+json`).
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: /
+
+security:
+  - sessionCookie: []
+  - apiKey: []
+
+tags:
+  - name: health
+  - name: auth
+  - name: logs
+  - name: fields
+  - name: dashboard
+  - name: saved-searches
+  - name: api-keys
+  - name: ingest
+  - name: system
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: {type: object, properties: {status: {type: string, const: ok}}}
+
+  /ready:
+    get:
+      tags: [health]
+      summary: Readiness (storage, database, sources, queue)
+      security: []
+      responses:
+        "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/Readiness"}}}}
+        "503": {description: Not ready or draining, content: {application/json: {schema: {$ref: "#/components/schemas/Readiness"}}}}
+
+  /metrics:
+    get:
+      tags: [health]
+      summary: Prometheus metrics
+      security: []
+      responses:
+        "200": {description: Prometheus exposition format, content: {text/plain: {schema: {type: string}}}}
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in with username and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string, minLength: 1, maxLength: 128}
+                password: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "200":
+          description: Logged in; sets the `slc_session` cookie
+          headers:
+            Set-Cookie: {schema: {type: string}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}
+        "401": {$ref: "#/components/responses/Problem"}
+        "429": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out (revokes the session)
+      responses:
+        "204": {description: Logged out}
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user, permissions and CSRF token
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "401": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/auth/me/password:
+    put:
+      tags: [auth]
+      summary: Change own password (revokes other sessions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: {type: string}
+                new_password: {type: string, minLength: 12, maxLength: 256}
+      responses:
+        "204": {description: Password changed}
+        "401": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/search:
+    post:
+      tags: [logs]
+      summary: Search logs (newest first, cursor pagination)
+      description: |
+        Requires `logs:search`; a `native` query additionally requires `logs:query_native`.
+        When the native query contains pipes (`| stats …`), the response has
+        `mode: table` with `columns`/`table_rows` instead of log rows.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/SearchRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResponse"}}}}
+        "400": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+        "429": {$ref: "#/components/responses/Problem"}
+        "504": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/histogram:
+    post:
+      tags: [logs]
+      summary: Log volume over time, optionally split by a field
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/HistogramRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/HistogramResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/facets:
+    post:
+      tags: [logs]
+      summary: Top values with exact counts for several fields
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/FacetsRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/FacetsResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/stats:
+    post:
+      tags: [logs]
+      summary: Aggregations (count, count_distinct, top)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/StatsRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/StatsResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/tail:
+    get:
+      tags: [logs]
+      summary: Live tail (Server-Sent Events)
+      description: |
+        Requires `logs:tail`. Events:
+
+        - `logs` — `data: {"rows": [LogRow, …]}` (coalesced, at most every 250 ms or 500 rows)
+        - `stats` — `data: {"rows_sent": n, "dropped_client_slow": n}`
+        - `error` — `data: Problem`; the stream then ends
+
+        Comment lines (`: heartbeat`) are sent every 15 s.
+      parameters:
+        - name: q
+          in: query
+          description: base64url (no padding) encoded JSON `TailQuery`
+          schema: {type: string}
+        - name: start_offset
+          in: query
+          description: How far back to start, e.g. `5s` (default) up to `1m`.
+          schema: {type: string, default: 5s}
+      responses:
+        "200":
+          description: Event stream
+          content: {text/event-stream: {schema: {type: string}}}
+        "403": {$ref: "#/components/responses/Problem"}
+        "429": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/logs/export:
+    post:
+      tags: [logs]
+      summary: Streamed export (CSV, NDJSON, JSON)
+      description: |
+        Requires `logs:export`. The body is streamed row by row. Browsers that
+        cannot stream a fetch response to disk may submit an HTML form with
+        `application/x-www-form-urlencoded` fields `request` (the JSON
+        `ExportRequest`) and `csrf_token`.
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema: {type: string, enum: [csv, ndjson, json]}
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: "#/components/schemas/ExportRequest"}}
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                request: {type: string}
+                csrf_token: {type: string}
+      responses:
+        "200":
+          description: Attachment
+          headers:
+            Content-Disposition: {schema: {type: string}}
+            X-Export-Limit: {schema: {type: integer}}
+          content:
+            text/csv: {schema: {type: string}}
+            application/x-ndjson: {schema: {type: string}}
+            application/json: {schema: {type: string}}
+        "403": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/query/validate:
+    post:
+      tags: [logs]
+      summary: Validate a filter/native query and return the compiled native query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filter: {$ref: "#/components/schemas/FilterExpr"}
+                native: {$ref: "#/components/schemas/NativeQuery"}
+      responses:
+        "200": {description: Result, content: {application/json: {schema: {$ref: "#/components/schemas/ValidateResponse"}}}}
+
+  /api/v1/fields:
+    post:
+      tags: [fields]
+      summary: Field names present in the selection
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/Selection"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/FieldsResponse"}}}}
+
+  /api/v1/fields/{field}/values:
+    post:
+      tags: [fields]
+      summary: Top values of one field (exact counts)
+      parameters:
+        - {name: field, in: path, required: true, schema: {type: string, maxLength: 256}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/FieldValuesRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/FieldValuesResponse"}}}}
+
+  /api/v1/dashboard/overview:
+    post:
+      tags: [dashboard]
+      summary: Overview tiles
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/DashboardRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/DashboardOverview"}}}}
+
+  /api/v1/dashboard/volume:
+    post:
+      tags: [dashboard]
+      summary: Log volume split by severity
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/DashboardRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/HistogramResponse"}}}}
+
+  /api/v1/dashboard/top:
+    post:
+      tags: [dashboard]
+      summary: Top values of a core field
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/DashboardRequest"
+                - type: object
+                  required: [field]
+                  properties:
+                    field: {type: string, enum: [hostname, app_name, source_ip, facility, severity, format, source]}
+                    limit: {type: integer, minimum: 1, maximum: 50, default: 10}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/FieldValuesResponse"}}}}
+
+  /api/v1/dashboard/ingestion-rate:
+    post:
+      tags: [dashboard]
+      summary: Ingestion rates over time from node statistics (max 24 h)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/DashboardRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/IngestionRateResponse"}}}}
+
+  /api/v1/saved-searches:
+    get:
+      tags: [saved-searches]
+      summary: List saved searches visible to the user
+      parameters:
+        - {name: q, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/SavedSearch"}}
+                  next_cursor: {type: [string, "null"]}
+    post:
+      tags: [saved-searches]
+      summary: Create a saved search
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/SavedSearchInput"}}}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/SavedSearch"}}}}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/saved-searches/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      tags: [saved-searches]
+      summary: Get a saved search
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SavedSearch"}}}}
+        "404": {$ref: "#/components/responses/Problem"}
+    put:
+      tags: [saved-searches]
+      summary: Update a saved search (optimistic concurrency via `version`)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SavedSearchInput"
+                - type: object
+                  required: [version]
+                  properties:
+                    version: {type: integer}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SavedSearch"}}}}
+        "403": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [saved-searches]
+      summary: Delete a saved search
+      responses:
+        "204": {description: Deleted}
+        "403": {$ref: "#/components/responses/Problem"}
+        "404": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/api-keys:
+    get:
+      tags: [api-keys]
+      summary: List API keys (own keys; all keys for admins)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: {type: array, items: {$ref: "#/components/schemas/ApiKey"}}
+    post:
+      tags: [api-keys]
+      summary: Create an API key (the secret is shown once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, scopes]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 128}
+                scopes: {type: array, minItems: 1, items: {$ref: "#/components/schemas/Permission"}}
+                expires_at: {type: [string, "null"], format: date-time}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_key, secret]
+                properties:
+                  api_key: {$ref: "#/components/schemas/ApiKey"}
+                  secret: {type: string, description: "Full key `slc_<id>_<secret>`; not retrievable later"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/api-keys/{id}:
+    delete:
+      tags: [api-keys]
+      summary: Revoke an API key
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "204": {description: Revoked}
+        "404": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/ingest:
+    post:
+      tags: [ingest]
+      summary: Ingest JSON logs
+      description: |
+        Requires an API key with `logs:ingest`. Accepts one JSON object, a JSON
+        array of objects, or NDJSON (`application/x-ndjson`). `Content-Encoding:
+        gzip` is supported. Invalid lines are reported; valid lines are accepted.
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {oneOf: [{type: object}, {type: array, items: {type: object}}]}}
+          application/x-ndjson: {schema: {type: string}}
+      responses:
+        "202": {description: Accepted into the pipeline, content: {application/json: {schema: {$ref: "#/components/schemas/IngestResponse"}}}}
+        "401": {$ref: "#/components/responses/Problem"}
+        "413": {$ref: "#/components/responses/Problem"}
+        "503":
+          description: Pipeline saturated; retry after the indicated delay. Partial results are reported.
+          headers:
+            Retry-After: {schema: {type: integer}}
+          content: {application/json: {schema: {$ref: "#/components/schemas/IngestResponse"}}}
+
+  /api/v1/system/health:
+    get:
+      tags: [system]
+      summary: Detailed health of this node
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SystemHealth"}}}}
+
+  /api/v1/system/ingestion:
+    get:
+      tags: [system]
+      summary: Ingestion counters and rates per source and node
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SystemIngestion"}}}}
+
+  /api/v1/system/storage:
+    get:
+      tags: [system]
+      summary: Storage backend, usage and retention
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SystemStorage"}}}}
+
+components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: slc_session}
+    apiKey: {type: http, scheme: bearer, description: "API key `slc_<id>_<secret>`"}
+
+  responses:
+    Problem:
+      description: Problem details
+      content:
+        application/problem+json: {schema: {$ref: "#/components/schemas/Problem"}}
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string}
+        request_id: {type: string}
+        code:
+          type: string
+          description: |
+            Stable machine-readable code: bad_request, invalid_time_range, invalid_cursor,
+            unauthenticated, session_expired, forbidden, csrf_failed, not_found, conflict,
+            payload_too_large, unsupported_media_type, validation_failed, query_invalid,
+            rate_limited, too_many_concurrent_queries, too_many_tail_sessions,
+            ingest_backpressure, storage_unavailable, query_timeout, internal
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              pointer: {type: string}
+              position: {type: integer}
+              message: {type: string}
+
+    Permission:
+      type: string
+      enum:
+        - dashboard:view
+        - logs:search
+        - logs:tail
+        - logs:view_raw
+        - logs:query_native
+        - logs:export
+        - logs:ingest
+        - searches:read
+        - searches:write
+        - sources:read
+        - sources:manage
+        - system:view
+        - config:view
+        - config:manage
+        - retention:manage
+        - users:manage
+        - apikeys:own
+        - apikeys:manage
+        - audit:view
+
+    Role: {type: string, enum: [admin, operator, viewer]}
+
+    User:
+      type: object
+      required: [id, username, role, must_change_password, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        username: {type: string}
+        display_name: {type: string}
+        role: {$ref: "#/components/schemas/Role"}
+        must_change_password: {type: boolean}
+        created_at: {type: string, format: date-time}
+        last_login_at: {type: [string, "null"], format: date-time}
+
+    Session:
+      type: object
+      required: [user, permissions, csrf_token]
+      properties:
+        user: {$ref: "#/components/schemas/User"}
+        permissions: {type: array, items: {$ref: "#/components/schemas/Permission"}}
+        csrf_token: {type: string}
+
+    Readiness:
+      type: object
+      required: [status, components]
+      properties:
+        status: {type: string, enum: [ready, not_ready, draining]}
+        node: {type: string}
+        version: {type: string}
+        components: {type: array, items: {$ref: "#/components/schemas/ComponentStatus"}}
+      additionalProperties: true
+
+    ComponentStatus:
+      type: object
+      required: [name, status]
+      properties:
+        name: {type: string}
+        status: {type: string, enum: [ok, fail]}
+        error: {type: string}
+
+    TimeRange:
+      type: object
+      required: [from, to]
+      properties:
+        from: {type: string, examples: ["now-1h", "2026-09-14T10:00:00Z"]}
+        to: {type: string, examples: ["now"]}
+        tz: {type: string, description: IANA timezone for `/d` rounding and bucket alignment, default: UTC}
+
+    ResolvedRange:
+      type: object
+      required: [start, end]
+      properties:
+        start: {type: string, format: date-time}
+        end: {type: string, format: date-time}
+
+    NativeQuery:
+      type: object
+      required: [dialect, text]
+      properties:
+        dialect: {type: string, const: logsql}
+        text: {type: string, maxLength: 16384}
+
+    FilterExpr:
+      description: Backend-neutral filter AST (discriminated by `op`).
+      oneOf:
+        - $ref: "#/components/schemas/BoolExpr"
+        - $ref: "#/components/schemas/NotExpr"
+        - $ref: "#/components/schemas/TextExpr"
+        - $ref: "#/components/schemas/FieldValueExpr"
+        - $ref: "#/components/schemas/FieldValuesExpr"
+        - $ref: "#/components/schemas/FieldExistsExpr"
+      discriminator:
+        propertyName: op
+        mapping:
+          and: "#/components/schemas/BoolExpr"
+          or: "#/components/schemas/BoolExpr"
+          not: "#/components/schemas/NotExpr"
+          text: "#/components/schemas/TextExpr"
+          eq: "#/components/schemas/FieldValueExpr"
+          ne: "#/components/schemas/FieldValueExpr"
+          contains: "#/components/schemas/FieldValueExpr"
+          starts_with: "#/components/schemas/FieldValueExpr"
+          regex: "#/components/schemas/FieldValueExpr"
+          gt: "#/components/schemas/FieldValueExpr"
+          gte: "#/components/schemas/FieldValueExpr"
+          lt: "#/components/schemas/FieldValueExpr"
+          lte: "#/components/schemas/FieldValueExpr"
+          cidr: "#/components/schemas/FieldValueExpr"
+          in: "#/components/schemas/FieldValuesExpr"
+          not_in: "#/components/schemas/FieldValuesExpr"
+          exists: "#/components/schemas/FieldExistsExpr"
+          not_exists: "#/components/schemas/FieldExistsExpr"
+
+    BoolExpr:
+      type: object
+      required: [op, args]
+      properties:
+        op: {type: string, enum: [and, or]}
+        args: {type: array, minItems: 1, maxItems: 100, items: {$ref: "#/components/schemas/FilterExpr"}}
+
+    NotExpr:
+      type: object
+      required: [op, arg]
+      properties:
+        op: {type: string, const: not}
+        arg: {$ref: "#/components/schemas/FilterExpr"}
+
+    TextExpr:
+      type: object
+      required: [op, value]
+      properties:
+        op: {type: string, const: text}
+        value: {type: string, minLength: 1, maxLength: 4096}
+
+    FieldValueExpr:
+      type: object
+      required: [op, field, value]
+      properties:
+        op: {type: string, enum: [eq, ne, contains, starts_with, regex, gt, gte, lt, lte, cidr]}
+        field: {type: string, minLength: 1, maxLength: 256, description: "Storage field name; `message` and `timestamp` are aliases of `_msg`/`_time`"}
+        value: {type: string, maxLength: 4096}
+
+    FieldValuesExpr:
+      type: object
+      required: [op, field, values]
+      properties:
+        op: {type: string, enum: [in, not_in]}
+        field: {type: string, minLength: 1, maxLength: 256}
+        values: {type: array, minItems: 1, maxItems: 1000, items: {type: string, maxLength: 4096}}
+
+    FieldExistsExpr:
+      type: object
+      required: [op, field]
+      properties:
+        op: {type: string, enum: [exists, not_exists]}
+        field: {type: string, minLength: 1, maxLength: 256}
+
+    Selection:
+      type: object
+      required: [time_range]
+      properties:
+        time_range: {$ref: "#/components/schemas/TimeRange"}
+        filter: {$ref: "#/components/schemas/FilterExpr"}
+        native: {$ref: "#/components/schemas/NativeQuery"}
+
+    SearchRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          properties:
+            fields: {type: array, maxItems: 100, items: {type: string}, description: Projection (storage field names); omit for all fields}
+            limit: {type: integer, minimum: 1, maximum: 10000, default: 200}
+            cursor: {type: [string, "null"]}
+
+    LogRow:
+      type: object
+      description: |
+        A log record. Core fields are top level; dynamic fields are under
+        `fields` and static labels under `labels` (both keyed by name without
+        prefix). Absent values are omitted.
+      required: [timestamp, _ref]
+      properties:
+        timestamp: {type: string, format: date-time}
+        received_at: {type: string, format: date-time}
+        message: {type: string}
+        hostname: {type: string}
+        source_ip: {type: string}
+        source_port: {type: integer}
+        peer_ip: {type: string}
+        facility: {type: string}
+        facility_code: {type: integer}
+        severity: {type: string, enum: [emergency, alert, critical, error, warning, notice, info, debug]}
+        severity_code: {type: integer, minimum: 0, maximum: 7}
+        priority: {type: integer}
+        protocol: {type: string}
+        format: {type: string}
+        app_name: {type: string}
+        process_id: {type: string}
+        message_id: {type: string}
+        source: {type: string}
+        source_type: {type: string}
+        raw_message: {type: string}
+        parse_error: {type: string}
+        time_source: {type: string, enum: [received, adjusted]}
+        severity_source: {type: string}
+        timestamp_raw: {type: string}
+        truncated: {type: boolean}
+        fields_dropped: {type: integer}
+        labels: {type: object, additionalProperties: {type: string}}
+        fields: {type: object, additionalProperties: {type: string}}
+        _ref:
+          type: object
+          required: [stream_id, time_ns]
+          properties:
+            stream_id: {type: string}
+            time_ns: {type: string}
+
+    SearchResponse:
+      type: object
+      required: [resolved_range, mode, stats]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        mode: {type: string, enum: [logs, table]}
+        rows: {type: array, items: {$ref: "#/components/schemas/LogRow"}}
+        columns: {type: array, items: {type: string}, description: "`table` mode only"}
+        table_rows: {type: array, items: {type: object, additionalProperties: {type: string}}, description: "`table` mode only"}
+        page:
+          type: object
+          required: [returned, tie_overflow]
+          properties:
+            returned: {type: integer}
+            next_cursor: {type: [string, "null"]}
+            tie_overflow: {type: boolean}
+        native_compiled: {type: string, description: The backend query that was executed (for display)}
+        stats:
+          type: object
+          required: [duration_ms]
+          properties:
+            duration_ms: {type: integer}
+
+    HistogramRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          properties:
+            split_by: {type: [string, "null"], description: Field to split buckets by (e.g. severity)}
+            buckets: {type: integer, minimum: 10, maximum: 500, default: 120, description: Target maximum number of buckets}
+            split_limit: {type: integer, minimum: 1, maximum: 20, default: 8}
+
+    HistogramResponse:
+      type: object
+      required: [resolved_range, step, step_seconds, buckets, total]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        step: {type: string, examples: ["15m"]}
+        step_seconds: {type: integer}
+        total: {type: integer}
+        split_by: {type: [string, "null"]}
+        split_values: {type: array, items: {type: string}, description: Split values ordered by total count}
+        split_other: {type: boolean, description: Values beyond split_limit were merged into `other`}
+        buckets:
+          type: array
+          items:
+            type: object
+            required: [t, total]
+            properties:
+              t: {type: string, format: date-time}
+              total: {type: integer}
+              split: {type: object, additionalProperties: {type: integer}}
+
+    FacetsRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          required: [fields]
+          properties:
+            fields: {type: array, minItems: 1, maxItems: 20, items: {type: string}}
+            limit_per_field: {type: integer, minimum: 1, maximum: 100, default: 10}
+
+    ValueCount:
+      type: object
+      required: [value, count]
+      properties:
+        value: {type: string}
+        count: {type: integer}
+
+    FacetsResponse:
+      type: object
+      required: [resolved_range, facets]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        facets:
+          type: array
+          items:
+            type: object
+            required: [field, values]
+            properties:
+              field: {type: string}
+              values: {type: array, items: {$ref: "#/components/schemas/ValueCount"}}
+
+    StatsRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          required: [aggregations]
+          properties:
+            aggregations:
+              type: array
+              minItems: 1
+              maxItems: 10
+              items:
+                type: object
+                required: [type]
+                properties:
+                  type: {type: string, enum: [count, count_distinct, top]}
+                  field: {type: string}
+                  limit: {type: integer, minimum: 1, maximum: 100, default: 10}
+
+    StatsResponse:
+      type: object
+      required: [resolved_range, results]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        results:
+          type: array
+          items:
+            type: object
+            required: [type]
+            properties:
+              type: {type: string}
+              field: {type: string}
+              value: {type: integer, description: count / count_distinct}
+              values: {type: array, items: {$ref: "#/components/schemas/ValueCount"}, description: top}
+
+    TailQuery:
+      type: object
+      properties:
+        filter: {$ref: "#/components/schemas/FilterExpr"}
+        native: {$ref: "#/components/schemas/NativeQuery"}
+
+    ExportRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          properties:
+            fields: {type: array, maxItems: 200, items: {type: string}, description: Required for CSV; defaults to core fields}
+            limit: {type: integer, minimum: 1, default: 100000}
+
+    ValidateResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid: {type: boolean}
+        native_compiled: {type: string}
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              message: {type: string}
+              position: {type: integer}
+              pointer: {type: string}
+
+    FieldInfo:
+      type: object
+      required: [name, kind]
+      properties:
+        name: {type: string}
+        count: {type: integer}
+        count_approximate: {type: boolean}
+        kind: {type: string, enum: [core, label, dynamic]}
+
+    FieldsResponse:
+      type: object
+      required: [resolved_range, fields]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        fields: {type: array, items: {$ref: "#/components/schemas/FieldInfo"}}
+
+    FieldValuesRequest:
+      allOf:
+        - $ref: "#/components/schemas/Selection"
+        - type: object
+          properties:
+            search: {type: string, maxLength: 256, description: Case-insensitive substring filter}
+            limit: {type: integer, minimum: 1, maximum: 1000, default: 20}
+
+    FieldValuesResponse:
+      type: object
+      required: [field, values]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        field: {type: string}
+        values: {type: array, items: {$ref: "#/components/schemas/ValueCount"}}
+
+    DashboardRequest:
+      type: object
+      required: [time_range]
+      properties:
+        time_range: {$ref: "#/components/schemas/TimeRange"}
+
+    DashboardOverview:
+      type: object
+      required: [resolved_range, logs_in_range, logs_today, errors_in_range, active_sources]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        logs_in_range: {type: integer}
+        logs_today: {type: integer}
+        errors_in_range: {type: integer, description: "severity_code <= 3"}
+        active_sources: {type: integer, description: Distinct hostnames in range}
+        storage: {$ref: "#/components/schemas/StorageUsage"}
+        ingest_rate:
+          type: object
+          properties:
+            logs_per_second: {type: number}
+            bytes_per_second: {type: number}
+            window_seconds: {type: integer}
+        cached_at: {type: string, format: date-time}
+
+    IngestionRateResponse:
+      type: object
+      required: [resolved_range, series]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        step_seconds: {type: integer}
+        series:
+          type: array
+          items:
+            type: object
+            required: [t]
+            properties:
+              t: {type: string, format: date-time}
+              received_per_second: {type: number}
+              stored_per_second: {type: number}
+              dropped_per_second: {type: number}
+              parse_errors_per_second: {type: number}
+
+    SavedSearchQuery:
+      type: object
+      properties:
+        filter: {$ref: "#/components/schemas/FilterExpr"}
+        native: {$ref: "#/components/schemas/NativeQuery"}
+
+    SavedSearchInput:
+      type: object
+      required: [name, query]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        description: {type: string, maxLength: 1024}
+        query: {$ref: "#/components/schemas/SavedSearchQuery"}
+        columns: {type: array, maxItems: 50, items: {type: string}}
+        default_time_range: {$ref: "#/components/schemas/TimeRange"}
+        visibility: {type: string, enum: [private, shared], default: private}
+
+    SavedSearch:
+      allOf:
+        - $ref: "#/components/schemas/SavedSearchInput"
+        - type: object
+          required: [id, created_by, created_at, updated_at, version, visibility, columns]
+          properties:
+            id: {type: string, format: uuid}
+            dialect: {type: [string, "null"], description: Set when `query.native` is present}
+            created_by:
+              type: object
+              required: [id, username]
+              properties:
+                id: {type: string, format: uuid}
+                username: {type: string}
+            created_at: {type: string, format: date-time}
+            updated_at: {type: string, format: date-time}
+            version: {type: integer}
+
+    ApiKey:
+      type: object
+      required: [id, key_id, name, scopes, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        key_id: {type: string}
+        name: {type: string}
+        scopes: {type: array, items: {$ref: "#/components/schemas/Permission"}}
+        owner: {type: [string, "null"]}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: [string, "null"], format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+
+    IngestResponse:
+      type: object
+      required: [accepted, rejected]
+      properties:
+        accepted: {type: integer}
+        rejected: {type: integer}
+        errors:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            properties:
+              line: {type: integer}
+              error: {type: string}
+
+    SourceStatus:
+      type: object
+      required: [name, type, state]
+      properties:
+        name: {type: string}
+        type: {type: string}
+        protocol: {type: string}
+        address: {type: string}
+        state: {type: string, enum: [running, stopped, error, disabled]}
+        error: {type: string}
+        since: {type: string, format: date-time}
+
+    SystemHealth:
+      type: object
+      required: [status, node, version, uptime_seconds, components]
+      properties:
+        status: {type: string, enum: [ready, not_ready, draining]}
+        node: {type: string}
+        version: {type: string}
+        roles: {type: array, items: {type: string}}
+        uptime_seconds: {type: integer}
+        components: {type: array, items: {$ref: "#/components/schemas/ComponentStatus"}}
+        sources: {type: array, items: {$ref: "#/components/schemas/SourceStatus"}}
+
+    SourceCounters:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        protocol: {type: string}
+        state: {type: string}
+        received: {type: integer}
+        parsed: {type: integer}
+        parse_errors: {type: integer}
+        stored: {type: integer}
+        dropped: {type: object, additionalProperties: {type: integer}}
+        active_connections: {type: integer}
+        received_per_second: {type: number}
+        stored_per_second: {type: number}
+
+    SystemIngestion:
+      type: object
+      required: [node, sources, queue]
+      properties:
+        node: {type: string}
+        sources: {type: array, items: {$ref: "#/components/schemas/SourceCounters"}}
+        queue:
+          type: object
+          properties:
+            messages: {type: integer}
+            bytes: {type: integer}
+            capacity_messages: {type: integer}
+            capacity_bytes: {type: integer}
+        storage_healthy: {type: boolean}
+        e2e_latency_p50_seconds: {type: [number, "null"]}
+        e2e_latency_p99_seconds: {type: [number, "null"]}
+
+    StorageUsage:
+      type: object
+      properties:
+        compressed_bytes: {type: integer}
+        uncompressed_bytes: {type: integer}
+        free_disk_bytes: {type: integer}
+        total_disk_bytes: {type: integer}
+
+    SystemStorage:
+      type: object
+      required: [backend, reachable]
+      properties:
+        backend: {type: string}
+        reachable: {type: boolean}
+        capabilities:
+          type: object
+          properties:
+            native_dialects: {type: array, items: {type: string}}
+            native_tail: {type: boolean}
+            per_tenant_retention: {type: boolean}
+        usage: {$ref: "#/components/schemas/StorageUsage"}
+        retention:
+          type: object
+          properties:
+            configured: {type: string}
+            backend: {type: string}
+            status: {type: string, enum: [in_sync, drift, unknown]}
