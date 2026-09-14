@@ -11,3 +11,6 @@ bin/
 # Built web UI embedded into the Go binary
 backend/internal/api/webui/dist/*
 !backend/internal/api/webui/dist/.keep
+
+# Local Compose overrides
+.env

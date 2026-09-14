@@ -148,7 +148,7 @@ with `request` = the JSON body and `csrf_token`) so downloads stream to disk.
 
 ## Saved searches
 
-`/api/v1/saved-searches` stores a name, description, the query (time range,
-filter or native query, visible columns) and visibility (`private` or
+`/api/v1/saved-searches` stores a name, description, the query (filter or native query), default time
+range, visible columns and visibility (`private` or
 `shared`). Owners and admins can modify them; updates use optimistic
 concurrency (`version`).
