@@ -98,7 +98,7 @@ Value formats:
 ingestion:
   sources:
     - name: firewalls           # unique; becomes the `source` field and metric label
-      type: syslog              # syslog (http_json arrives in Phase 2)
+      type: syslog              # syslog | http_json (at most one; no protocol/address)
       protocol: udp             # udp | tcp | tls
       address: ":5514"
       enabled: true
@@ -150,18 +150,53 @@ transport may not.
 | `drain_delay` | `5s` | After `SIGTERM`, `/ready` fails for this long before listeners stop, so load balancers can react. |
 | `timeout` | `30s` | Maximum time to drain queued logs to storage; anything left is counted as `dropped{reason="shutdown"}`. |
 
-### `dev`
+### `ingestion.http`
+
+Limits for `POST /api/v1/ingest` (enabled by an `http_json` source; see [JSON ingestion](json-ingestion.md)).
 
 | Key | Default | Description |
 |---|---|---|
-| `search_endpoint` | `false` | Enables the **unauthenticated** `GET /api/v1/dev/search` endpoint. For Phase 1 verification only; never enable on an exposed node. |
+| `max_body_bytes` | `10MiB` | Maximum request body after decompression; larger requests get `413`. |
+| `max_events` | `10000` | Maximum events per request. |
+| `enqueue_timeout` | `2s` | How long a request waits for queue space before `503` with `Retry-After`. |
 
-## Development search endpoint
+### `metadata.postgres`
 
-```text
-GET /api/v1/dev/search?query=<LogsQL>&from=<duration|RFC3339>&to=<RFC3339>&limit=<1-1000>&fields=<a,b>
-```
+Users, sessions, API keys, saved searches, audit events and ingestion-rate
+snapshots live in PostgreSQL (13+; tested with 17). Required for the `api` role.
+Migrations run automatically at startup under an advisory lock.
 
-`query` is native [LogsQL](https://docs.victoriametrics.com/victorialogs/logsql/),
-e.g. `severity:=error hostname:="fw01"`. Results are newest first. The time
-range is limited to 31 days.
+| Key | Default | Description |
+|---|---|---|
+| `dsn` | — | `postgres://user:pass@host:5432/db?sslmode=verify-full`. Redacted by `config print`. Takes precedence over `dsn_file`. |
+| `dsn_file` | — | File containing the DSN (Docker/Kubernetes secrets). |
+| `max_conns` | `20` | Connection pool size. |
+
+### `auth`
+
+| Key | Default | Description |
+|---|---|---|
+| `secret_key_file` | — | 32+ random bytes (hex or raw) used to sign pagination cursors. Share it across API nodes. If unset a random key is generated per process and a warning is logged. `syslogc init-secrets` creates one. |
+| `session_ttl` | `12h` | Absolute session lifetime. |
+| `session_idle_timeout` | `1h` | Sessions unused for this long expire. |
+| `cookie_secure` | `true` | Sets `Secure` on the session cookie. Only disable for plain-HTTP deployments on trusted networks (the Compose stack does, by default). |
+| `bootstrap_admin.username` | `admin` | Created when the user table is empty. |
+| `bootstrap_admin.password_file` | — | Initial password. If unset, a random password is generated, printed once to stderr, and must be changed at first login. |
+
+### `query`
+
+| Key | Default | Description |
+|---|---|---|
+| `max_tie_group` | `5000` | Maximum rows sharing one timestamp returned at a page boundary (see [querying](querying.md#pagination)). |
+| `max_tail_sessions` | `200` | Concurrent live-tail sessions per node. |
+| `audit_all` | `false` | Audit every search, not only native queries, exports and admin actions. |
+
+Per-role query limits (range, rows, timeout, concurrency) are fixed in this
+release; see [security](security.md#query-limits).
+
+## Secrets for Docker Compose
+
+`syslogc init-secrets --dir /secrets [--owner uid:gid]` writes
+`postgres_password`, `postgres_dsn` and `secret_key` if they do not exist and
+never overwrites them. The Compose stack runs it as a one-shot `init` service
+into the `secrets` volume.

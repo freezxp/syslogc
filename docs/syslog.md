@@ -153,7 +153,7 @@ cron, postgres, dockerd templates) and tags every message with
 bin/loggen --target 127.0.0.1 --port 514 --protocol tcp --rate 10000 --duration 60s \
   --connections 4 --format mixed:rfc5424=60,rfc3164=40 --hosts 500 --custom-fields 3 --run-id test1
 
-curl -s "http://127.0.0.1:8080/api/v1/dev/search?query=test1%20|%20stats%20count()%20rows&from=15m"
+# in the explorer (operator/admin), advanced mode: "run=test1" | stats count() rows
 ```
 
 Check `achieved_rate` in its report: if it is below the target, the generator
