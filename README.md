@@ -4,10 +4,11 @@ A modern syslog server and log analytics platform: high-throughput ingestion
 over standard protocols, normalized structured logs, and fast search on top of
 [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/).
 
-> **Status: Phase 4 — web UI.** Syslog and JSON ingestion, an authenticated
-> query API and the web UI (explorer, dashboard, live tail, saved searches,
-> export) are in place. Source management in the UI, alerting and clustering
-> follow — see the [roadmap](docs/roadmap.md).
+> **Status: MVP.** Ingestion, search, the web UI and day-to-day operations
+> (sources, users, audit log, retention, monitoring, backups) are in place
+> and measured — see [performance](docs/performance.md). Alerting, OIDC,
+> clustering and additional parsers come next; see the
+> [roadmap](docs/roadmap.md).
 
 ## Quick start
 
@@ -43,9 +44,10 @@ preserving sender IP addresses.
 | Pipeline | Bounded queue (count + byte budget), parallel parsing, batched writes, retry with backoff, bisecting of rejected batches, protocol-specific backpressure, graceful drain |
 | Search | Query builder filters (text, equals, contains, regex, numeric, CIDR, in, exists) and LogsQL advanced mode; relative/absolute time ranges with time zones; stable cursor pagination; histograms, facets, field discovery; live tail over SSE; streaming CSV/NDJSON/JSON export |
 | Web UI | Explorer with virtualized results, field sidebar and log detail, dashboard (volume, errors, top hosts/apps, ingestion rate), live tail, saved searches, API keys, system health |
+| Operations | Sources created and changed in the UI and applied to running listeners within seconds, user administration, audit log, retention and effective-configuration views, Prometheus alert rules, a Grafana dashboard, and backup/restore scripts |
 | Security | Local accounts (Argon2id), server-side sessions with CSRF protection, scoped API keys, viewer/operator/admin roles, per-role query limits, audit log |
 | Operations | Prometheus metrics for every loss path, readiness checks, retention drift detection, structured JSON logs, config via YAML/env/flags, PostgreSQL metadata with automatic migrations |
-| Tooling | `loggen` traffic generator, distroless non-root image with embedded UI, Compose stack, OpenAPI 3.1 contract, CI |
+| Tooling | `loggen` traffic generator, load-test harness, distroless non-root image with embedded UI, Compose stack, OpenAPI 3.1 contract, CI |
 
 ## Documentation
 
