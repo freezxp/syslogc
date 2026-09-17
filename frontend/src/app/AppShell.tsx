@@ -66,7 +66,7 @@ const NAV: NavItem[] = [
   },
   { to: '/sources', label: 'Sources', icon: <Network />, perm: 'sources:read' },
   { to: '/searches', label: 'Saved Searches', icon: <Star />, perm: 'searches:read' },
-  { label: 'Analytics', icon: <BarChart3 />, disabled: true },
+  { to: '/analytics', label: 'Analytics', icon: <BarChart3 />, perm: 'logs:search' },
   { to: '/system', label: 'System', icon: <Server />, perm: 'system:view' },
   {
     label: 'Administration',
@@ -94,6 +94,7 @@ export function AppShell() {
     'g d': () => navigate({ to: '/dashboard' }),
     'g l': () => navigate({ to: '/logs' }),
     'g t': () => navigate({ to: '/logs/live' }),
+    'g a': () => navigate({ to: '/analytics' }),
     'g s': () => navigate({ to: '/searches' }),
     'g y': () => navigate({ to: '/system' }),
   })

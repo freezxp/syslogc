@@ -21,8 +21,8 @@ src/
 ├── api/            # generated schema, openapi-fetch client (CSRF, 401 handling), TanStack Query hooks
 ├── app/            # router, app shell, command palette, shortcuts help
 ├── components/     # ui/ (Radix-based primitives), data/ (badges, panels), charts/ (Recharts wrappers)
-├── features/       # auth, dashboard, explorer, live-tail, saved-searches, sources, users, audit, system,
-│                  #   settings, time-range
+├── features/       # auth, dashboard, explorer, analytics, live-tail, saved-searches, sources, users, audit,
+│                  #   system, settings, time-range
 ├── lib/            # filter text parser/formatter, time ranges, URL state, ring buffer, preferences
 ├── mocks/          # MSW handlers and synthetic data (only bundled in mock mode)
 └── styles/         # Tailwind v4 tokens (dark default, light theme)
@@ -42,6 +42,15 @@ src/
 - `src/api/operations.ts` hand-writes the paths and schemas for the sources, users, audit and retention
   endpoints, which `docs/openapi.yaml` does not describe yet, and intersects them into the client's `paths`
   so `npm run gen:api` cannot drop them. Fold them into the generated schema once the spec catches up.
+  The analytics types live there too; the spec gained those endpoints in the same phase, so they can move to
+  the generated schema at the next `npm run gen:api`.
+- Analytics (`/analytics`) reuses the explorer's query bar and time picker; its own URL params are
+  `group,metric,mfield,top` (codec and comparison logic in `src/features/analytics/analytics-query.ts`). The
+  previous-period comparison runs the breakdown a second time over the window immediately before the current
+  one; a value missing from a truncated previous top-N is reported as unknown rather than new. A series
+  group's `total` is the metric over the whole window rather than the sum of its points, so the legend shows
+  it directly; the chart tooltip still hides its cross-group total for `count_distinct`, which does not add
+  up across groups.
 - The source editor keeps a flat string form state (`src/features/sources/source-form.ts`) and converts to the
   `config` object on save. The server validates a source as a whole and answers one `/config` pointer whose
   detail joins every complaint, so the detail is split back apart to place messages next to their inputs.

@@ -23,6 +23,26 @@ export const explorerSearchSchema = z.object({
 
 export type ExplorerSearch = z.infer<typeof explorerSearchSchema>
 
+/**
+ * Analytics state: the explorer's query params (`from,to,tz,q,native,mode`) plus
+ * the aggregation. `top` stays a string like every other param; the codec in
+ * `features/analytics/analytics-query.ts` turns it into a request.
+ */
+export const analyticsSearchSchema = z.object({
+  from: str('now-1h'),
+  to: str('now'),
+  tz: optStr(),
+  q: optStr(),
+  native: optStr(),
+  mode: z._default(z.catch(z.enum(['visual', 'advanced']), 'visual'), 'visual'),
+  group: optStr(),
+  metric: z._default(z.catch(z.enum(['count', 'unique']), 'count'), 'count'),
+  mfield: optStr(),
+  top: optStr(),
+})
+
+export type AnalyticsSearch = z.infer<typeof analyticsSearchSchema>
+
 export const liveSearchSchema = z.object({
   q: optStr(),
   native: optStr(),

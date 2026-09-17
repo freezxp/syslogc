@@ -258,6 +258,7 @@ Pick per product priorities after MVP feedback. Each item gets its own ADR/desig
 | Tenant → VictoriaLogs instance router | Retention classes on VictoriaLogs | M |
 | Kubernetes Helm chart | Per-role deployments | M |
 | Alerting | Scheduled saved searches with thresholds → webhook/email | L |
+| **Analytics** | ✔ delivered: breakdown and time-series aggregation with an Analytics page ([querying.md](querying.md#analytics)) | M |
 | Log pattern mining (Drain) | `pattern_id` field, "new patterns" view | L |
 | AI assistant | Tools over API/MCP, RBAC-scoped, audited ([architecture.md §9](architecture.md#9-future-ai-integration)) | XL |
 

@@ -406,3 +406,79 @@ func decodeRow(dst storage.Row, line []byte) (storage.Row, error) {
 
 // QuoteFieldName quotes a field name for use in LogsQL.
 func QuoteFieldName(name string) string { return quote(name) }
+
+// Aggregate groups rows by time, by a field, or both. The LogsQL pipeline is
+// built here, never from user text, so grouping cannot widen the selection.
+func (b *Backend) Aggregate(ctx context.Context, q storage.AggregateQuery) ([]storage.AggRow, error) {
+	if err := q.Range.Validate(); err != nil {
+		return nil, err
+	}
+	f, pipes, err := buildSelection(q.Selection)
+	if err != nil {
+		return nil, err
+	}
+	if pipes != "" {
+		return nil, storage.ErrPipesNotAllowed
+	}
+
+	var by []string
+	if q.Step > 0 {
+		by = append(by, "_time:"+formatMillis(q.Step))
+	}
+	group := storageField(q.GroupBy)
+	if q.GroupBy != "" {
+		by = append(by, quote(group))
+	}
+	metric := "count() as v"
+	if q.Metric == storage.MetricDistinct {
+		if q.MetricField == "" {
+			return nil, fmt.Errorf("victorialogs: count_distinct needs a field")
+		}
+		metric = "count_uniq(" + quote(storageField(q.MetricField)) + ") as v"
+	}
+
+	logsql := f + " | stats"
+	if len(by) > 0 {
+		logsql += " by (" + strings.Join(by, ", ") + ")"
+	}
+	logsql += " " + metric
+	if q.Step == 0 {
+		logsql += " | sort by (v desc)"
+		if q.Limit > 0 {
+			logsql += " | limit " + strconv.Itoa(q.Limit)
+		}
+	}
+
+	rows, err := b.query(ctx, q.Tenant, logsql, q.Range)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []storage.AggRow{}
+	for rows.Next() {
+		r := rows.Row()
+		var row storage.AggRow
+		if v, ok := r.Get("v"); ok {
+			row.Value, _ = strconv.ParseFloat(v, 64)
+		}
+		if q.GroupBy != "" {
+			row.Group, _ = r.Get(group)
+			if row.Group == "" {
+				continue
+			}
+		}
+		if q.Step > 0 {
+			if ts, ok := r.Get("_time"); ok {
+				row.Time, _ = time.Parse(time.RFC3339Nano, ts)
+			}
+			// Buckets can start before the requested range; the caller trims.
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// formatMillis renders a step for LogsQL's `_time:<step>` bucketing.
+func formatMillis(d time.Duration) string {
+	return strconv.FormatInt(d.Milliseconds(), 10) + "ms"
+}

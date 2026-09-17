@@ -83,6 +83,14 @@ try {
   await page.getByTestId('logsql-editor').waitFor()
   await shot('explorer-logsql-table')
 
+  await page.goto(`${base}/analytics?from=now-6h&to=now`)
+  await page.getByTestId('breakdown-row').first().waitFor()
+  await shot('analytics')
+
+  await page.goto(`${base}/analytics?from=now-24h&to=now&group=hostname&metric=unique&mfield=source_ip&top=5`)
+  await page.getByTestId('breakdown-row').first().waitFor()
+  await shot('analytics-unique')
+
   await page.goto(`${base}/logs/live`)
   await page.getByTestId('tail-row').first().waitFor({ timeout: 10000 })
   await sleep(2500)

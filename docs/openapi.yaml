@@ -33,6 +33,7 @@ tags:
   - name: auth
   - name: logs
   - name: fields
+  - name: analytics
   - name: dashboard
   - name: saved-searches
   - name: api-keys
@@ -284,6 +285,54 @@ paths:
         content: {application/json: {schema: {$ref: "#/components/schemas/FieldValuesRequest"}}}
       responses:
         "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/FieldValuesResponse"}}}}
+
+  /api/v1/analytics/breakdown:
+    post:
+      tags: [analytics]
+      summary: Rank the values of a field by a metric
+      description: |
+        `total` counts everything matching, including groups beyond `limit`,
+        so `share` is honest and the returned rows need not sum to 1.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Selection"
+                - type: object
+                  required: [group_by]
+                  properties:
+                    group_by: {type: string, example: app_name}
+                    metric: {$ref: "#/components/schemas/AnalyticsMetric"}
+                    limit: {type: integer, minimum: 1, maximum: 50, default: 10}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/BreakdownResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/analytics/series:
+    post:
+      tags: [analytics]
+      summary: A metric over time, optionally one series per field value
+      description: |
+        Only the top `limit` groups are returned; there is no "other" series.
+        `points` aligns index-for-index with `timestamps`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Selection"
+                - type: object
+                  properties:
+                    group_by: {type: string, example: severity}
+                    metric: {$ref: "#/components/schemas/AnalyticsMetric"}
+                    buckets: {type: integer, minimum: 1, maximum: 1000, default: 120}
+                    limit: {type: integer, minimum: 1, maximum: 50, default: 5}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SeriesResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
 
   /api/v1/dashboard/overview:
     post:
@@ -751,6 +800,59 @@ components:
           description: Returned once when an administrator created the account without choosing a password.
         created_at: {type: string, format: date-time}
         last_login_at: {type: [string, "null"], format: date-time}
+
+    SearchStats:
+      type: object
+      required: [duration_ms]
+      properties:
+        duration_ms: {type: integer}
+
+    AnalyticsMetric:
+      type: object
+      properties:
+        type: {type: string, enum: [count, count_distinct], default: count}
+        field: {type: string, description: Required for count_distinct}
+
+    BreakdownResponse:
+      type: object
+      required: [resolved_range, group_by, metric, rows, total, distinct_groups]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        group_by: {type: string}
+        metric: {$ref: "#/components/schemas/AnalyticsMetric"}
+        rows:
+          type: array
+          items:
+            type: object
+            required: [value, metric, share]
+            properties:
+              value: {type: string}
+              metric: {type: number}
+              share: {type: number, description: Fraction of `total`}
+        total: {type: number}
+        distinct_groups: {type: integer}
+        stats: {$ref: "#/components/schemas/SearchStats"}
+
+    SeriesResponse:
+      type: object
+      required: [resolved_range, step, step_seconds, metric, timestamps, groups]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        step: {type: string, example: 5m}
+        step_seconds: {type: integer}
+        group_by: {type: string}
+        metric: {$ref: "#/components/schemas/AnalyticsMetric"}
+        timestamps: {type: array, items: {type: string, format: date-time}}
+        groups:
+          type: array
+          items:
+            type: object
+            required: [value, total, points]
+            properties:
+              value: {type: string}
+              total: {type: number}
+              points: {type: array, items: {type: number}, description: Aligned with `timestamps`}
+        stats: {$ref: "#/components/schemas/SearchStats"}
 
     SourceConfig:
       type: object

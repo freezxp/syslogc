@@ -75,6 +75,42 @@ box — writing to VictoriaLogs is, and the bounded queue converts the
 mismatch into latency rather than loss, exactly as designed. A burst longer
 than the queue (500K messages or 256 MiB by default) would start dropping.
 
+### Over the network, from a separate sender
+
+The runs above generate load on the server itself. These send from a second
+4 vCPU VM on the same LAN, asking for 500,000 logs/s for 10 seconds:
+
+| Run | Generator | Server received | Stored | Where the rest went |
+|---|---|---|---|---|
+| UDP, default socket buffer | 377K/s | 115K/s | all of it | 1.95M discarded by the kernel before Syslogc saw them |
+| UDP, `net.core.rmem_max` 128 MB and a 32 MiB socket buffer | 365K/s | 165K/s | 1.61M | 815K kernel drops, 396K counted queue drops |
+| TCP | backpressured to 136K/s | 136K/s | all of it | nothing: 10 s of offered load took 50 s to send |
+| TCP from both machines at once | — | 118K/s aggregate over 350 s | 40.7M | 5,066 queue drops (0.012%) |
+
+Half a million logs a second is beyond this hardware in every direction: the
+sending VM tops out near 370K/s, the receiving kernel discards what it cannot
+buffer, and storage drains at about 85K/s. What the runs do show is where
+each limit sits and that Syslogc never loses a message silently — losses are
+either kernel UDP drops (reported in `syslogc_ingest_udp_kernel_drops_total`)
+or counted queue drops. **Over TCP nothing was lost at any offered rate**,
+because backpressure slows the sender instead.
+
+For bursty UDP senders, raise the kernel limit and the socket buffer
+together; the socket buffer is silently capped at `net.core.rmem_max`
+(208 KiB by default), and Syslogc logs a warning when that happens:
+
+```bash
+sysctl -w net.core.rmem_max=134217728 net.core.netdev_max_backlog=250000
+```
+
+```yaml
+ingestion:
+  sources:
+    - name: syslog-udp
+      udp:
+        read_buffer_bytes: 32MiB
+```
+
 ## Storage efficiency
 
 Measured over 8.7M stored logs from these runs (`raw_message: on_error`,

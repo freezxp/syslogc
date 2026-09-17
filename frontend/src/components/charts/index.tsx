@@ -17,20 +17,14 @@ import {
 
 import type { HistogramResponse } from '@/api/types'
 import { formatAxisCount, formatCount, formatTimestamp } from '@/lib/format'
-import { severityColor, severityRank } from '@/lib/severity'
+import { seriesColor } from '@/lib/chart-colors'
+import { severityRank } from '@/lib/severity'
 
 const AXIS = { stroke: 'var(--fg-subtle)', fontSize: 11 }
-import { CHART_COLORS as OTHER_COLORS } from '@/lib/chart-colors'
 
 function tickFormatterFor(stepSeconds: number, tz: string) {
   return (t: number) =>
     formatTimestamp(new Date(t), tz, stepSeconds >= 86400 ? 'MMM d' : stepSeconds >= 3600 ? 'MMM d HH:mm' : 'HH:mm')
-}
-
-function colorFor(splitBy: string | null | undefined, value: string, index: number): string {
-  if (splitBy === 'severity') return value === 'other' ? 'var(--sev-other)' : severityColor(value)
-  if (value === 'other') return 'var(--fg-subtle)'
-  return OTHER_COLORS[index % OTHER_COLORS.length]!
 }
 
 function ChartTooltip({
@@ -39,12 +33,14 @@ function ChartTooltip({
   label,
   tz,
   unit,
+  showTotal = true,
 }: {
   active?: boolean
   payload?: { name?: string; value?: number; color?: string }[]
   label?: number
   tz: string
   unit?: string
+  showTotal?: boolean
 }) {
   if (!active || !payload?.length) return null
   const total = payload.reduce((n, p) => n + (p.value ?? 0), 0)
@@ -53,7 +49,7 @@ function ChartTooltip({
       <div className="mb-1 text-muted">
         {label !== undefined ? formatTimestamp(new Date(label), tz, 'yyyy-MM-dd HH:mm:ss') : ''}
       </div>
-      {payload.length > 1 && (
+      {showTotal && payload.length > 1 && (
         <div className="flex justify-between gap-4 font-medium">
           <span>Total</span>
           <span className="mono">{formatCount(total)}</span>
@@ -161,7 +157,7 @@ export function VolumeHistogram({
             dataKey={s}
             name={s}
             stackId="v"
-            fill={colorFor(data.split_by, s, i)}
+            fill={seriesColor(data.split_by, s, i)}
             isAnimationActive={false}
           />
         ))}
@@ -228,6 +224,72 @@ export function RateAreaChart({
             stroke={s.color}
             fill={s.color}
             fillOpacity={0.12}
+            strokeWidth={1.5}
+            dot={false}
+            isAnimationActive={false}
+          />
+        ))}
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+/**
+ * One area per group over a fixed bucket grid (analytics series). Unlike
+ * `RateAreaChart` the bucket width is known, so ticks are formatted from it and
+ * the tooltip total can be suppressed for metrics that do not add up.
+ */
+export function GroupedSeriesChart({
+  data,
+  series,
+  stepSeconds,
+  tz,
+  height = 260,
+  showTotal = true,
+}: {
+  data: RatePoint[]
+  series: { key: string; label: string; color: string }[]
+  stepSeconds: number
+  tz: string
+  height?: number
+  showTotal?: boolean
+}) {
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+        <XAxis
+          dataKey="t"
+          type="number"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={tickFormatterFor(stepSeconds, tz)}
+          tick={AXIS}
+          tickLine={false}
+          axisLine={false}
+          minTickGap={56}
+        />
+        <YAxis
+          tickFormatter={(v: number) => formatAxisCount(v)}
+          tick={AXIS}
+          tickLine={false}
+          axisLine={false}
+          width={48}
+          allowDecimals={false}
+        />
+        <Tooltip
+          content={<ChartTooltip tz={tz} showTotal={showTotal} />}
+          isAnimationActive={false}
+          cursor={{ stroke: 'var(--border-strong)' }}
+        />
+        {series.map((s) => (
+          <Area
+            key={s.key}
+            type="monotone"
+            dataKey={s.key}
+            name={s.label}
+            stroke={s.color}
+            fill={s.color}
+            fillOpacity={0.1}
             strokeWidth={1.5}
             dot={false}
             isAnimationActive={false}

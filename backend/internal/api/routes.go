@@ -79,6 +79,9 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/fields", permitted, auth.PermLogsSearch, s.handleFields)
 	add("POST /api/v1/fields/{field}/values", permitted, auth.PermLogsSearch, s.handleFieldValues)
 
+	add("POST /api/v1/analytics/breakdown", permitted, auth.PermLogsSearch, s.handleBreakdown)
+	add("POST /api/v1/analytics/series", permitted, auth.PermLogsSearch, s.handleSeries)
+
 	add("POST /api/v1/dashboard/overview", permitted, auth.PermDashboardView, s.handleOverview)
 	add("POST /api/v1/dashboard/volume", permitted, auth.PermDashboardView, s.handleVolume)
 	add("POST /api/v1/dashboard/top", permitted, auth.PermDashboardView, s.handleTop)

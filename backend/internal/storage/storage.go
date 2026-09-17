@@ -70,10 +70,47 @@ type LogQuerier interface {
 	Top(ctx context.Context, q TopQuery) ([]ValueCount, error)
 	// Count counts matching rows, or distinct values of DistinctField.
 	Count(ctx context.Context, q CountQuery) (int64, error)
+	// Aggregate groups matching rows by a field, by time, or both, and
+	// returns one metric value per group.
+	Aggregate(ctx context.Context, q AggregateQuery) ([]AggRow, error)
 	// FieldNames lists field names present in the selection. Counts may be approximate.
 	FieldNames(ctx context.Context, sel Selection) ([]FieldInfo, error)
 	// Tail streams rows ingested after the call until ctx is done.
 	Tail(ctx context.Context, q TailQuery) (Rows, error)
+}
+
+// Metrics an AggregateQuery can compute.
+const (
+	MetricCount    = "count"
+	MetricDistinct = "count_distinct"
+)
+
+// AggregateQuery groups rows and computes one metric per group. Step buckets
+// by time; GroupBy groups by a field; either or both may be set. The
+// selection must not contain pipes.
+type AggregateQuery struct {
+	Selection
+	// Step buckets results by time when non-zero.
+	Step time.Duration
+	// GroupBy is the field to group by; empty groups everything together.
+	GroupBy string
+	// Metric is MetricCount or MetricDistinct.
+	Metric string
+	// MetricField is the field whose distinct values are counted.
+	MetricField string
+	// Limit caps the number of groups returned, highest metric first. It
+	// applies only when Step is zero; time series are limited by the caller
+	// restricting GroupBy values.
+	Limit int
+}
+
+// AggRow is one aggregated group.
+type AggRow struct {
+	// Time is the bucket start, zero when the query had no Step.
+	Time time.Time
+	// Group is the GroupBy value, empty when grouping everything.
+	Group string
+	Value float64
 }
 
 // Admin exposes operational information about the backend.
