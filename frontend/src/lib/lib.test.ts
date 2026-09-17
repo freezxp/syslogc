@@ -16,6 +16,18 @@ import {
   sourceSections,
   type SourceFormState,
 } from '@/features/sources/source-form'
+import {
+  computeDeltas,
+  coverageLabel,
+  decodeAnalytics,
+  encodeAnalytics,
+  formatDelta,
+  metricComplete,
+  previousRange,
+  rowDelta,
+  seriesChartData,
+  seriesLegendMetric,
+} from '@/features/analytics/analytics-query'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
 import { decodeBase64Url, encodeBase64Url } from './base64url'
@@ -392,5 +404,125 @@ describe('audit query', () => {
     const { query, error } = auditQueryFromSearch({ ...search, from: 'yesterday' }, now, 'UTC')
     expect(error).toMatch(/Invalid time/)
     expect(query.since).toBeUndefined()
+  })
+})
+
+describe('analytics query', () => {
+  const base = { group: undefined, metric: 'count' as const, mfield: undefined, top: undefined }
+
+  it('defaults the aggregation and rejects a top-N the server would not accept', () => {
+    expect(decodeAnalytics(base)).toEqual({ groupBy: 'app_name', metric: { type: 'count' }, limit: 10 })
+    expect(decodeAnalytics({ ...base, top: '7' }).limit).toBe(10)
+    expect(decodeAnalytics({ ...base, top: '50' }).limit).toBe(50)
+    expect(decodeAnalytics({ ...base, group: '  hostname  ' }).groupBy).toBe('hostname')
+  })
+
+  it('decodes a unique-values metric and keeps it incomplete without a field', () => {
+    expect(decodeAnalytics({ ...base, metric: 'unique', mfield: 'source_ip' }).metric).toEqual({
+      type: 'count_distinct',
+      field: 'source_ip',
+    })
+    expect(metricComplete(decodeAnalytics({ ...base, metric: 'unique' }).metric)).toBe(false)
+    expect(metricComplete({ type: 'count' })).toBe(true)
+  })
+
+  it('round-trips through the URL, dropping defaults', () => {
+    const q = { groupBy: 'hostname', metric: { type: 'count_distinct' as const, field: 'source_ip' }, limit: 20 }
+    const encoded = encodeAnalytics(q)
+    expect(encoded).toEqual({ group: 'hostname', metric: 'unique', mfield: 'source_ip', top: '20' })
+    expect(decodeAnalytics(encoded)).toEqual(q)
+    expect(encodeAnalytics({ groupBy: 'app_name', metric: { type: 'count' }, limit: 10 })).toEqual({
+      group: undefined,
+      metric: 'count',
+      mfield: undefined,
+      top: undefined,
+    })
+  })
+
+  it('places the comparison window immediately before the current one', () => {
+    const range = { start: new Date('2026-09-14T09:00:00Z'), end: new Date('2026-09-14T10:30:00Z') }
+    expect(previousRange(range)).toEqual({
+      start: new Date('2026-09-14T07:30:00Z'),
+      end: new Date('2026-09-14T09:00:00Z'),
+    })
+  })
+
+  it('computes deltas and only calls big moves significant', () => {
+    expect(rowDelta(120, 100, false)).toMatchObject({ kind: 'up', label: '+20%', significant: true })
+    expect(rowDelta(96, 100, false)).toMatchObject({ kind: 'down', label: '−4%', significant: false })
+    expect(rowDelta(100, 100, false)).toMatchObject({ kind: 'flat', label: '0%', significant: false })
+    expect(rowDelta(1400, 100, false).label).toBe('×14')
+    expect(formatDelta(0.035)).toBe('+3.5%')
+  })
+
+  it('calls a value new only when the previous period was complete', () => {
+    expect(rowDelta(10, undefined, false)).toMatchObject({ kind: 'new', ratio: null })
+    expect(rowDelta(10, undefined, true)).toMatchObject({ kind: 'unknown', label: '—' })
+    expect(rowDelta(10, 0, false).kind).toBe('new')
+  })
+
+  it('keys deltas by group value against a previous breakdown', () => {
+    const previous = {
+      resolved_range: { start: '2026-09-14T08:00:00Z', end: '2026-09-14T09:00:00Z' },
+      group_by: 'app_name',
+      metric: { type: 'count' as const },
+      rows: [
+        { value: 'named', metric: 100, share: 0.5 },
+        { value: 'unbound', metric: 50, share: 0.25 },
+      ],
+      total: 200,
+      distinct_groups: 2,
+      stats: { duration_ms: 3 },
+    }
+    const deltas = computeDeltas(
+      [
+        { value: 'named', metric: 150, share: 0.6 },
+        { value: 'dnsmasq', metric: 20, share: 0.08 },
+      ],
+      previous,
+    )
+    expect(deltas.get('named')).toMatchObject({ kind: 'up', label: '+50%' })
+    expect(deltas.get('dnsmasq')).toMatchObject({ kind: 'new' })
+    expect(computeDeltas([{ value: 'named', metric: 1, share: 1 }], undefined).size).toBe(0)
+  })
+
+  it('maps a series response onto index-keyed chart rows', () => {
+    const { rows, series } = seriesChartData({
+      resolved_range: { start: '2026-09-14T09:00:00Z', end: '2026-09-14T09:30:00Z' },
+      step: '10m',
+      step_seconds: 600,
+      group_by: 'hostname',
+      metric: { type: 'count' },
+      timestamps: ['2026-09-14T09:00:00Z', '2026-09-14T09:10:00Z', '2026-09-14T09:20:00Z'],
+      groups: [
+        { value: 'dns01.example.com', total: 6, points: [1, 2, 3] },
+        // Short series are padded rather than shifted onto the wrong buckets.
+        { value: '', total: 4, points: [4] },
+      ],
+      stats: { duration_ms: 5 },
+    })
+    expect(series).toEqual([
+      { key: 's0', label: 'dns01.example.com', value: 'dns01.example.com' },
+      { key: 's1', label: '(none)', value: '' },
+    ])
+    expect(rows).toEqual([
+      { t: Date.parse('2026-09-14T09:00:00Z'), s0: 1, s1: 4 },
+      { t: Date.parse('2026-09-14T09:10:00Z'), s0: 2, s1: 0 },
+      { t: Date.parse('2026-09-14T09:20:00Z'), s0: 3, s1: 0 },
+    ])
+    expect(seriesChartData(undefined)).toEqual({ rows: [], series: [] })
+  })
+
+  it('shows the peak bucket instead of a summed total for distinct counts', () => {
+    const group = { total: 5, points: [1, 2, 2] }
+    expect(seriesLegendMetric(group, true)).toEqual({ value: 5, peak: false })
+    expect(seriesLegendMetric(group, false)).toEqual({ value: 2, peak: true })
+    expect(seriesLegendMetric(undefined, true)).toEqual({ value: undefined, peak: false })
+  })
+
+  it('says how much of the distinct set is on screen', () => {
+    expect(coverageLabel(10, 143)).toBe('showing 10 of 143 values')
+    expect(coverageLabel(3, 3)).toBe('3 values')
+    expect(coverageLabel(1, 1)).toBe('1 value')
   })
 })

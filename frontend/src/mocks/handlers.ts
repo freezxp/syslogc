@@ -3,8 +3,10 @@ import { delay, http, HttpResponse } from 'msw'
 
 import type {
   AdminUser,
+  AnalyticsMetric,
   ApiKey,
   AuditEvent,
+  BreakdownRequest,
   ExportRequest,
   FacetsRequest,
   FieldInfo,
@@ -19,6 +21,7 @@ import type {
   SavedSearchInput,
   SearchRequest,
   Selection,
+  SeriesRequest,
   Session,
   StatsRequest,
   TimeRange,
@@ -790,6 +793,77 @@ export const handlers = [
     return HttpResponse.json({ resolved_range: resolved(start, end), step_seconds: step, series })
   }),
 
+  http.post(api('/analytics/breakdown'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as BreakdownRequest
+    const invalid = analyticsValidationError(body.group_by, body.metric, body.limit)
+    if (invalid) return invalid
+    if (nativeError(body.native?.text)) return nativeError(body.native?.text)!
+    await delay(140)
+    const started = performance.now()
+    const { rows, start, end } = selectRows(body)
+    const groups = groupMetric(rows, body.group_by, body.metric)
+    // The metric over everything, so the shown rows honestly need not sum to 100%.
+    const total =
+      body.metric.type === 'count_distinct'
+        ? new Set(rows.map((r) => getField(r, body.metric.field ?? '')).filter((v) => v !== undefined)).size
+        : rows.length
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      group_by: body.group_by,
+      metric: body.metric,
+      rows: groups.slice(0, body.limit ?? 10).map(([value, metric]) => ({
+        value,
+        metric,
+        share: total ? metric / total : 0,
+      })),
+      total,
+      distinct_groups: groups.length,
+      stats: { duration_ms: Math.round(performance.now() - started) + 9 },
+    })
+  }),
+
+  http.post(api('/analytics/series'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as SeriesRequest
+    const invalid = analyticsValidationError(body.group_by ?? 'x', body.metric, body.limit, body.buckets)
+    if (invalid) return invalid
+    if (nativeError(body.native?.text)) return nativeError(body.native?.text)!
+    await delay(200)
+    const started = performance.now()
+    const { rows, start, end } = selectRows(body)
+    const span = (end.getTime() - start.getTime()) / 1000
+    const step = STEPS.find((s) => span / s <= (body.buckets ?? 120)) ?? 86400
+    // Like the server, buckets start on a step boundary inside the window.
+    const first = Math.ceil(start.getTime() / 1000 / step) * step
+    const count = Math.max(1, Math.ceil((end.getTime() / 1000 - first) / step))
+    const timestamps = Array.from({ length: count }, (_, i) => new Date((first + i * step) * 1000).toISOString())
+    const top = groupMetric(rows, body.group_by ?? '', body.metric).slice(0, body.limit ?? 5)
+    const groups = top.map(([value, total]) => {
+      const inGroup = body.group_by ? rows.filter((r) => (getField(r, body.group_by!) ?? '') === value) : rows
+      const points = Array.from({ length: count }, (_, i) => {
+        const lo = (first + i * step) * 1000
+        const bucket = inGroup.filter((r) => rowTimeMs(r) >= lo && rowTimeMs(r) < lo + step * 1000)
+        return body.metric.type === 'count_distinct'
+          ? new Set(bucket.map((r) => getField(r, body.metric.field ?? '')).filter((v) => v !== undefined)).size
+          : bucket.length
+      })
+      return { value, total, points }
+    })
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      step: stepLabel(step),
+      step_seconds: step,
+      group_by: body.group_by,
+      metric: body.metric,
+      timestamps,
+      groups,
+      stats: { duration_ms: Math.round(performance.now() - started) + 14 },
+    })
+  }),
+
   http.get(api('/saved-searches'), ({ request }) => {
     const auth = requireAuth()
     if (auth) return auth
@@ -1171,6 +1245,39 @@ export const handlers = [
     return HttpResponse.json({ events })
   }),
 ]
+
+/** Group values by the analytics metric, highest first. */
+function groupMetric(rows: LogRow[], groupBy: string, metric: AnalyticsMetric): [string, number][] {
+  const buckets = new Map<string, LogRow[]>()
+  for (const r of rows) {
+    const v = groupBy ? (getField(r, groupBy) ?? '') : ''
+    const list = buckets.get(v)
+    if (list) list.push(r)
+    else buckets.set(v, [r])
+  }
+  const measure = (list: LogRow[]) =>
+    metric.type === 'count_distinct'
+      ? new Set(list.map((r) => getField(r, metric.field ?? '')).filter((v) => v !== undefined)).size
+      : list.length
+  return [...buckets.entries()]
+    .map(([value, list]) => [value, measure(list)] as [string, number])
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+}
+
+/** The analytics validation the UI is expected to keep the user away from. */
+function analyticsValidationError(
+  groupBy: string,
+  metric: AnalyticsMetric,
+  limit: number | undefined,
+  buckets?: number,
+): Response | null {
+  if (!groupBy) return validationProblem('/group_by', 'group_by is required')
+  if (metric.type === 'count_distinct' && !metric.field)
+    return validationProblem('/metric/field', 'count_distinct needs a field')
+  if (limit !== undefined && limit > 50) return validationProblem('/limit', 'limit must be at most 50')
+  if (buckets !== undefined && buckets > 1000) return validationProblem('/buckets', 'buckets must be at most 1000')
+  return null
+}
 
 /** Mirrors the few server-side checks the source editor surfaces inline. */
 function sourceValidationError(body: SourceInput, selfId: string | null): Response | null {
