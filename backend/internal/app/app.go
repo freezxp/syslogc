@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -246,6 +247,8 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 	deps := &api.APIDeps{
 		Auth: authSvc, Store: a.store, Query: querySvc, Storage: a.backend,
 		Retention:    func() any { return a.retention.Load() },
+		FileSources:  cfg.Ingestion.Sources,
+		Config:       *cfg,
 		CookieSecure: cfg.Auth.CookieSecure,
 		AuditAll:     cfg.Query.AuditAll,
 		WebUI:        webui.FS(),
@@ -325,6 +328,7 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 		go a.watchSaturation(bgCtx)
 		if a.store != nil {
 			go a.writeNodeStats(bgCtx)
+			go a.watchSources(bgCtx)
 		}
 	}
 	if a.store != nil {
@@ -386,6 +390,101 @@ func (a *App) closeResources() {
 	if a.store != nil {
 		a.store.Close()
 	}
+}
+
+// sourceReconcileInterval bounds how long a source change takes to apply
+// when the database notification is missed.
+const sourceReconcileInterval = 5 * time.Second
+
+// sourceWatcher is implemented by stores that can push change notifications.
+type sourceWatcher interface {
+	WatchSources(ctx context.Context, notify func()) error
+}
+
+// watchSources applies database source changes to the running listeners.
+func (a *App) watchSources(ctx context.Context) {
+	log := a.log.With("component", "sources")
+	changed := make(chan struct{}, 1)
+	if w, ok := a.store.(sourceWatcher); ok {
+		go func() {
+			for ctx.Err() == nil {
+				if err := w.WatchSources(ctx, func() {
+					select {
+					case changed <- struct{}{}:
+					default:
+					}
+				}); err != nil && ctx.Err() == nil {
+					log.Warn("source change notifications interrupted; polling continues", "error", err)
+					select {
+					case <-ctx.Done():
+					case <-time.After(sourceReconcileInterval):
+					}
+				}
+			}
+		}()
+	}
+	t := time.NewTicker(sourceReconcileInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-changed:
+		}
+		desired, err := a.desiredSources(ctx)
+		if err != nil {
+			log.Warn("listing managed sources failed", "error", err)
+			continue
+		}
+		a.supervisor.Reconcile(ctx, desired)
+	}
+}
+
+// desiredSources merges configuration-file sources with database-managed
+// ones. A managed source whose name or bind address clashes with a file
+// source is skipped: the file always wins.
+func (a *App) desiredSources(ctx context.Context) ([]supervisor.Desired, error) {
+	desired := supervisor.FileSources(a.cfg.Ingestion.Sources)
+	managed, err := a.store.ListSources(ctx, config.DefaultTenant)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range managed {
+		sc, err := sourceConfig(m)
+		if err != nil {
+			a.log.Warn("managed source has an invalid configuration", "source", m.Name, "error", err)
+			continue
+		}
+		conflict := ""
+		for _, other := range desired {
+			if reason := sc.ConflictsWith(other.Source); reason != "" {
+				conflict = reason
+				break
+			}
+		}
+		if conflict != "" {
+			a.log.Warn("managed source ignored", "source", m.Name, "reason", conflict)
+			continue
+		}
+		desired = append(desired, supervisor.Desired{Source: sc, Origin: supervisor.OriginDatabase})
+	}
+	return desired, nil
+}
+
+// sourceConfig decodes and defaults a stored source definition.
+func sourceConfig(m metadata.Source) (config.Source, error) {
+	var sc config.Source
+	if err := json.Unmarshal(m.Config, &sc); err != nil {
+		return sc, err
+	}
+	sc.Name = m.Name
+	enabled := m.Enabled
+	sc.Enabled = &enabled
+	if err := config.PrepareSource(&sc); err != nil {
+		return sc, err
+	}
+	return sc, nil
 }
 
 func (a *App) watchSaturation(ctx context.Context) {

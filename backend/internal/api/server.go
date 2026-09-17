@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
+	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/listener"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
@@ -45,6 +46,11 @@ type APIDeps struct {
 	Retention func() any
 	// Sources returns source statuses; nil without the ingest role.
 	Sources func() []supervisor.Status
+	// FileSources are the sources defined in the configuration file; they
+	// are read-only and take precedence over database-managed ones.
+	FileSources []config.Source
+	// Config is the effective configuration, served with secrets redacted.
+	Config config.Config
 	// Queue returns ingest queue occupancy; nil without the ingest role.
 	Queue        func() QueueInfo
 	CookieSecure bool

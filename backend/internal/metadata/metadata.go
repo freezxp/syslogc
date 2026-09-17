@@ -33,6 +33,9 @@ type User struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	LastLoginAt        *time.Time
+	// GeneratedPassword is set in memory only, when the server generated a
+	// password that must be shown to an administrator once.
+	GeneratedPassword string `json:"-"`
 }
 
 type Session struct {
@@ -94,6 +97,32 @@ type AuditEvent struct {
 	RequestID string
 }
 
+// Source is a database-managed ingestion source. Config is the YAML source
+// object as JSON, so the ingestion layer stays unaware of the metadata store.
+type Source struct {
+	ID        uuid.UUID
+	Tenant    string
+	Name      string
+	Config    json.RawMessage
+	Enabled   bool
+	CreatedBy *uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Version   int
+}
+
+// ListAuditEvents filters the audit log. Times are exclusive of Before and
+// inclusive of Since; an empty filter field matches everything.
+type ListAuditEvents struct {
+	Tenant  string
+	Since   time.Time
+	Before  time.Time
+	Actor   string
+	Action  string
+	Outcome string
+	Limit   int
+}
+
 // NodeStats is a cumulative counter snapshot written periodically by a node.
 type NodeStats struct {
 	NodeID        string
@@ -125,6 +154,9 @@ type Store interface {
 
 	CountUsers(ctx context.Context) (int, error)
 	CreateUser(ctx context.Context, u *User) error
+	ListUsers(ctx context.Context, tenant string) ([]User, error)
+	UpdateUser(ctx context.Context, u *User) error
+	DeleteUser(ctx context.Context, tenant string, id uuid.UUID) error
 	UserByID(ctx context.Context, id uuid.UUID) (*User, error)
 	UserByUsername(ctx context.Context, username string) (*User, error)
 	UpdatePassword(ctx context.Context, id uuid.UUID, hash string, mustChange bool) error
@@ -149,7 +181,14 @@ type Store interface {
 	UpdateSavedSearch(ctx context.Context, s *SavedSearch) error
 	DeleteSavedSearch(ctx context.Context, tenant string, id uuid.UUID) error
 
+	CreateSource(ctx context.Context, s *Source) error
+	SourceByID(ctx context.Context, tenant string, id uuid.UUID) (*Source, error)
+	ListSources(ctx context.Context, tenant string) ([]Source, error)
+	UpdateSource(ctx context.Context, s *Source) error
+	DeleteSource(ctx context.Context, tenant string, id uuid.UUID) error
+
 	InsertAuditEvent(ctx context.Context, e *AuditEvent) error
+	ListAuditEvents(ctx context.Context, f ListAuditEvents) ([]AuditEvent, error)
 	DeleteAuditEventsBefore(ctx context.Context, t time.Time) (int64, error)
 
 	InsertNodeStats(ctx context.Context, s *NodeStats) error

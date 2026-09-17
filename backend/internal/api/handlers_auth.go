@@ -14,19 +14,30 @@ import (
 )
 
 type userJSON struct {
-	ID                 uuid.UUID  `json:"id"`
-	Username           string     `json:"username"`
-	DisplayName        string     `json:"display_name,omitempty"`
-	Role               string     `json:"role"`
-	MustChangePassword bool       `json:"must_change_password"`
-	CreatedAt          time.Time  `json:"created_at"`
-	LastLoginAt        *time.Time `json:"last_login_at"`
+	ID                 uuid.UUID `json:"id"`
+	Username           string    `json:"username"`
+	DisplayName        string    `json:"display_name,omitempty"`
+	Role               string    `json:"role"`
+	MustChangePassword bool      `json:"must_change_password"`
+	Disabled           bool      `json:"disabled,omitempty"`
+	// GeneratedPassword is returned once, when an administrator created the
+	// account without choosing a password.
+	GeneratedPassword string     `json:"generated_password,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	LastLoginAt       *time.Time `json:"last_login_at"`
 }
 
 type sessionJSON struct {
 	User        userJSON          `json:"user"`
 	Permissions []auth.Permission `json:"permissions"`
 	CSRFToken   string            `json:"csrf_token"`
+}
+
+// toUserJSON renders a user for the administration endpoints.
+func toUserJSON(u *metadata.User) userJSON {
+	return userJSON{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Role: u.Role,
+		MustChangePassword: u.MustChangePassword, Disabled: u.Disabled, CreatedAt: u.CreatedAt,
+		LastLoginAt: u.LastLoginAt, GeneratedPassword: u.GeneratedPassword}
 }
 
 func toSessionJSON(p *auth.Principal) sessionJSON {

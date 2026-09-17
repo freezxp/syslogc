@@ -238,3 +238,39 @@ func nullJSON(b []byte) any {
 	}
 	return b
 }
+
+// ListAuditEvents returns matching events newest first.
+func (s *Store) ListAuditEvents(ctx context.Context, f metadata.ListAuditEvents) ([]metadata.AuditEvent, error) {
+	limit := min(max(f.Limit, 1), 1000)
+	rows, err := s.pool.Query(ctx, `SELECT id, ts, tenant_id, actor_type, actor_id, actor_name, ip, user_agent,
+		action, outcome, target, details, request_id FROM audit_events
+		WHERE tenant_id = $1
+		  AND ($2::timestamptz IS NULL OR ts >= $2)
+		  AND ($3::timestamptz IS NULL OR ts < $3)
+		  AND ($4 = '' OR actor_name = $4)
+		  AND ($5 = '' OR action = $5)
+		  AND ($6 = '' OR outcome = $6)
+		ORDER BY ts DESC, id DESC LIMIT $7`,
+		f.Tenant, nullTime(f.Since), nullTime(f.Before), f.Actor, f.Action, f.Outcome, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []metadata.AuditEvent{}
+	for rows.Next() {
+		var e metadata.AuditEvent
+		if err := rows.Scan(&e.ID, &e.Time, &e.Tenant, &e.ActorType, &e.ActorID, &e.ActorName, &e.IP,
+			&e.UserAgent, &e.Action, &e.Outcome, &e.Target, &e.Details, &e.RequestID); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func nullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}

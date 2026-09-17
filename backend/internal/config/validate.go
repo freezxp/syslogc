@@ -288,3 +288,38 @@ func ParsePrefixOrAddr(s string) (netip.Prefix, error) {
 	a = a.Unmap()
 	return netip.PrefixFrom(a, a.BitLen()), nil
 }
+
+// PrepareSource applies per-source defaults and validates one source on its
+// own (the API uses it for database-managed sources). Cross-source checks
+// such as unique names and bind addresses are the caller's responsibility.
+func PrepareSource(s *Source) error {
+	applySourceDefaults(s)
+	return errors.Join(validateSource("source", *s)...)
+}
+
+// ConflictsWith reports why s cannot run alongside other, or "" if it can.
+func (s Source) ConflictsWith(other Source) string {
+	if strings.EqualFold(s.Name, other.Name) {
+		return fmt.Sprintf("name is already used by source %q", other.Name)
+	}
+	if !s.IsEnabled() || !other.IsEnabled() {
+		return ""
+	}
+	if s.Type == SourceTypeHTTPJSON && other.Type == SourceTypeHTTPJSON {
+		return fmt.Sprintf("only one http_json source is supported; %q is already defined", other.Name)
+	}
+	if s.Type != SourceTypeSyslog || other.Type != SourceTypeSyslog {
+		return ""
+	}
+	if transport(s) == transport(other) && s.Address == other.Address {
+		return fmt.Sprintf("address %s/%s is already used by source %q", transport(s), s.Address, other.Name)
+	}
+	return ""
+}
+
+func transport(s Source) string {
+	if s.Protocol == ProtocolUDP {
+		return "udp"
+	}
+	return "tcp"
+}

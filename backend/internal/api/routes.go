@@ -94,9 +94,25 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/api-keys", permitted, auth.PermAPIKeysOwn, s.handleCreateAPIKey)
 	add("DELETE /api/v1/api-keys/{id}", permitted, auth.PermAPIKeysOwn, s.handleRevokeAPIKey)
 
+	add("GET /api/v1/sources", permitted, auth.PermSourcesRead, s.handleListSources)
+	add("POST /api/v1/sources", permitted, auth.PermSourcesManage, s.handleCreateSource)
+	add("GET /api/v1/sources/{id}", permitted, auth.PermSourcesRead, s.handleGetSource)
+	add("PUT /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleUpdateSource)
+	add("DELETE /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleDeleteSource)
+
+	add("GET /api/v1/users", permitted, auth.PermUsersManage, s.handleListUsers)
+	add("POST /api/v1/users", permitted, auth.PermUsersManage, s.handleCreateUser)
+	add("PUT /api/v1/users/{id}", permitted, auth.PermUsersManage, s.handleUpdateUser)
+	add("DELETE /api/v1/users/{id}", permitted, auth.PermUsersManage, s.handleDeleteUser)
+	add("POST /api/v1/users/{id}/revoke-sessions", permitted, auth.PermUsersManage, s.handleRevokeUserSessions)
+
+	add("GET /api/v1/audit", permitted, auth.PermAuditView, s.handleListAudit)
+
 	add("GET /api/v1/system/health", permitted, auth.PermSystemView, s.handleSystemHealth)
 	add("GET /api/v1/system/ingestion", permitted, auth.PermSystemView, s.handleSystemIngestion)
 	add("GET /api/v1/system/storage", permitted, auth.PermSystemView, s.handleSystemStorage)
+	add("GET /api/v1/system/config", permitted, auth.PermConfigView, s.handleSystemConfig)
+	add("GET /api/v1/system/retention", permitted, auth.PermSystemView, s.handleSystemRetention)
 
 	// Fallback: JSON 404 for unknown API paths, otherwise the web UI.
 	rs = append(rs, route{pattern: "/", access: public, handler: s.handleFallback, raw: true})

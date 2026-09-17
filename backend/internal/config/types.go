@@ -202,29 +202,29 @@ const (
 
 // Source configures one receiver.
 type Source struct {
-	Name     string `koanf:"name"`
-	Type     string `koanf:"type"`
-	Enabled  *bool  `koanf:"enabled"`
-	Protocol string `koanf:"protocol"`
-	Address  string `koanf:"address"`
+	Name     string `koanf:"name" json:"name"`
+	Type     string `koanf:"type" json:"type"`
+	Enabled  *bool  `koanf:"enabled" json:"enabled,omitempty"`
+	Protocol string `koanf:"protocol" json:"protocol,omitempty"`
+	Address  string `koanf:"address" json:"address,omitempty"`
 
-	Format           string            `koanf:"format"`
-	Timezone         string            `koanf:"timezone"`
-	AllowedCIDRs     []string          `koanf:"allowed_cidrs"`
-	MaxMessageBytes  ByteSize          `koanf:"max_message_bytes"`
-	RawMessage       string            `koanf:"raw_message"`
-	HostnameFallback string            `koanf:"hostname_fallback"`
-	SDFlatten        string            `koanf:"sd_flatten"`
-	Labels           map[string]string `koanf:"labels"`
-	Tenant           string            `koanf:"tenant"`
+	Format           string            `koanf:"format" json:"format,omitempty"`
+	Timezone         string            `koanf:"timezone" json:"timezone,omitempty"`
+	AllowedCIDRs     []string          `koanf:"allowed_cidrs" json:"allowed_cidrs,omitempty"`
+	MaxMessageBytes  ByteSize          `koanf:"max_message_bytes" json:"max_message_bytes,omitempty"`
+	RawMessage       string            `koanf:"raw_message" json:"raw_message,omitempty"`
+	HostnameFallback string            `koanf:"hostname_fallback" json:"hostname_fallback,omitempty"`
+	SDFlatten        string            `koanf:"sd_flatten" json:"sd_flatten,omitempty"`
+	Labels           map[string]string `koanf:"labels" json:"labels,omitempty"`
+	Tenant           string            `koanf:"tenant" json:"tenant,omitempty"`
 
 	// Stream-oriented (tcp/tls) settings.
-	Framing        string   `koanf:"framing"`
-	MaxConnections int      `koanf:"max_connections"`
-	IdleTimeout    Duration `koanf:"idle_timeout"`
+	Framing        string   `koanf:"framing" json:"framing,omitempty"`
+	MaxConnections int      `koanf:"max_connections" json:"max_connections,omitempty"`
+	IdleTimeout    Duration `koanf:"idle_timeout" json:"idle_timeout,omitempty"`
 
-	UDP UDPConfig `koanf:"udp"`
-	TLS TLSConfig `koanf:"tls"`
+	UDP UDPConfig `koanf:"udp" json:"udp,omitempty"`
+	TLS TLSConfig `koanf:"tls" json:"tls,omitempty"`
 }
 
 // IsEnabled reports whether the source is enabled (default true).
@@ -232,16 +232,16 @@ func (s Source) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
 
 type UDPConfig struct {
 	// Sockets is the number of SO_REUSEPORT sockets; 0 means GOMAXPROCS.
-	Sockets         int      `koanf:"sockets"`
-	ReadBufferBytes ByteSize `koanf:"read_buffer_bytes"`
+	Sockets         int      `koanf:"sockets" json:"sockets,omitempty"`
+	ReadBufferBytes ByteSize `koanf:"read_buffer_bytes" json:"read_buffer_bytes,omitempty"`
 }
 
 type TLSConfig struct {
-	CertFile     string `koanf:"cert_file"`
-	KeyFile      string `koanf:"key_file"`
-	MinVersion   string `koanf:"min_version"` // "1.2" | "1.3"
-	ClientAuth   string `koanf:"client_auth"` // none | request | require_and_verify
-	ClientCAFile string `koanf:"client_ca_file"`
+	CertFile     string `koanf:"cert_file" json:"cert_file,omitempty"`
+	KeyFile      string `koanf:"key_file" json:"key_file,omitempty"`
+	MinVersion   string `koanf:"min_version" json:"min_version,omitempty"` // "1.2" | "1.3"
+	ClientAuth   string `koanf:"client_auth" json:"client_auth,omitempty"` // none | request | require_and_verify
+	ClientCAFile string `koanf:"client_ca_file" json:"client_ca_file,omitempty"`
 }
 
 type RetentionConfig struct {

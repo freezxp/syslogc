@@ -260,3 +260,92 @@ func TestQueryAPIAgainstVictoriaLogs(t *testing.T) {
 		t.Errorf("saved search: %d %s", resp.StatusCode, body)
 	}
 }
+
+// TestManagedSourceLifecycle covers the Phase 5 exit criterion: a source
+// created in the API starts receiving within seconds and without a restart,
+// and disabling it stops the listener.
+func TestManagedSourceLifecycle(t *testing.T) {
+	a := startApp(t, nil)
+	c := login(t, a)
+	id := runID()
+
+	port := freePort(t)
+	body := map[string]any{"config": map[string]any{
+		"name": "managed-" + id, "type": "syslog", "protocol": "udp", "address": fmt.Sprintf("127.0.0.1:%d", port),
+		"labels": map[string]string{"site": "branch"},
+	}}
+	resp, raw := c.post(t, "/api/v1/sources", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create source: %d %s", resp.StatusCode, raw)
+	}
+	var created struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+	}
+	_ = json.Unmarshal(raw, &created)
+
+	// The listener appears without restarting the process.
+	deadline := time.Now().Add(20 * time.Second)
+	var conn net.Conn
+	for {
+		var err error
+		if conn, err = net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+			fmt.Fprintf(conn, "<14>1 - managedhost app - - - managed %s", id)
+			conn.Close()
+		}
+		_, sr := c.post(t, "/api/v1/logs/stats", map[string]any{
+			"time_range":   map[string]string{"from": "now-15m", "to": "now+1m"},
+			"filter":       map[string]any{"op": "text", "value": id},
+			"aggregations": []map[string]string{{"type": "count"}},
+		})
+		if strings.Contains(string(sr), `"value":1`) || strings.Contains(string(sr), `"value":2`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, st := c.do(t, "GET", "/api/v1/sources", nil, nil)
+			t.Fatalf("managed source did not receive logs: %s\nsources: %s", sr, st)
+		}
+		time.Sleep(time.Second)
+	}
+
+	// The source reports as running, with its origin.
+	_, raw = c.do(t, "GET", "/api/v1/sources", nil, nil)
+	if !strings.Contains(string(raw), `"origin":"database"`) || !strings.Contains(string(raw), `"state":"running"`) {
+		t.Errorf("source status: %s", raw)
+	}
+
+	// Disabling frees the port.
+	body["enabled"] = false
+	body["version"] = created.Version
+	if resp, raw := c.do(t, "PUT", "/api/v1/sources/"+created.ID, jsonBody(body), map[string]string{"Content-Type": "application/json"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable source: %d %s", resp.StatusCode, raw)
+	}
+	stopped := false
+	for until := time.Now().Add(20 * time.Second); time.Now().Before(until); {
+		if ln, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port)); err == nil {
+			ln.Close()
+			stopped = true
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if !stopped {
+		t.Error("disabled source kept its port bound")
+	}
+}
+
+// freePort returns a port that is free right now.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.LocalAddr().(*net.UDPAddr).Port
+}
+
+func jsonBody(v any) io.Reader {
+	data, _ := json.Marshal(v)
+	return bytes.NewReader(data)
+}

@@ -319,6 +319,40 @@ func (s *Server) handleSystemStorage(w http.ResponseWriter, r *http.Request, _ *
 	return nil
 }
 
+// handleSystemConfig returns the effective configuration with secrets
+// redacted, so operators can confirm what a node is running.
+func (s *Server) handleSystemConfig(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
+	out, err := s.opts.API.Config.YAML()
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"node": s.opts.NodeID, "yaml": string(out)})
+	return nil
+}
+
+// handleSystemRetention reports the configured and backend retention plus
+// how to change them. Syslogc never deletes data itself.
+func (s *Server) handleSystemRetention(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
+	body := map[string]any{
+		"configured": s.opts.API.Config.Retention.Period.String(),
+		"backend":    s.opts.API.Storage.Name(),
+		"instructions": "Retention is enforced by the storage backend. Set the same period in both places: " +
+			"VictoriaLogs -retentionPeriod (SYSLOGC_RETENTION in the Compose stack) and retention.period " +
+			"in the Syslogc configuration, then restart both.",
+	}
+	if s.opts.API.Retention != nil {
+		body["status"] = s.opts.API.Retention()
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	if u, err := s.opts.API.Storage.Admin().Usage(ctx); err == nil {
+		body["usage"] = map[string]int64{"compressed_bytes": u.CompressedBytes, "uncompressed_bytes": u.UncompressedBytes,
+			"free_disk_bytes": u.FreeDiskBytes, "total_disk_bytes": u.TotalDiskBytes}
+	}
+	writeJSON(w, http.StatusOK, body)
+	return nil
+}
+
 // ---- web UI -------------------------------------------------------------------
 
 // handleFallback answers unknown API paths with a JSON 404 and serves the web

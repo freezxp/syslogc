@@ -103,3 +103,45 @@ func (s *Store) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64
 	tag, err := s.pool.Exec(ctx, "DELETE FROM sessions WHERE expires_at < $1", now)
 	return tag.RowsAffected(), err
 }
+
+func (s *Store) ListUsers(ctx context.Context, tenant string) ([]metadata.User, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+userColumns+" FROM users WHERE tenant_id = $1 ORDER BY lower(username)", tenant)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []metadata.User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// UpdateUser changes the profile fields an administrator owns; the password
+// is changed with UpdatePassword.
+func (s *Store) UpdateUser(ctx context.Context, u *metadata.User) error {
+	var updated time.Time
+	err := s.pool.QueryRow(ctx, `UPDATE users SET display_name = $3, role = $4, disabled = $5, updated_at = now()
+		WHERE tenant_id = $1 AND id = $2 RETURNING updated_at`,
+		u.Tenant, u.ID, u.DisplayName, u.Role, u.Disabled).Scan(&updated)
+	if err != nil {
+		return mapErr(err)
+	}
+	u.UpdatedAt = updated
+	return nil
+}
+
+func (s *Store) DeleteUser(ctx context.Context, tenant string, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, "DELETE FROM users WHERE tenant_id = $1 AND id = $2", tenant, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return metadata.ErrNotFound
+	}
+	return nil
+}

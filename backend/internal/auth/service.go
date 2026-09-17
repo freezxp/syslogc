@@ -456,3 +456,47 @@ func (l *loginLimiter) success(username string) {
 	defer l.mu.Unlock()
 	delete(l.failures, strings.ToLower(username))
 }
+
+// CreateUser adds an account. An empty password generates one, which is
+// returned in User.GeneratedPassword and must be changed at first login.
+func (s *Service) CreateUser(ctx context.Context, username, displayName, role, password string) (*metadata.User, error) {
+	generated := password == ""
+	if generated {
+		var err error
+		if password, err = randomToken(15); err != nil {
+			return nil, err
+		}
+	} else if err := ValidatePasswordPolicy(password, username); err != nil {
+		return nil, &PolicyError{err}
+	}
+	h, err := HashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	u := &metadata.User{Tenant: "default", Username: username, DisplayName: displayName, PasswordHash: h,
+		Role: role, MustChangePassword: true}
+	if err := s.store.CreateUser(ctx, u); err != nil {
+		return nil, err
+	}
+	if generated {
+		u.GeneratedPassword = password
+	}
+	return u, nil
+}
+
+// ResetPassword sets another user's password and signs them out everywhere.
+// The user must choose a new password at the next login.
+func (s *Service) ResetPassword(ctx context.Context, u *metadata.User, password string) error {
+	if err := ValidatePasswordPolicy(password, u.Username); err != nil {
+		return &PolicyError{err}
+	}
+	h, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdatePassword(ctx, u.ID, h, true); err != nil {
+		return err
+	}
+	u.MustChangePassword = true
+	return s.store.DeleteUserSessions(ctx, u.ID, nil)
+}

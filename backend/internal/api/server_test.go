@@ -231,7 +231,9 @@ func newEnv(t *testing.T) *env {
 		Metrics: m, Log: log, NodeID: "n1", Version: "test", Roles: []string{"all"},
 		Checks: []ReadinessCheck{{Name: "storage", Check: func(context.Context) error { return nil }}},
 		API: &APIDeps{Auth: authSvc, Store: store, Query: qs, Storage: fakeBackend{}, WebUI: ui,
-			Retention: func() any { return map[string]string{"status": "in_sync"} }},
+			Retention:   func() any { return map[string]string{"status": "in_sync"} },
+			FileSources: []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
+			Config:      config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}}},
 		Ingest: &IngestDeps{Sink: sink, Source: func() *source.Settings { return httpSrc },
 			MaxBodyBytes: 1 << 20, MaxEvents: 100, EnqueueTimeout: 50 * time.Millisecond},
 	})
@@ -254,8 +256,14 @@ func (e *env) anon() *client {
 
 func (e *env) login(user string) *client {
 	e.t.Helper()
+	return e.loginAs(user, passwords[user])
+}
+
+// loginAs signs in with an explicit password (for accounts created in tests).
+func (e *env) loginAs(user, password string) *client {
+	e.t.Helper()
 	c := e.anon()
-	resp, body := c.do("POST", "/api/v1/auth/login", map[string]string{"username": user, "password": passwords[user]}, nil)
+	resp, body := c.do("POST", "/api/v1/auth/login", map[string]string{"username": user, "password": password}, nil)
 	if resp.StatusCode != http.StatusOK {
 		e.t.Fatalf("login %s: %d %s", user, resp.StatusCode, body)
 	}
@@ -881,5 +889,217 @@ func TestOriginAndClientIP(t *testing.T) {
 		if got := s.clientIP(req(c.remote, "", "h", c.xff...)); got != c.want {
 			t.Errorf("clientIP(%s, %v) = %s, want %s", c.remote, c.xff, got, c.want)
 		}
+	}
+}
+
+// syslogSource is a valid managed source definition.
+func syslogSource(name, address string) map[string]any {
+	return map[string]any{"config": map[string]any{"name": name, "type": "syslog", "protocol": "udp", "address": address}}
+}
+
+func TestSources(t *testing.T) {
+	e := newEnv(t)
+	admin, ops, viewer := e.login("admin"), e.login("ops"), e.login("viewer")
+
+	// Configuration-file sources are listed read-only.
+	resp, body := viewer.do("GET", "/api/v1/sources", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"origin":"file"`) ||
+		!strings.Contains(string(body), `"name":"syslog-udp"`) {
+		t.Fatalf("list: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := viewer.do("POST", "/api/v1/sources", syslogSource("viewer-src", ":6000"), nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer create: %d", resp.StatusCode)
+	}
+
+	// Create, then read back with the status of the running listener.
+	resp, body = ops.do("POST", "/api/v1/sources", syslogSource("branch-office", ":6001"), nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.StatusCode, body)
+	}
+	var created struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+		Enabled bool   `json:"enabled"`
+		Origin  string `json:"origin"`
+		Config  struct {
+			Timezone string `json:"timezone"`
+			Framing  string `json:"framing"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.Enabled || created.Origin != "database" || created.Config.Timezone != "UTC" {
+		t.Errorf("created source: %s", body)
+	}
+
+	// Conflicts: duplicate name, address taken by a file source or another managed one.
+	for _, tc := range []struct {
+		name string
+		in   map[string]any
+		want string
+	}{
+		{"duplicate name", syslogSource("branch-office", ":6002"), "already used by source"},
+		{"file source address", syslogSource("clash", ":5514"), "configuration file"},
+		{"managed address", syslogSource("clash", ":6001"), "already used"},
+		{"file source name", syslogSource("syslog-udp", ":6003"), "configuration file"},
+	} {
+		resp, body := ops.do("POST", "/api/v1/sources", tc.in, nil)
+		if resp.StatusCode < 400 || !strings.Contains(string(body), tc.want) {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+	// Invalid definitions are rejected with the reason.
+	bad := map[string]any{"config": map[string]any{"name": "bad", "type": "syslog", "protocol": "smoke", "address": ":1"}}
+	if resp, body := ops.do("POST", "/api/v1/sources", bad, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(body), "protocol") {
+		t.Errorf("invalid source: %d %s", resp.StatusCode, body)
+	}
+
+	// Update requires the current version; disabling is allowed.
+	upd := syslogSource("branch-office", ":6001")
+	upd["enabled"] = false
+	if resp, body := ops.do("PUT", "/api/v1/sources/"+created.ID, upd, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(body), "version") {
+		t.Errorf("update without version: %d %s", resp.StatusCode, body)
+	}
+	upd["version"] = created.Version
+	resp, body = ops.do("PUT", "/api/v1/sources/"+created.ID, upd, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"enabled":false`) {
+		t.Fatalf("update: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := ops.do("PUT", "/api/v1/sources/"+created.ID, upd, nil); resp.StatusCode != http.StatusConflict {
+		t.Errorf("stale version: %d", resp.StatusCode)
+	}
+
+	// A disabled source frees its address for another one.
+	if resp, body := ops.do("POST", "/api/v1/sources", syslogSource("reuse", ":6001"), nil); resp.StatusCode != http.StatusCreated {
+		t.Errorf("reuse address of a disabled source: %d %s", resp.StatusCode, body)
+	}
+
+	if resp, _ := viewer.do("DELETE", "/api/v1/sources/"+created.ID, nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer delete: %d", resp.StatusCode)
+	}
+	if resp, _ := admin.do("DELETE", "/api/v1/sources/"+created.ID, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete: %d", resp.StatusCode)
+	}
+	if resp, _ := admin.do("GET", "/api/v1/sources/"+created.ID, nil, nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("get deleted: %d", resp.StatusCode)
+	}
+}
+
+func TestUsersAndAudit(t *testing.T) {
+	e := newEnv(t)
+	admin, ops := e.login("admin"), e.login("ops")
+
+	if resp, _ := ops.do("GET", "/api/v1/users", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("operator listing users: %d", resp.StatusCode)
+	}
+
+	// Creating without a password returns a generated one, shown once.
+	resp, body := admin.do("POST", "/api/v1/users", map[string]any{"username": "dana", "role": "operator"}, nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create user: %d %s", resp.StatusCode, body)
+	}
+	var created struct {
+		ID                string `json:"id"`
+		Role              string `json:"role"`
+		GeneratedPassword string `json:"generated_password"`
+		MustChange        bool   `json:"must_change_password"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.GeneratedPassword) < 12 || !created.MustChange || created.Role != "operator" {
+		t.Fatalf("created user: %s", body)
+	}
+	if resp, _ := admin.do("POST", "/api/v1/users", map[string]any{"username": "dana", "role": "viewer"}, nil); resp.StatusCode != http.StatusConflict {
+		t.Errorf("duplicate user: %d", resp.StatusCode)
+	}
+	if resp, body := admin.do("POST", "/api/v1/users", map[string]any{"username": "eve", "role": "wizard"}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("unknown role: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := admin.do("POST", "/api/v1/users", map[string]any{"username": "eve", "role": "viewer", "password": "short"}, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(body), "12") {
+		t.Errorf("weak password: %d %s", resp.StatusCode, body)
+	}
+
+	// The generated password works and forces a change.
+	danaFirst := e.loginAs("dana", created.GeneratedPassword)
+	if resp, _ := danaFirst.do("GET", "/api/v1/logs/search", nil, nil); resp.StatusCode == http.StatusOK {
+		t.Error("a user who must change their password can still query")
+	}
+
+	// Self-protection rules.
+	var me struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+	}
+	_, body = admin.do("GET", "/api/v1/auth/me", nil, nil)
+	_ = json.Unmarshal(body, &me)
+	for _, tc := range []struct {
+		name, method, path string
+		in                 map[string]any
+	}{
+		{"own role", "PUT", "/api/v1/users/" + me.User.ID, map[string]any{"role": "viewer"}},
+		{"own account disabled", "PUT", "/api/v1/users/" + me.User.ID, map[string]any{"disabled": true}},
+		{"own account deleted", "DELETE", "/api/v1/users/" + me.User.ID, nil},
+	} {
+		if resp, body := admin.do(tc.method, tc.path, tc.in, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+
+	// Disabling signs the user out and blocks new logins.
+	dana := e.loginAs("dana", created.GeneratedPassword)
+	if resp, body := admin.do("PUT", "/api/v1/users/"+created.ID, map[string]any{"disabled": true}, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := dana.do("GET", "/api/v1/auth/me", nil, nil); resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("disabled user session still valid: %d", resp.StatusCode)
+	}
+
+	// The audit log records the administration actions.
+	resp, body = admin.do("GET", "/api/v1/audit?limit=100", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("audit: %d %s", resp.StatusCode, body)
+	}
+	for _, want := range []string{`"action":"users.create"`, `"action":"users.update"`, `"action":"auth.login"`, `"actor_name":"admin"`} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("audit log missing %s: %s", want, body)
+		}
+	}
+	if resp, body := admin.do("GET", "/api/v1/audit?action=users.create", nil, nil); !strings.Contains(string(body), "users.create") ||
+		strings.Contains(string(body), "auth.login") || resp.StatusCode != http.StatusOK {
+		t.Errorf("audit filter: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := admin.do("GET", "/api/v1/audit?limit=0", nil, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("invalid limit: %d", resp.StatusCode)
+	}
+	if resp, _ := ops.do("GET", "/api/v1/audit", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("operator reading the audit log: %d", resp.StatusCode)
+	}
+
+	// The last administrator cannot be removed.
+	if resp, body := admin.do("DELETE", "/api/v1/users/"+created.ID, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete user: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestSystemConfigAndRetention(t *testing.T) {
+	e := newEnv(t)
+	ops, viewer := e.login("ops"), e.login("viewer")
+	resp, body := ops.do("GET", "/api/v1/system/config", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "retention") {
+		t.Errorf("config: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := viewer.do("GET", "/api/v1/system/config", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer reading config: %d", resp.StatusCode)
+	}
+	resp, body = viewer.do("GET", "/api/v1/system/retention", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"configured":"30d"`) ||
+		!strings.Contains(string(body), "instructions") {
+		t.Errorf("retention: %d %s", resp.StatusCode, body)
 	}
 }
