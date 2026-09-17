@@ -1,0 +1,105 @@
+# Prometheus alerting rules for Syslogc.
+#
+# Load with: rule_files: [/etc/prometheus/alerts.yml]
+# Thresholds assume one scrape per 15 s; tune the "for" clauses to your
+# on-call tolerance rather than the thresholds themselves.
+groups:
+  - name: syslogc-ingestion
+    rules:
+      - alert: SyslogcDown
+        expr: up{job="syslogc"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: Syslogc node {{ $labels.instance }} is not scrapeable
+          description: No metrics for two minutes. Logs sent to this node may be lost.
+
+      - alert: SyslogcStorageWritesFailing
+        expr: syslogc_storage_healthy == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Storage writes are failing on {{ $labels.instance }}
+          description: The last storage write failed. Syslogc retries and buffers, but the queue will fill.
+
+      - alert: SyslogcLogsDropped
+        expr: sum by (instance, source, reason) (rate(syslogc_ingest_messages_dropped_total[5m])) > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Logs dropped on {{ $labels.instance }} ({{ $labels.source }}, {{ $labels.reason }})
+          description: >-
+            Dropping {{ printf "%.1f" $value }} logs/s. reason="queue_full" means ingestion
+            outruns storage; "denied" means a sender is not in allowed_cidrs.
+
+      - alert: SyslogcQueueFilling
+        expr: >-
+          syslogc_ingest_queue_messages / syslogc_ingest_queue_capacity_messages > 0.8
+          or syslogc_ingest_queue_bytes / syslogc_ingest_queue_capacity_bytes > 0.8
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Ingest queue over 80% full on {{ $labels.instance }}
+          description: Storage cannot keep up. Drops start when the queue is full.
+
+      - alert: SyslogcParseErrors
+        expr: >-
+          sum by (instance) (rate(syslogc_ingest_parse_errors_total[15m]))
+          / clamp_min(sum by (instance) (rate(syslogc_ingest_messages_received_total[15m])), 1) > 0.05
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: Over 5% of messages fail to parse on {{ $labels.instance }}
+          description: Check the source format and timezone; unparsed messages are stored with parse_error.
+
+      - alert: SyslogcUDPKernelDrops
+        expr: sum by (instance, source) (rate(syslogc_ingest_udp_kernel_drops_total[10m])) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: The kernel is dropping UDP datagrams on {{ $labels.instance }}
+          description: Raise net.core.rmem_max and the source's udp.read_buffer_bytes.
+
+      - alert: SyslogcNoLogsReceived
+        expr: sum by (instance) (rate(syslogc_ingest_messages_received_total[15m])) == 0
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: No logs received for an hour on {{ $labels.instance }}
+          description: Senders may be misconfigured, or a firewall may be blocking 514/udp and 514/tcp.
+
+  - name: syslogc-storage
+    rules:
+      - alert: SyslogcStorageUnreachable
+        expr: syslogc_storage_reachable == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Storage backend unreachable from {{ $labels.instance }}
+          description: VictoriaLogs did not answer its health endpoint.
+
+      - alert: SyslogcWriteErrors
+        expr: sum by (instance, class) (rate(syslogc_storage_write_errors_total[10m])) > 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Storage write errors on {{ $labels.instance }} (class {{ $labels.class }})
+
+      - alert: SyslogcIngestLatencyHigh
+        expr: histogram_quantile(0.99, sum by (le, instance) (rate(syslogc_ingest_e2e_latency_seconds_bucket[10m]))) > 30
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Logs take over 30 s to reach storage on {{ $labels.instance }}
+          description: p99 receive-to-stored latency is {{ printf "%.0f" $value }} s.
+
+  - name: syslogc-api
+    rules:
+      - alert: SyslogcAPIErrors
+        expr: >-
+          sum by (instance) (rate(syslogc_http_requests_total{code=~"5.."}[10m]))
+          / clamp_min(sum by (instance) (rate(syslogc_http_requests_total[10m])), 1) > 0.05
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Over 5% of API requests fail on {{ $labels.instance }}
