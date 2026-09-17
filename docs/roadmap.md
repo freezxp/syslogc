@@ -1,6 +1,6 @@
 # Implementation Roadmap
 
-Status: **Proposed (Phase 0)** · Each phase ends with a review gate: exit criteria met, docs updated, demo recorded in the PR description.
+Status: **MVP released (v0.1.0, 2026-09-17)** · Phases 0–6 are done; Phase 7 is a menu to pick from. Each phase ends with a review gate: exit criteria met, docs updated, results recorded in the PR description.
 
 ---
 
@@ -8,13 +8,13 @@ Status: **Proposed (Phase 0)** · Each phase ends with a review gate: exit crite
 
 ```text
 Phase 0  Architecture & planning                       ✔ done
-Phase 1  Core ingestion (syslog UDP/TCP/TLS → VictoriaLogs), config, health, compose   ◀── in review
-Phase 2  HTTP/JSON ingestion, PostgreSQL metadata, authentication & authorization
-Phase 3  Query API: search, fields, facets, stats, histogram, pagination, export, saved searches
-Phase 4  Web UI: dashboard, explorer, detail, query builder, time picker, charts, live tail
-Phase 5  Operations: sources UI, system pages, retention, audit, users, settings   ══▶ MVP (DoD)
-Phase 6  Performance: load tests, tuning, 100K logs/s benchmark
-Phase 7  Advanced: CEF/LEEF, OTLP, disk spool, multi-tenancy, ClickHouse, clustering, alerting, AI
+Phase 1  Core ingestion (syslog UDP/TCP/TLS → VictoriaLogs), config, health, compose   ✔ done
+Phase 2  HTTP/JSON ingestion, PostgreSQL metadata, authentication & authorization      ✔ done
+Phase 3  Query API: search, fields, facets, stats, histogram, pagination, export, saved searches  ✔ done
+Phase 4  Web UI: dashboard, explorer, detail, query builder, time picker, charts, live tail       ✔ done
+Phase 5  Operations: sources UI, system pages, retention, audit, users, settings   ✔ done ══▶ MVP (DoD)
+Phase 6  Performance: load tests, tuning, 100K logs/s benchmark                    ✔ done (docs/performance.md)
+Phase 7  Advanced: CEF/LEEF, OTLP, disk spool, multi-tenancy, ClickHouse, clustering, alerting, AI   ◀── next, pick per priorities
 ```
 
 ### MVP and the Definition of Done
