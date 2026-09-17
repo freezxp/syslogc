@@ -219,6 +219,7 @@ func (s *Service) Series(ctx context.Context, p *auth.Principal, req SeriesReque
 	// affordable, so the top groups are chosen first and the series query is
 	// restricted to them.
 	var wanted []string
+	totals := map[string]float64{}
 	if req.GroupBy != "" {
 		top, err := s.opts.Querier.Aggregate(ctx, storage.AggregateQuery{
 			Selection: sel, GroupBy: req.GroupBy, Metric: metric, MetricField: metricField, Limit: limit,
@@ -228,6 +229,7 @@ func (s *Service) Series(ctx context.Context, p *auth.Principal, req SeriesReque
 		}
 		for _, row := range top {
 			wanted = append(wanted, row.Group)
+			totals[row.Group] = row.Value
 		}
 		if len(wanted) == 0 {
 			return emptySeries(r, step, req), nil
@@ -265,9 +267,18 @@ func (s *Service) Series(ctx context.Context, p *auth.Principal, req SeriesReque
 			series[row.Group] = g
 		}
 		g.Points[i] += row.Value
-		g.Total += row.Value
+	}
+	// Totals are measured over the whole range: summing buckets would count
+	// the same value twice whenever it appears in more than one of them.
+	if req.GroupBy == "" {
+		total, err := s.opts.Querier.Count(ctx, storage.CountQuery{Selection: sel, DistinctField: metricField})
+		if err != nil {
+			return nil, mapErr(ctx, err)
+		}
+		totals[""] = float64(total)
 	}
 	for _, g := range series {
+		g.Total = totals[g.Value]
 		resp.Groups = append(resp.Groups, *g)
 	}
 	sort.Slice(resp.Groups, func(i, j int) bool { return resp.Groups[i].Total > resp.Groups[j].Total })

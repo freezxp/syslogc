@@ -463,6 +463,9 @@ func (b *Backend) Aggregate(ctx context.Context, q storage.AggregateQuery) ([]st
 		}
 		if q.GroupBy != "" {
 			row.Group, _ = r.Get(group)
+			if row.Group == "" {
+				continue
+			}
 		}
 		if q.Step > 0 {
 			if ts, ok := r.Get("_time"); ok {

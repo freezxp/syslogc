@@ -455,6 +455,39 @@ func TestAnalyticsAgainstVictoriaLogs(t *testing.T) {
 	if total != 60 {
 		t.Errorf("series total = %v, want 60", total)
 	}
+	// A distinct-count series reports the distinct count over the whole
+	// range, not the sum of per-bucket counts (the same client recurs).
+	resp, body = c.post(t, "/api/v1/analytics/series", map[string]any{"time_range": sel["time_range"],
+		"filter": sel["filter"], "group_by": "hostname", "buckets": 15,
+		"metric": map[string]string{"type": "count_distinct", "field": "source_ip"}})
+	var ds struct {
+		Groups []struct {
+			Value  string    `json:"value"`
+			Total  float64   `json:"total"`
+			Points []float64 `json:"points"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(body, &ds); err != nil || resp.StatusCode != http.StatusOK || len(ds.Groups) == 0 {
+		t.Fatalf("distinct series: %d %s", resp.StatusCode, body)
+	}
+	for _, g := range ds.Groups {
+		sum := 0.0
+		for _, p := range g.Points {
+			sum += p
+		}
+		if g.Total != 2 {
+			t.Errorf("%s: total %v, want 2 distinct clients (bucket sum was %v)", g.Value, g.Total, sum)
+		}
+	}
+
+	// Grouping by a field no log carries returns nothing, not one empty group.
+	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{"time_range": sel["time_range"],
+		"filter": sel["filter"], "group_by": "no_such_field_" + id})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"rows":[]`) ||
+		!strings.Contains(string(body), `"distinct_groups":0`) {
+		t.Errorf("breakdown on an absent field: %d %s", resp.StatusCode, body)
+	}
+
 	// Pipes belong to the explorer, not to analytics.
 	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{"time_range": sel["time_range"],
 		"group_by": "hostname", "native": map[string]string{"dialect": "logsql", "text": "* | stats count()"}})
