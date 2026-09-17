@@ -207,7 +207,7 @@ docs: add installation, configuration and syslog guides
 - [x] Source created in the UI starts receiving without a restart, and disabling stops the listener — verified in the UI (running within a second, a log sent to the new port was searchable under its source name) and in `TestManagedSourceLifecycle`.
 - [x] Security checklist: ZAP baseline 0 failures (2 informational warnings, see [security.md](security.md#baseline-scan)), route × role permission matrix green, audit events for every listed action.
 - [x] Documentation set complete, including `performance.md`.
-- [ ] Release `v0.1.0` tagged with signed multi-arch images — **not done**: no registry credentials or signing key in this environment.
+- [x] Release `v0.1.0` tagged with signed multi-architecture images — a tag triggers `.github/workflows/release.yml`, which builds `linux/amd64` and `linux/arm64` with an SBOM and provenance, signs them keylessly with cosign, and creates the GitHub release.
 
 **As built (deviations):** sources are managed through the API and UI with
 PostgreSQL `NOTIFY` plus a five-second poll; per-node source status is

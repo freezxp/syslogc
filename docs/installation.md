@@ -51,6 +51,21 @@ logger --server 127.0.0.1 --tcp --port 514 --rfc3164 -p local4.err -t vpnd "VPN 
 make e2e    # logs in, searches, tails, exports; see backend/tests/e2e/smoke.sh
 ```
 
+### Published images
+
+Releases publish `ghcr.io/freezxp/syslogc:<tag>` (and `:latest`) for
+`linux/amd64` and `linux/arm64`, with an SBOM, build provenance and a
+keyless cosign signature:
+
+```bash
+cosign verify ghcr.io/freezxp/syslogc:v0.1.0 \
+  --certificate-identity-regexp '^https://github.com/freezxp/syslogc/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Set `SYSLOGC_VERSION` in `.env` to run a published tag instead of building
+locally.
+
 ### Monitoring and backups
 
 See [operations](operations.md) for the Prometheus alert rules, the Grafana
