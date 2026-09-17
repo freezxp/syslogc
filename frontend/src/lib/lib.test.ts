@@ -25,8 +25,8 @@ import {
   metricComplete,
   previousRange,
   rowDelta,
+  metricUnit,
   seriesChartData,
-  seriesLegendMetric,
 } from '@/features/analytics/analytics-query'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
@@ -424,6 +424,8 @@ describe('analytics query', () => {
     })
     expect(metricComplete(decodeAnalytics({ ...base, metric: 'unique' }).metric)).toBe(false)
     expect(metricComplete({ type: 'count' })).toBe(true)
+    expect(metricUnit({ type: 'count_distinct', field: 'source_ip' })).toBe('unique')
+    expect(metricUnit({ type: 'count' })).toBe('')
   })
 
   it('round-trips through the URL, dropping defaults', () => {
@@ -511,13 +513,6 @@ describe('analytics query', () => {
       { t: Date.parse('2026-09-14T09:20:00Z'), s0: 3, s1: 0 },
     ])
     expect(seriesChartData(undefined)).toEqual({ rows: [], series: [] })
-  })
-
-  it('shows the peak bucket instead of a summed total for distinct counts', () => {
-    const group = { total: 5, points: [1, 2, 2] }
-    expect(seriesLegendMetric(group, true)).toEqual({ value: 5, peak: false })
-    expect(seriesLegendMetric(group, false)).toEqual({ value: 2, peak: true })
-    expect(seriesLegendMetric(undefined, true)).toEqual({ value: undefined, peak: false })
   })
 
   it('says how much of the distinct set is on screen', () => {

@@ -47,9 +47,10 @@ src/
 - Analytics (`/analytics`) reuses the explorer's query bar and time picker; its own URL params are
   `group,metric,mfield,top` (codec and comparison logic in `src/features/analytics/analytics-query.ts`). The
   previous-period comparison runs the breakdown a second time over the window immediately before the current
-  one; a value missing from a truncated previous top-N is reported as unknown rather than new. The series
-  endpoint's `SeriesGroup.total` is the sum of its points, so the legend shows the peak bucket instead for
-  `count_distinct`, which cannot be added across buckets.
+  one; a value missing from a truncated previous top-N is reported as unknown rather than new. A series
+  group's `total` is the metric over the whole window rather than the sum of its points, so the legend shows
+  it directly; the chart tooltip still hides its cross-group total for `count_distinct`, which does not add
+  up across groups.
 - The source editor keeps a flat string form state (`src/features/sources/source-form.ts`) and converts to the
   `config` object on save. The server validates a source as a whole and answers one `/config` pointer whose
   detail joins every complaint, so the detail is split back apart to place messages next to their inputs.

@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useBreakdown, useSeries } from '@/api/hooks'
-import type { AnalyticsMetric, FilterExpr, SeriesGroup } from '@/api/types'
+import type { AnalyticsMetric, FilterExpr } from '@/api/types'
 import { GroupedSeriesChart } from '@/components/charts'
 import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
@@ -39,9 +39,9 @@ import {
   metricIsAdditive,
   metricLabel,
   metricTitle,
+  metricUnit,
   previousRange,
   seriesChartData,
-  seriesLegendMetric,
   SERIES_BUCKETS,
   TOP_OPTIONS,
   type AnalyticsQuery,
@@ -333,10 +333,10 @@ export function AnalyticsPage() {
                         <span className="mono truncate" title={s.label}>
                           {s.label}
                         </span>
-                        <LegendMetric
-                          group={series.data?.groups.find((g) => g.value === s.value)}
-                          additive={additive}
-                        />
+                        <span className="mono text-subtle">
+                          {formatCount(series.data?.groups.find((g) => g.value === s.value)?.total)}
+                          {metricUnit(metric) && ` ${metricUnit(metric)}`}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -456,19 +456,6 @@ export function AnalyticsPage() {
         )}
       </div>
     </div>
-  )
-}
-
-function LegendMetric({ group, additive }: { group: SeriesGroup | undefined; additive: boolean }) {
-  const { value, peak } = seriesLegendMetric(group, additive)
-  return (
-    <span
-      className="mono text-subtle"
-      title={peak ? 'Highest bucket: distinct counts cannot be added across buckets' : undefined}
-    >
-      {peak && 'peak '}
-      {formatCount(value)}
-    </span>
   )
 }
 

@@ -64,9 +64,14 @@ export function metricIsAdditive(metric: AnalyticsMetric): boolean {
   return metric.type === 'count'
 }
 
-/** The empty group value the server returns when a log has no such field. */
+/** Fallback for a group whose value is genuinely the empty string. */
 export function groupLabel(value: string): string {
   return value === '' ? '(none)' : value
+}
+
+/** Unit for a bare metric number, e.g. "2 unique"; counts read fine without one. */
+export function metricUnit(metric: AnalyticsMetric): string {
+  return metric.type === 'count_distinct' ? 'unique' : ''
 }
 
 /** The window of equal length immediately before `range`. */
@@ -163,20 +168,6 @@ export function seriesChartData(res: SeriesResponse | undefined): ChartData {
     return row
   })
   return { rows, series }
-}
-
-/**
- * What to show next to a series in the legend. The server's `SeriesGroup.total`
- * is the sum of the points, which double-counts a value seen in several buckets,
- * so a non-additive metric gets its peak bucket instead of a wrong total.
- */
-export function seriesLegendMetric(
-  group: { total: number; points: number[] } | undefined,
-  additive: boolean,
-): { value: number | undefined; peak: boolean } {
-  if (!group) return { value: undefined, peak: !additive }
-  if (additive) return { value: group.total, peak: false }
-  return { value: group.points.reduce((m, p) => Math.max(m, p), 0), peak: true }
 }
 
 /** "showing 10 of 143 values", or just the count when nothing is hidden. */

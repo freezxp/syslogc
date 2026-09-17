@@ -1246,11 +1246,15 @@ export const handlers = [
   }),
 ]
 
-/** Group values by the analytics metric, highest first. */
+/**
+ * Group values by the analytics metric, highest first. Logs without the field
+ * form no group, so an absent field answers with no rows at all.
+ */
 function groupMetric(rows: LogRow[], groupBy: string, metric: AnalyticsMetric): [string, number][] {
   const buckets = new Map<string, LogRow[]>()
   for (const r of rows) {
-    const v = groupBy ? (getField(r, groupBy) ?? '') : ''
+    const v = groupBy ? getField(r, groupBy) : ''
+    if (v === undefined || (groupBy && v === '')) continue
     const list = buckets.get(v)
     if (list) list.push(r)
     else buckets.set(v, [r])

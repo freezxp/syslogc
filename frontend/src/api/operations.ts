@@ -186,7 +186,6 @@ export type BreakdownRequest = AnalyticsRequest & {
 }
 
 export interface BreakdownRow {
-  /** Empty when the group-by field is absent from the matching logs. */
   value: string
   metric: number
   /** `metric / total`, so the shown rows need not add up to 1. */
@@ -214,6 +213,10 @@ export type SeriesRequest = AnalyticsRequest & {
 
 export interface SeriesGroup {
   value: string
+  /**
+   * The metric over the whole window. Not the sum of `points`: the buckets start
+   * on a step boundary inside the window, and distinct counts do not add up.
+   */
   total: number
   /** Aligned index-for-index with `timestamps`. */
   points: number[]
