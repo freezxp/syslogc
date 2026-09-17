@@ -9,6 +9,9 @@ import {
 
 import { client, setCsrfToken, unwrap } from '../client'
 import type {
+  AdminUser,
+  AuditEvent,
+  AuditQuery,
   DashboardOverview,
   FacetsResponse,
   FieldsResponse,
@@ -16,17 +19,23 @@ import type {
   FilterExpr,
   HistogramResponse,
   IngestionRateResponse,
+  ManagedSource,
   NativeQuery,
   SavedSearch,
   SavedSearchInput,
   SearchResponse,
   Selection,
   Session,
+  SourceInput,
   StatsResponse,
+  SystemConfig,
   SystemHealth,
   SystemIngestion,
+  SystemRetention,
   SystemStorage,
   TimeRange,
+  UserCreateInput,
+  UserUpdateInput,
   ValidateResponse,
 } from '../types'
 
@@ -352,6 +361,139 @@ export function useSystemStorage() {
     queryKey: ['system', 'storage'],
     queryFn: ({ signal }) => unwrap(client.GET('/api/v1/system/storage', { signal })) as Promise<SystemStorage>,
     refetchInterval: 10_000,
+  })
+}
+
+export function useSystemRetention() {
+  return useQuery({
+    queryKey: ['system', 'retention'],
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/system/retention', { signal })) as Promise<SystemRetention>,
+    refetchInterval: 30_000,
+  })
+}
+
+export function useSystemConfig(enabled: boolean) {
+  return useQuery({
+    queryKey: ['system', 'config'],
+    enabled,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/system/config', { signal })) as Promise<SystemConfig>,
+    staleTime: 60_000,
+  })
+}
+
+// ---- sources ---------------------------------------------------------------
+
+export const sourcesKey = ['sources'] as const
+
+/**
+ * Listeners start and stop asynchronously, so a source's state lags a write by
+ * up to a few seconds: re-read the list a few times instead of once.
+ */
+const SETTLE_DELAYS_MS = [500, 1500, 3000, 5500]
+
+function settleSources(qc: QueryClient): void {
+  qc.invalidateQueries({ queryKey: sourcesKey })
+  for (const ms of SETTLE_DELAYS_MS) {
+    setTimeout(() => qc.invalidateQueries({ queryKey: sourcesKey }), ms)
+  }
+}
+
+export function useSources() {
+  return useQuery({
+    queryKey: sourcesKey,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/sources', { signal })),
+    refetchInterval: 15_000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useSource(id: string | undefined) {
+  return useQuery({
+    queryKey: [...sourcesKey, 'item', id],
+    enabled: !!id,
+    queryFn: ({ signal }) =>
+      unwrap(client.GET('/api/v1/sources/{id}', { params: { path: { id: id! } }, signal })) as Promise<ManagedSource>,
+  })
+}
+
+export function useCreateSource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: SourceInput) => unwrap(client.POST('/api/v1/sources', { body })) as Promise<ManagedSource>,
+    onSuccess: () => settleSources(qc),
+  })
+}
+
+export function useUpdateSource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: SourceInput }) =>
+      unwrap(client.PUT('/api/v1/sources/{id}', { params: { path: { id } }, body })) as Promise<ManagedSource>,
+    onSuccess: (s) => {
+      qc.setQueryData([...sourcesKey, 'item', s.id], s)
+      settleSources(qc)
+    },
+  })
+}
+
+export function useDeleteSource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap(client.DELETE('/api/v1/sources/{id}', { params: { path: { id } } })),
+    onSuccess: () => settleSources(qc),
+  })
+}
+
+// ---- users -----------------------------------------------------------------
+
+const usersKey = ['users'] as const
+
+export function useUsers() {
+  return useQuery({
+    queryKey: usersKey,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/users', { signal })),
+  })
+}
+
+export function useCreateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: UserCreateInput) => unwrap(client.POST('/api/v1/users', { body })) as Promise<AdminUser>,
+    onSuccess: () => qc.invalidateQueries({ queryKey: usersKey }),
+  })
+}
+
+export function useUpdateUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: UserUpdateInput }) =>
+      unwrap(client.PUT('/api/v1/users/{id}', { params: { path: { id } }, body })) as Promise<AdminUser>,
+    onSuccess: () => qc.invalidateQueries({ queryKey: usersKey }),
+  })
+}
+
+export function useDeleteUser() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap(client.DELETE('/api/v1/users/{id}', { params: { path: { id } } })),
+    onSuccess: () => qc.invalidateQueries({ queryKey: usersKey }),
+  })
+}
+
+export function useRevokeUserSessions() {
+  return useMutation({
+    mutationFn: (id: string) => unwrap(client.POST('/api/v1/users/{id}/revoke-sessions', { params: { path: { id } } })),
+  })
+}
+
+// ---- audit log -------------------------------------------------------------
+
+export function useAuditEvents(query: AuditQuery) {
+  return useQuery({
+    queryKey: ['audit', query],
+    queryFn: ({ signal }) =>
+      unwrap(client.GET('/api/v1/audit', { params: { query }, signal })) as Promise<{ events: AuditEvent[] }>,
+    placeholderData: keepPreviousData,
   })
 }
 

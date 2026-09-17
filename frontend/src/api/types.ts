@@ -3,7 +3,9 @@ import type { components } from './schema'
 type S = components['schemas']
 
 export type Problem = S['Problem']
+export type ProblemError = NonNullable<Problem['errors']>[number]
 export type Permission = S['Permission']
+export type Role = S['Role']
 export type User = S['User']
 export type Session = S['Session']
 export type TimeRange = S['TimeRange']
@@ -45,6 +47,25 @@ export type SystemStorage = S['SystemStorage']
 export type SourceStatus = S['SourceStatus']
 export type SourceCounters = S['SourceCounters']
 export type StorageUsage = S['StorageUsage']
+
+export type {
+  AdminUser,
+  AuditEvent,
+  AuditQuery,
+  ManagedSource,
+  ManagedSourceStatus,
+  RetentionDrift,
+  SourceConfig,
+  SourceInput,
+  SourceOrigin,
+  SourceState,
+  SourceTLSConfig,
+  SourceUDPConfig,
+  SystemConfig,
+  SystemRetention,
+  UserCreateInput,
+  UserUpdateInput,
+} from './operations'
 
 export type FieldValueOp = FieldValueExpr['op']
 export type FieldValuesOp = FieldValuesExpr['op']
