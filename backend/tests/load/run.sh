@@ -15,6 +15,7 @@ BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
 TARGET="${TARGET:-127.0.0.1}"
 PORT="${PORT:-514}"
 LOGGEN="${LOGGEN:-bin/loggen}"
+COMPOSE="${COMPOSE:-docker compose}"
 OUT_ROOT="${OUT_ROOT:-backend/tests/load/results}"
 RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUT_ROOT/$RUN_STAMP"
@@ -31,11 +32,12 @@ profile_args() {
     burst)   echo "--protocol tcp --rate 0 --count 2000000 --connections 8 --hosts 500" ;;
     soak)    echo "--protocol tcp --rate 5000 --duration 1800s --connections 4 --hosts 500 --custom-fields 3" ;;
     max)     echo "--protocol tcp --rate 0 --duration 60s --connections 8 --hosts 500" ;;
-    *) fail "unknown profile $1 (smoke, steady, udp, burst, soak, max)" ;;
+    outage)  echo "--protocol tcp --rate 20000 --duration 120s --connections 4 --hosts 200" ;;
+    *) fail "unknown profile $1 (smoke, steady, udp, burst, soak, outage, max)" ;;
   esac
 }
 
-[[ "${PROFILES:-}" != "list" ]] || { echo "smoke steady udp burst soak max"; exit 0; }
+[[ "${PROFILES:-}" != "list" ]] || { echo "smoke steady udp burst soak outage max"; exit 0; }
 [[ $# -gt 0 ]] || set -- steady
 [[ -x "$LOGGEN" ]] || fail "$LOGGEN not found; run: make build"
 command -v python3 >/dev/null || fail "python3 is required"
@@ -51,11 +53,27 @@ for name in "$@"; do
   run_id="load-$name-$(date +%s)"
   log "profile $name: $args"
 
+  # The outage profile pauses storage mid-run to prove that retries and
+  # backpressure turn an outage into latency rather than loss.
+  if [[ "$name" == outage ]]; then
+    ( sleep "${OUTAGE_AT:-20}"
+      log "stopping storage for ${OUTAGE_SECONDS:-60}s"
+      $COMPOSE stop "${STORAGE_SERVICE:-victorialogs}" >/dev/null 2>&1
+      sleep "${OUTAGE_SECONDS:-60}"
+      $COMPOSE start "${STORAGE_SERVICE:-victorialogs}" >/dev/null 2>&1
+      log "storage back" ) &
+    outage_pid=$!
+  fi
+
   metrics_snapshot "$OUT/$name.before.prom"
   start=$(date +%s)
   # shellcheck disable=SC2086 # arguments are intentionally word-split
   "$LOGGEN" --target "$TARGET" --port "$PORT" --run-id "$run_id" --stats-interval 0 \
     --json-report "$OUT/$name.loggen.json" $args >/dev/null
+  if [[ "$name" == outage ]]; then
+    wait "$outage_pid"
+    sleep "${OUTAGE_DRAIN:-60}"   # the backlog needs longer to drain
+  fi
   # Let the pipeline drain before reading the counters.
   sleep 10
   metrics_snapshot "$OUT/$name.after.prom"

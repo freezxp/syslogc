@@ -17,7 +17,7 @@ import (
 
 type userInput struct {
 	Username    string  `json:"username"`
-	DisplayName string  `json:"display_name"`
+	DisplayName *string `json:"display_name"`
 	Role        string  `json:"role"`
 	Password    string  `json:"password"`
 	Disabled    *bool   `json:"disabled"`
@@ -49,7 +49,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request, p *aut
 	if !auth.ValidRole(in.Role) {
 		return badRequest("validation_failed", "/role", "role must be admin, operator or viewer")
 	}
-	u, err := s.opts.API.Auth.CreateUser(r.Context(), in.Username, in.DisplayName, in.Role, in.Password)
+	u, err := s.opts.API.Auth.CreateUser(r.Context(), in.Username, deref(in.DisplayName), in.Role, in.Password)
 	switch {
 	case errors.Is(err, metadata.ErrConflict):
 		return errStatus(http.StatusConflict, "conflict", "a user named %q already exists", in.Username)
@@ -90,8 +90,8 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, p *aut
 		}
 		u.Role, details["role"] = in.Role, in.Role
 	}
-	if in.DisplayName != "" {
-		u.DisplayName = in.DisplayName
+	if in.DisplayName != nil {
+		u.DisplayName = *in.DisplayName
 	}
 	if in.Disabled != nil {
 		if u.ID == p.UserID && *in.Disabled {
@@ -99,15 +99,18 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, p *aut
 		}
 		u.Disabled, details["disabled"] = *in.Disabled, *in.Disabled
 	}
+	// The password policy is checked before anything is written, so a
+	// rejected request changes nothing.
+	if in.NewPassword != nil {
+		if err := auth.ValidatePasswordPolicy(*in.NewPassword, u.Username); err != nil {
+			return badRequest("validation_failed", "/new_password", "%s", err.Error())
+		}
+	}
 	if err := s.opts.API.Store.UpdateUser(r.Context(), u); err != nil {
 		return err
 	}
 	if in.NewPassword != nil {
 		if err := s.opts.API.Auth.ResetPassword(r.Context(), u, *in.NewPassword); err != nil {
-			var pe *auth.PolicyError
-			if errors.As(err, &pe) {
-				return badRequest("validation_failed", "/new_password", "%s", pe.Error())
-			}
 			return err
 		}
 		details["password_reset"] = true
@@ -159,10 +162,16 @@ func (s *Server) handleRevokeUserSessions(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return errStatus(http.StatusNotFound, "not_found", "no such user")
 	}
+	u, err := s.opts.API.Store.UserByID(r.Context(), id)
+	if errors.Is(err, metadata.ErrNotFound) || (u != nil && u.Tenant != p.Tenant) {
+		return errStatus(http.StatusNotFound, "not_found", "no such user")
+	} else if err != nil {
+		return err
+	}
 	if err := s.opts.API.Store.DeleteUserSessions(r.Context(), id, nil); err != nil {
 		return err
 	}
-	s.audit(r, p, "users.revoke_sessions", "success", map[string]any{"id": id})
+	s.audit(r, p, "users.revoke_sessions", "success", map[string]any{"user": u.Username, "id": id})
 	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
@@ -191,7 +200,7 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request, p *auth
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 1000 {
-			return badRequest("validation_failed", "limit", "limit must be between 1 and 1000")
+			return badRequest("validation_failed", "/limit", "limit must be between 1 and 1000")
 		}
 		f.Limit = n
 	}
@@ -202,13 +211,13 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request, p *auth
 		if v := q.Get(sel.param); v != "" {
 			t, err := time.Parse(time.RFC3339, v)
 			if err != nil {
-				return badRequest("validation_failed", sel.param, "%s must be an RFC 3339 timestamp", sel.param)
+				return badRequest("validation_failed", "/"+sel.param, "%s must be an RFC 3339 timestamp", sel.param)
 			}
 			*sel.dst = t
 		}
 	}
 	if f.Outcome != "" && f.Outcome != "success" && f.Outcome != "failure" {
-		return badRequest("validation_failed", "outcome", "outcome must be success or failure")
+		return badRequest("validation_failed", "/outcome", "outcome must be success or failure")
 	}
 	events, err := s.opts.API.Store.ListAuditEvents(r.Context(), f)
 	if err != nil {
@@ -238,4 +247,12 @@ func (s *Server) handleListAudit(w http.ResponseWriter, r *http.Request, p *auth
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
 	return nil
+}
+
+// deref returns the value of an optional string field.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

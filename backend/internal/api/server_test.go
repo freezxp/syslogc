@@ -23,6 +23,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
@@ -1058,6 +1060,29 @@ func TestUsersAndAudit(t *testing.T) {
 	}
 	if resp, _ := dana.do("GET", "/api/v1/auth/me", nil, nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("disabled user session still valid: %d", resp.StatusCode)
+	}
+
+	// A rejected password change leaves the other fields untouched, a
+	// display name can be cleared, and revoking sessions needs a real user.
+	if resp, body := admin.do("PUT", "/api/v1/users/"+created.ID, map[string]any{"role": "viewer", "new_password": "short"}, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("weak password on update: %d %s", resp.StatusCode, body)
+	}
+	if _, body := admin.do("GET", "/api/v1/users", nil, nil); !strings.Contains(string(body), `"role":"operator"`) {
+		t.Errorf("role changed despite a rejected password: %s", body)
+	}
+	if resp, body := admin.do("PUT", "/api/v1/users/"+created.ID, map[string]any{"display_name": "Dana Scully"}, nil); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), "Dana Scully") {
+		t.Errorf("set display name: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := admin.do("PUT", "/api/v1/users/"+created.ID, map[string]any{"display_name": ""}, nil); resp.StatusCode != http.StatusOK ||
+		strings.Contains(string(body), "Dana Scully") {
+		t.Errorf("clear display name: %d %s", resp.StatusCode, body)
+	}
+	if resp, _ := admin.do("POST", "/api/v1/users/"+uuid.NewString()+"/revoke-sessions", nil, nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("revoking sessions of an unknown user: %d", resp.StatusCode)
+	}
+	if resp, _ := admin.do("POST", "/api/v1/users/"+created.ID+"/revoke-sessions", nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("revoke sessions: %d", resp.StatusCode)
 	}
 
 	// The audit log records the administration actions.
