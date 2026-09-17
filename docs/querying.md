@@ -116,6 +116,55 @@ the first page only if they are older than the cursor.
 | `POST /api/v1/fields/{field}/values` | top values of one field, optional case-insensitive `search` |
 | `POST /api/v1/dashboard/{overview,volume,top,ingestion-rate}` | dashboard widgets (cached for a few seconds) |
 
+## Analytics
+
+Two endpoints answer "what is in my logs, and how is it changing" without
+writing a pipeline. Both take the same `time_range`, `filter` and `native`
+as a search, and neither accepts pipes in the native part.
+
+```http
+POST /api/v1/analytics/breakdown
+{"time_range": {"from": "now-1h", "to": "now"},
+ "filter": {"op": "eq", "field": "app_name", "value": "named"},
+ "group_by": "hostname", "metric": {"type": "count"}, "limit": 10}
+```
+
+returns the top values with honest shares:
+
+```json
+{"rows": [{"value": "dns01", "metric": 4190, "share": 0.378}],
+ "total": 11071, "distinct_groups": 4, "stats": {"duration_ms": 164}}
+```
+
+`total` counts everything matching, including groups past `limit`, so rows
+need not sum to 1. `distinct_groups` says how many values exist in all.
+
+```http
+POST /api/v1/analytics/series
+{"time_range": {...}, "group_by": "severity", "buckets": 120,
+ "metric": {"type": "count_distinct", "field": "source_ip"}}
+```
+
+returns one line per group over time:
+
+```json
+{"step": "5m", "step_seconds": 300, "timestamps": ["..."],
+ "groups": [{"value": "info", "total": 10897, "points": [0, 1525, 3573]}]}
+```
+
+`points` aligns index-for-index with `timestamps`. Only the top `limit`
+groups (5 by default, 50 at most) are charted, chosen by their total over
+the whole range; there is no "other" series, so use a breakdown to see what
+the remainder holds.
+
+| Metric | Meaning |
+|---|---|
+| `{"type": "count"}` | number of matching logs |
+| `{"type": "count_distinct", "field": "hostname"}` | number of distinct values of that field |
+
+Distinct counts are exact, not estimated, and they do not add up across
+groups: the same client can appear under several hosts.
+
 ## Live tail
 
 ```http

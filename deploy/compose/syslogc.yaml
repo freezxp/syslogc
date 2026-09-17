@@ -37,6 +37,10 @@ ingestion:
       address: ":5514"          # published as host port 514/udp
       format: auto
       timezone: UTC
+      udp:
+        # The kernel caps this at net.core.rmem_max (208 KiB by default);
+        # raise that sysctl to give bursts somewhere to land.
+        read_buffer_bytes: 32MiB
 
     - name: syslog-tcp
       type: syslog
