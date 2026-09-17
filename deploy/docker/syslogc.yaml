@@ -1,0 +1,28 @@
+# Default configuration baked into the container image.
+# Mount your own file at /etc/syslogc/syslogc.yaml or override keys with
+# SYSLOGC_* environment variables (e.g. SYSLOGC_STORAGE_VICTORIALOGS_INSERT_URL).
+
+node:
+  roles: [all]
+
+server:
+  http:
+    address: ":8080"
+
+storage:
+  type: victorialogs
+  victorialogs:
+    insert_url: http://victorialogs:9428
+    select_url: http://victorialogs:9428
+
+ingestion:
+  sources:
+    - name: syslog-udp
+      protocol: udp
+      address: ":5514"
+    - name: syslog-tcp
+      protocol: tcp
+      address: ":5514"
+
+retention:
+  period: 30d

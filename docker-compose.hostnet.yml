@@ -1,0 +1,26 @@
+# Host-network override: preserves the real source IP of syslog senders.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.hostnet.yml up -d
+#
+# With Docker's default port publishing, traffic that goes through the
+# userland proxy (e.g. anything sent to 127.0.0.1, some IPv6 setups,
+# rootless Docker) reaches Syslogc with the Docker gateway as source IP.
+# Host networking avoids that.
+#
+# Syslogc runs as a non-root user and therefore listens on 5514 (UDP/TCP).
+# Point devices at port 5514, or redirect 514 on the host, e.g.:
+#   iptables -t nat -A PREROUTING -p udp --dport 514 -j REDIRECT --to-ports 5514
+#   iptables -t nat -A PREROUTING -p tcp --dport 514 -j REDIRECT --to-ports 5514
+services:
+  syslogc:
+    network_mode: host
+    ports: !reset []
+    environment:
+      SYSLOGC_STORAGE_VICTORIALOGS_INSERT_URL: http://127.0.0.1:9428
+      SYSLOGC_STORAGE_VICTORIALOGS_SELECT_URL: http://127.0.0.1:9428
+      # Keep HTTP on localhost while the unauthenticated dev endpoint exists.
+      SYSLOGC_SERVER_HTTP_ADDRESS: 127.0.0.1:8080
+
+  victorialogs:
+    ports:
+      - "127.0.0.1:9428:9428"

@@ -97,7 +97,7 @@ package logentry
 type Entry struct {
     Time        time.Time // event time (→ _time)
     ReceivedAt  time.Time
-    Message     []byte    // references pooled buffer; copied on encode
+    Message     string    // substring of the received message
     Hostname    string
     SourceIP    netip.Addr
     SourcePort  uint16
@@ -111,10 +111,14 @@ type Entry struct {
     MessageID   string
     Source      string    // interned per source
     SourceType  SourceType
-    Raw         []byte    // nil if not retained
+    Raw         string    // empty if not retained
     ParseError  string
     TimeSource  TimeSource
-    SevSource   SeveritySource
+    SeveritySource SeveritySource
+    Tenant      string
+    TimestampRaw string
+    Truncated   bool
+    FieldsDropped int
 
     Labels []Field // from source config, shared slice (read-only)
     Fields []Field // dynamic, ordered as encountered, flattened keys
@@ -122,14 +126,7 @@ type Entry struct {
 
 type Field struct {
     Key   string
-    Value Value
-}
-
-// Value is a compact tagged union; avoids interface{} boxing per field.
-type Value struct {
-    Kind Kind   // String, Int, Float, Bool, JSON (raw JSON for arrays)
-    Str  string
-    Num  uint64 // int64/float64 bits; bool as 0/1
+    Value string
 }
 
 type Batch struct {
@@ -138,9 +135,17 @@ type Batch struct {
 }
 ```
 
-Enums serialize to the canonical strings in §2. `Entry` values are reused from
-a `sync.Pool`; `Message`/`Raw` reference pooled receive buffers until the batch
-is encoded, then buffers are returned to the pool.
+Enums serialize to the canonical strings in §2. Entries are reused inside
+pooled batches. Parsers set string fields to substrings of the received
+message, so a message costs one string allocation regardless of how many
+fields it has.
+
+> **As built (Phase 1):** `Message`, `Raw` and all header fields are `string`
+> (substrings of one allocation) rather than pooled `[]byte`, and field values
+> are plain strings rather than a typed union. Syslog carries no types and
+> VictoriaLogs infers column types itself; a typed `Value` will be introduced
+> with the first typed storage backend or with JSON ingestion if benchmarks
+> justify it.
 
 ---
 
@@ -194,7 +199,7 @@ RFC 3164 specifics:
 1. Keys are preserved as sent (case-sensitive), after UTF-8 validation.
 2. Nested objects flatten with `.`: `{"http":{"status":500}}` → `http.status=500`.
 3. Arrays are stored as compact JSON strings: `tags=["a","b"]`. (Array element search works via substring/phrase filters.)
-4. Empty keys are replaced by `_empty`; keys longer than `limits.max_field_name_bytes` (default 256) are truncated with a `~` suffix.
+4. Empty keys are replaced by `fields.empty`; keys longer than `limits.max_field_name_bytes` (default 256) are truncated with a `~` suffix.
 5. Keys starting with `_` are **reserved** (VictoriaLogs uses `_time`, `_msg`, `_stream`, `_stream_id`); a dynamic key `_foo` is stored as `fields._foo`.
 6. Keys equal to a **core field name** (§2) are stored as `fields.<key>` — core semantics are never overwritten by payload data (except via documented aliases, §6.2).
 7. Reserved prefixes `labels.` and `sd.` from payloads are likewise moved under `fields.`.
@@ -238,8 +243,8 @@ single SD element). Default: `full`.
 
 VictoriaLogs stores values as strings and detects numeric/IP/timestamp columns
 internally for compression; range filters (`field:>500`) work on numeric
-strings. The in-memory `Value` keeps the original JSON type so a typed backend
-(ClickHouse `JSON`) can preserve it. The API returns values as JSON strings
+strings. Phase 1 keeps values as strings in memory; preserving JSON types for a typed
+backend (ClickHouse `JSON`) is deferred until such a backend exists. The API returns values as JSON strings
 for dynamic fields to avoid precision loss (`int64` > 2^53) and inconsistent
 typing across rows; the UI renders numbers right-aligned when a column is
 numeric-looking.
@@ -262,12 +267,12 @@ All limit actions increment `syslogc_ingest_normalization_limits_total{limit}`.
 
 `sources[].raw_message: always | on_error | never`
 
-- `always` (**MVP default**): forensic fidelity; "Copy raw message" always exact.
-- `on_error`: store raw only when parsing failed or was partial. Recommended for very high volume sources once storage cost is measured.
+- `always`: forensic fidelity; "Copy raw message" always exact. Roughly doubles compressed storage (spike S7).
+- `on_error` (**default for syslog sources**): store raw only when parsing failed or was partial.
 - `never`: for sources where raw is redundant (e.g. HTTP JSON, where the parsed fields *are* the data).
 
 HTTP JSON sources default to `never` (the JSON body is fully represented by
-the fields). Decision and the benchmark that may revisit it:
+the fields). Decision and measurements:
 [ADR-0013](decisions/0013-raw-message-policy.md).
 
 ---

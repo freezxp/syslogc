@@ -51,10 +51,14 @@ bounded memory, explicit overflow behaviour and complete accounting.
                                   VictoriaLogs
 ```
 
-Memory bound for a node ≈
-`queue.max_bytes + batch_queue.max_batches × batch.max_bytes × (1 + encode overhead) + fixed overhead`.
-With defaults (256 MiB + 8 × 8 MiB × ~2) the pipeline stays under ~450 MiB
-regardless of storage speed.
+Live data is bounded by
+`queue.max_bytes + batch_queue × batch.max_bytes × (1 + encode overhead) + fixed overhead`
+regardless of storage speed. **Measured (Phase 1):** with the default 256 MiB
+queue completely full, resident memory reached ~520–600 MiB, because the Go
+garbage collector keeps headroom above live data (the original ~450 MiB
+estimate ignored this). Deployments with memory limits should set
+`GOMEMLIMIT` (≈80 % of the limit) and size `queue.max_bytes` accordingly;
+automatic `GOMEMLIMIT` defaults are a Phase 6 item.
 
 ---
 
@@ -76,7 +80,7 @@ ingestion:
       timezone: UTC                # for RFC 3164 timestamps without offset
       allowed_cidrs: []            # empty = allow all
       max_message_bytes: 65535
-      raw_message: always          # always | on_error | never
+      raw_message: on_error        # always | on_error | never
       hostname_fallback: none      # none | ip
       sd_flatten: full             # full | short
       labels: { site: dc1 }
@@ -116,7 +120,7 @@ ingestion:
 ### 2.1 Source supervisor
 
 - Computes the desired set of sources and diffs it against running listeners by a config hash.
-- Changed sources are restarted **bind-first**: for TCP the new listener is bound before the old is closed where the address permits (`SO_REUSEPORT`), so reconfiguration does not refuse connections.
+- Changed sources are restarted **bind-first** where possible so reconfiguration does not refuse connections (Phase 5). *(As built: TCP listeners deliberately do not set `SO_REUSEPORT`, so a port already used by another process fails loudly at startup; bind-first restarts will enable it only for the replacement window.)*
 - Bind failures mark the source `status=error` with the error message (visible on the Sources page) without affecting other sources.
 - In multi-node deployments every `ingest` node runs every enabled source unless `sources[].nodes` restricts it (node selector by node ID/label; Phase 5).
 
@@ -129,9 +133,9 @@ Source status values: `running`, `stopped` (disabled), `starting`, `error`, `deg
 ### 3.1 UDP
 
 - One datagram = one message (no framing). Trailing `\n`/`\0` trimmed.
-- `SO_REUSEPORT` with N sockets, one goroutine per socket, reading with `recvmmsg` batches (`golang.org/x/net/ipv4.PacketConn.ReadBatch`) to reduce syscalls.
-- Receive buffers come from a size-classed `sync.Pool`; the parser references them until the entry is encoded.
-- Kernel drops are measured (`SO_RXQ_OVFL` ancillary data where available, otherwise `/proc/net/snmp` `Udp: RcvbufErrors`) and exported as `syslogc_ingest_udp_kernel_drops_total`.
+- `SO_REUSEPORT` with N sockets, one goroutine per socket. *(As built: one `recvmsg` per datagram; `recvmmsg` batch reads are a Phase 6 optimization to evaluate with benchmarks.)*
+- Each socket goroutine reuses one 64 KiB read buffer; a datagram is copied once into a string that parsers slice without further copies.
+- Kernel drops are measured per socket with `SO_RXQ_OVFL` ancillary data (Linux) and exported as `syslogc_ingest_udp_kernel_drops_total{source}`. When the kernel caps the requested receive buffer (`net.core.rmem_max`) a warning is logged at startup.
 - CIDR allowlist checks happen before enqueue; denied datagrams are counted `dropped{reason="denied"}`.
 
 ### 3.2 TCP
@@ -217,7 +221,8 @@ package + one `Register` line + tests; listeners and storage are untouched
 data starts with "<" digits{1,3} ">"
     ├─ followed by "1 " (VERSION)            → rfc5424
     └─ otherwise                              → rfc3164
-data starts with "{" or "["                   → json (syslog-over-TCP JSON lines)
+data starts with "{" or "["                   → json (syslog-over-TCP JSON lines; until the JSON parser
+                                                 exists in Phase 2 these are parsed leniently as RFC 3164)
 otherwise                                     → rfc3164 without PRI (lenient) → unknown on failure
 ```
 
@@ -267,7 +272,7 @@ Parsing never drops data. On failure:
 ```text
 format        = unknown
 _msg          = input (UTF-8 sanitized, truncated to limit)
-raw_message   = input (if policy on_error|always)
+raw_message   = input (default policy on_error, or always)
 parse_error   = "rfc5424: invalid STRUCTURED-DATA at offset 57"
 _time         = received_at, time_source=received
 severity      = info, severity_source=default
@@ -276,7 +281,7 @@ severity      = info, severity_source=default
 `syslogc_ingest_parse_errors_total{source,format}` increments with the
 *attempted* format.
 
-Parsers recover from panics per message (`defer recover` in the worker, not in
+Messages are never lost to parser panics: parsers recover per message (`defer recover` in the worker, not in
 the parser hot loop); a recovered panic is logged with the message hash (not
 content), counted as `parse_panics_total`, and the message is stored as
 `unknown`. Panics are bugs and fail CI through fuzzing.
@@ -404,13 +409,13 @@ name (bounded); `format` and `protocol` are enums; `reason` is an enum.
 | `ingest_messages_parsed_total` | counter | source, format | Successfully parsed (incl. partial) |
 | `ingest_parse_errors_total` | counter | source, format | Failed parses (stored as unknown) |
 | `ingest_messages_stored_total` | counter | source | Rows acknowledged by storage |
-| `ingest_bytes_stored_total` | counter | source, stage=`encoded|wire` | Encoded JSON bytes / compressed bytes sent |
+| `ingest_bytes_stored_total` | counter | stage=`estimated` | Estimated uncompressed bytes of acknowledged rows *(as built: the storage interface does not report exact encoded/wire sizes)* |
 | `ingest_messages_dropped_total` | counter | source, reason=`queue_full|denied|rejected|oversize|shutdown|rate_limited` | Every loss path |
 | `ingest_active_connections` | gauge | source | Open TCP/TLS connections |
 | `ingest_connections_rejected_total` | counter | source, reason=`limit|tls_handshake|denied` | |
 | `ingest_udp_kernel_drops_total` | counter | source | Kernel receive-buffer overflows |
 | `ingest_queue_messages` / `ingest_queue_bytes` | gauge | — | Current ingest queue occupancy |
-| `ingest_queue_capacity_bytes` | gauge | — | Configured budget |
+| `ingest_queue_capacity_bytes` / `ingest_queue_capacity_messages` | gauge | — | Configured budget |
 | `ingest_batch_queue_batches` | gauge | — | |
 | `ingest_batch_rows` / `ingest_batch_bytes` | histogram | — | Batch sizes at flush |
 | `ingest_batch_flush_reason_total` | counter | reason=`rows|bytes|wait|shutdown` | Tuning aid |
@@ -436,7 +441,8 @@ format distribution over arbitrary historical ranges uses storage
 | `storage_write_duration_seconds` | histogram | backend |
 | `storage_write_errors_total` | counter | backend, class=`retryable|rejected|fatal` |
 | `storage_write_retries_total` | counter | backend |
-| `storage_healthy` | gauge (0/1) | backend |
+| `storage_healthy` | gauge (0/1) | backend — last write succeeded (stays 1 while a write hangs) |
+| `storage_reachable` | gauge (0/1) | backend — periodic health check (every 5 s) succeeded |
 
 ---
 

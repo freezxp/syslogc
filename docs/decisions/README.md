@@ -23,5 +23,5 @@ Rules:
 | [0010](0010-time-boundary-cursor-pagination.md) | Time-boundary cursor pagination with tie-group completion | Proposed |
 | [0011](0011-session-auth-and-api-keys.md) | Server-side sessions for the UI, API keys for automation | Proposed |
 | [0012](0012-frontend-stack.md) | Frontend stack additions: TanStack Router, CodeMirror, wrapped Recharts | Proposed |
-| [0013](0013-raw-message-policy.md) | Raw message retention policy default | Proposed |
+| [0013](0013-raw-message-policy.md) | Raw message retention policy default | Accepted |
 | [0014](0014-spec-first-openapi.md) | Spec-first OpenAPI with generated server and client | Proposed |

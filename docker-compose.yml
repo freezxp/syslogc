@@ -1,0 +1,56 @@
+# Syslogc single-node stack.
+#
+#   docker compose up -d
+#   logger --server 127.0.0.1 --udp --port 514 "Test syslog message"
+#   curl "http://127.0.0.1:8080/api/v1/dev/search?query=Test&from=15m"
+#
+# Retention: set SYSLOGC_RETENTION (e.g. in .env) — it configures both
+# VictoriaLogs and Syslogc so they stay in sync.
+name: syslogc
+
+services:
+  syslogc:
+    image: ghcr.io/freezxp/syslogc:${SYSLOGC_VERSION:-dev}
+    build:
+      context: .
+      target: syslogc
+      args:
+        VERSION: ${SYSLOGC_VERSION:-dev}
+    restart: unless-stopped
+    depends_on:
+      victorialogs:
+        condition: service_started
+    ports:
+      # HTTP is bound to localhost only during Phase 1: the development search
+      # endpoint enabled in deploy/compose/syslogc.yaml is unauthenticated.
+      - "127.0.0.1:8080:8080"
+      - "514:5514/udp"
+      - "514:5514/tcp"
+      # - "6514:6514/tcp"   # enable together with the syslog-tls source
+    environment:
+      SYSLOGC_RETENTION_PERIOD: ${SYSLOGC_RETENTION:-30d}
+    volumes:
+      - ./deploy/compose/syslogc.yaml:/etc/syslogc/syslogc.yaml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 45s
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.52.0
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/vlogs
+      - -httpListenAddr=:9428
+      - -retentionPeriod=${SYSLOGC_RETENTION:-30d}
+      - -retention.maxDiskUsagePercent=85
+      - -search.maxQueryDuration=120s
+    volumes:
+      - vlogs-data:/vlogs
+    # Internal only. For debugging, publish on localhost:
+    # ports: ["127.0.0.1:9428:9428"]
+    # The image is distroless (no shell), so no container healthcheck is
+    # defined; Syslogc retries writes and reports storage in /ready.
+
+volumes:
+  vlogs-data: {}

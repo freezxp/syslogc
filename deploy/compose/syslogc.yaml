@@ -1,0 +1,64 @@
+# Syslogc configuration for the Docker Compose stack.
+# Every scalar key can be overridden with SYSLOGC_* environment variables
+# (see docs/configuration.md). Run `syslogc config print` to see all keys.
+
+node:
+  roles: [all]
+
+server:
+  http:
+    address: ":8080"
+
+log:
+  level: info
+  format: json
+
+storage:
+  type: victorialogs
+  victorialogs:
+    insert_url: http://victorialogs:9428
+    select_url: http://victorialogs:9428
+    stream_fields: [source, hostname, app_name]
+    compression: none
+
+ingestion:
+  queue:
+    max_messages: 500000
+    max_bytes: 256MiB
+  batch:
+    max_rows: 10000
+    max_bytes: 8MiB
+    max_wait: 500ms
+  writers: 4
+  sources:
+    - name: syslog-udp
+      type: syslog
+      protocol: udp
+      address: ":5514"          # published as host port 514/udp
+      format: auto
+      timezone: UTC
+
+    - name: syslog-tcp
+      type: syslog
+      protocol: tcp
+      address: ":5514"          # published as host port 514/tcp
+      format: auto
+      framing: auto
+      max_connections: 2000
+
+    - name: syslog-tls
+      type: syslog
+      protocol: tls
+      address: ":6514"
+      enabled: false            # provide certificates, then enable
+      tls:
+        cert_file: /etc/syslogc/tls/server.crt
+        key_file: /etc/syslogc/tls/server.key
+
+retention:
+  period: 30d                   # keep equal to VictoriaLogs -retentionPeriod
+
+# Phase 1 only: unauthenticated search endpoint used to verify ingestion.
+# Removed once the authenticated query API exists (Phase 3).
+dev:
+  search_endpoint: true

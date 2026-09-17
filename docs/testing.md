@@ -75,8 +75,11 @@ Every adapter's integration test calls it. Cases:
 
 ## 4. Integration tests
 
-Located in `backend/tests/integration`, build tag `integration`, using
-`testcontainers-go` with pinned VictoriaLogs and PostgreSQL images.
+Located in `backend/tests/integration`, build tag `integration`. *(As built:
+tests target `TEST_VICTORIALOGS_URL`, provided by `make vl-up` locally and a
+GitHub Actions service container in CI, instead of `testcontainers-go` — fewer
+dependencies and the same pinned image. Revisit when PostgreSQL joins in
+Phase 2.)*
 
 | Scenario | Path |
 |---|---|
