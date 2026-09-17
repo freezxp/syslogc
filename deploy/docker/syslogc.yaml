@@ -15,6 +15,15 @@ storage:
     insert_url: http://victorialogs:9428
     select_url: http://victorialogs:9428
 
+# Mount secrets (e.g. Docker/Kubernetes secrets) or override with
+# SYSLOGC_METADATA_POSTGRES_DSN / SYSLOGC_AUTH_SECRET_KEY_FILE.
+metadata:
+  postgres:
+    dsn_file: /run/secrets/postgres_dsn
+
+auth:
+  secret_key_file: /run/secrets/secret_key
+
 ingestion:
   sources:
     - name: syslog-udp

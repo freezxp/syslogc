@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,16 @@ func (c *Config) Validate() error {
 
 	if err := validateAddress(c.Server.HTTP.Address); err != nil {
 		add("server.http.address: %v", err)
+	}
+	for _, o := range c.Server.HTTP.AllowedOrigins {
+		if u, err := url.Parse(o); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || (u.Path != "" && u.Path != "/") {
+			add("server.http.allowed_origins: %q must be scheme://host[:port]", o)
+		}
+	}
+	for _, p := range c.Server.HTTP.TrustedProxies {
+		if _, err := ParsePrefixOrAddr(p); err != nil {
+			add("server.http.trusted_proxies: %q: %v", p, err)
+		}
 	}
 
 	switch c.Log.Level {
@@ -91,6 +102,23 @@ func (c *Config) Validate() error {
 	}
 	if in.Limits.MaxFields <= 0 || in.Limits.MaxFieldValueBytes <= 0 || in.Limits.MaxFieldNameBytes <= 0 {
 		add("ingestion.limits: all limits must be positive")
+	}
+
+	pg := c.Metadata.Postgres
+	if c.Node.HasRole(RoleAPI) && pg.DSN == "" && pg.DSNFile == "" {
+		add("metadata.postgres: dsn or dsn_file is required for the api role")
+	}
+	if pg.MaxConns < 1 {
+		add("metadata.postgres.max_conns: must be positive")
+	}
+	if c.Auth.SessionTTL <= 0 || c.Auth.SessionIdleTimeout <= 0 {
+		add("auth: session_ttl and session_idle_timeout must be positive")
+	}
+	if c.Query.MaxTieGroup < 100 || c.Query.MaxTailSessions < 1 {
+		add("query: max_tie_group must be >= 100 and max_tail_sessions >= 1")
+	}
+	if in.HTTP.MaxBodyBytes < 1<<20 || in.HTTP.MaxEvents < 1 || in.HTTP.EnqueueTimeout <= 0 {
+		add("ingestion.http: max_body_bytes >= 1MiB, max_events >= 1 and enqueue_timeout > 0 are required")
 	}
 
 	if c.Retention.Period < Duration(24*time.Hour) {
@@ -245,4 +273,18 @@ func validateAddress(addr string) error {
 		return fmt.Errorf("invalid port in %q", addr)
 	}
 	return nil
+}
+
+// ParsePrefixOrAddr parses a CIDR or a single IP address (as a /32 or /128).
+func ParsePrefixOrAddr(s string) (netip.Prefix, error) {
+	if strings.Contains(s, "/") {
+		p, err := netip.ParsePrefix(s)
+		return p.Masked(), err
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), nil
 }

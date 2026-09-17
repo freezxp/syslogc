@@ -1,7 +1,7 @@
 # Installation
 
-Status: **Phase 1** — covers ingestion and storage. Authentication, the web UI
-and the query API are not available yet; do not expose the HTTP port publicly.
+The web UI and API require login. Serve them over HTTPS (a TLS-terminating
+reverse proxy) before exposing them beyond a trusted network.
 
 ## Docker Compose (single node)
 
@@ -14,14 +14,31 @@ cd syslogc
 docker compose up -d
 docker compose ps          # syslogc should become (healthy)
 curl -s http://127.0.0.1:8080/ready | python3 -m json.tool
+
+# initial administrator password (printed once on first start)
+docker compose logs syslogc | grep -A3 "initial administrator"
 ```
+
+Open `http://<host>:8080`, sign in as `admin` with that password and choose a
+new one.
 
 The stack:
 
 | Service | Image | Ports | Data |
 |---|---|---|---|
-| `syslogc` | built from this repository (`ghcr.io/freezxp/syslogc`) | `514/udp`, `514/tcp` → container `5514`; `127.0.0.1:8080` HTTP | stateless |
-| `victorialogs` | `victoriametrics/victoria-logs:v1.52.0` | internal only | volume `vlogs-data` |
+| `syslogc` | built from this repository (`ghcr.io/freezxp/syslogc`) | `514/udp`, `514/tcp` → container `5514`; `8080` web UI/API | stateless |
+| `init` | same image, runs `syslogc init-secrets` once | — | volume `secrets` |
+| `postgres` | `postgres:17.6-trixie` (users, sessions, saved searches, audit) | internal only | volume `postgres-data` |
+| `victorialogs` | `victoriametrics/victoria-logs:v1.52.0` (logs) | internal only | volume `vlogs-data` |
+
+Environment variables (e.g. in `.env`):
+
+| Variable | Default | |
+|---|---|---|
+| `SYSLOGC_HTTP_BIND` | `0.0.0.0` | Set `127.0.0.1` to keep the UI local (e.g. behind a reverse proxy on the host). |
+| `SYSLOGC_HTTP_PORT` | `8080` | Host port for the UI/API. |
+| `SYSLOGC_AUTH_COOKIE_SECURE` | `false` | Set `true` once the UI is served over HTTPS. |
+| `SYSLOGC_RETENTION` | `30d` | See [Retention](#retention). |
 
 Configuration is mounted from [`deploy/compose/syslogc.yaml`](../deploy/compose/syslogc.yaml).
 
@@ -30,9 +47,45 @@ Configuration is mounted from [`deploy/compose/syslogc.yaml`](../deploy/compose/
 ```bash
 logger --server 127.0.0.1 --udp --port 514 "Test syslog message"
 logger --server 127.0.0.1 --tcp --port 514 --rfc3164 -p local4.err -t vpnd "VPN tunnel down"
-curl -s "http://127.0.0.1:8080/api/v1/dev/search?query=Test&from=15m"
-make e2e    # automated version of the above
+# open the explorer and search for "Test", or run the automated check:
+make e2e    # logs in, searches, tails, exports; see backend/tests/e2e/smoke.sh
 ```
+
+### Reverse proxy
+
+Serve the UI under a hostname with TLS by putting a reverse proxy in front of
+port 8080, and tell Syslogc about it in `.env`:
+
+```bash
+SYSLOGC_ALLOWED_ORIGINS=https://logs.example.com   # public URL(s), comma-separated
+SYSLOGC_TRUSTED_PROXIES=192.168.0.10               # the proxy's address
+SYSLOGC_AUTH_COOKIE_SECURE=false                   # true once plain-HTTP LAN access is not needed
+```
+
+Example nginx server block (SSE for live tail needs buffering off and a long
+read timeout):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name logs.example.com;
+    # ssl_certificate ...; ssl_certificate_key ...;
+    client_max_body_size 20m;
+
+    location / {
+        proxy_pass http://192.168.0.53:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_buffering off;          # live tail (server-sent events) and exports
+        proxy_read_timeout 1h;
+    }
+}
+```
+
+`Secure` session cookies (`SYSLOGC_AUTH_COOKIE_SECURE=true`) stop logins over
+plain `http://<ip>:8080`, so enable them only when all access goes through HTTPS.
 
 ### Retention
 

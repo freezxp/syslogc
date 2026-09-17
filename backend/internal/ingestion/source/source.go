@@ -55,12 +55,14 @@ func New(cfg config.Source, m *metrics.Metrics) (*Settings, error) {
 			return nil, fmt.Errorf("source %s: unsupported protocol %q", cfg.Name, cfg.Protocol)
 		}
 	}
-	switch cfg.Format {
-	case config.FormatAuto:
+	switch {
+	case cfg.Type == config.SourceTypeHTTPJSON:
+		s.Format = logentry.FormatJSON
+	case cfg.Format == config.FormatAuto:
 		s.AutoDetect = true
-	case config.FormatRFC5424:
+	case cfg.Format == config.FormatRFC5424:
 		s.Format = logentry.FormatRFC5424
-	case config.FormatRFC3164:
+	case cfg.Format == config.FormatRFC3164:
 		s.Format = logentry.FormatRFC3164
 	default:
 		return nil, fmt.Errorf("source %s: unsupported format %q", cfg.Name, cfg.Format)

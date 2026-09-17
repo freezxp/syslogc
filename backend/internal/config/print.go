@@ -8,8 +8,7 @@ import (
 )
 
 // YAML renders the effective configuration using configuration key names.
-// Secrets are only ever referenced by file path in configuration, so the
-// output contains no secret values.
+// Fields tagged `redact:"true"` are replaced by "[REDACTED]".
 func (c *Config) YAML() ([]byte, error) {
 	return yaml.Marshal(toTree(reflect.ValueOf(*c)))
 }
@@ -32,8 +31,13 @@ func toTree(v reflect.Value) any {
 	case reflect.Struct:
 		out := make(map[string]any, v.NumField())
 		for i := 0; i < v.NumField(); i++ {
-			tag := v.Type().Field(i).Tag.Get("koanf")
+			sf := v.Type().Field(i)
+			tag := sf.Tag.Get("koanf")
 			if tag == "" || tag == "-" {
+				continue
+			}
+			if sf.Tag.Get("redact") == "true" && !v.Field(i).IsZero() {
+				out[tag] = "[REDACTED]"
 				continue
 			}
 			out[tag] = toTree(v.Field(i))

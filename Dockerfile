@@ -1,11 +1,21 @@
 # syntax=docker/dockerfile:1
 
+# ---- web UI ----------------------------------------------------------------
+FROM node:24.21.0-trixie-slim AS web
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
 # ---- build -------------------------------------------------------------
 FROM golang:1.27.1-trixie AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY backend/ ./
+# The web UI is embedded into the binary (internal/api/webui).
+COPY --from=web /src/frontend/dist/ ./internal/api/webui/dist/
 ARG VERSION=dev
 ARG COMMIT=unknown
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

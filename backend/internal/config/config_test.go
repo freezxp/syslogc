@@ -46,6 +46,9 @@ ingestion:
       enabled: false
 retention:
   period: 14d
+metadata:
+  postgres:
+    dsn: postgres://u:secret@db/syslogc
 `
 
 func TestLoadPrecedence(t *testing.T) {
@@ -189,6 +192,7 @@ func TestLoadUnknownEnv(t *testing.T) {
 
 func TestUDPAndTCPMayShareAPort(t *testing.T) {
 	cfg := Default()
+	cfg.Metadata.Postgres.DSN = "postgres://db/syslogc"
 	cfg.Ingestion.Sources = []Source{
 		{Name: "u", Protocol: "udp", Address: ":514"},
 		{Name: "t", Protocol: "tcp", Address: ":514"},
@@ -244,9 +248,13 @@ func TestYAMLRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := Load(LoadOptions{File: writeYAML(t, string(out)), Environ: []string{}})
+	printed := strings.Replace(string(out), "[REDACTED]", "postgres://u:x@db/syslogc", 1)
+	again, err := Load(LoadOptions{File: writeYAML(t, printed), Environ: []string{}})
 	if err != nil {
 		t.Fatalf("printed config does not load: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "u:secret@") {
+		t.Errorf("DSN not redacted in printed config:\n%s", out)
 	}
 	if again.Retention.Period != cfg.Retention.Period || again.Ingestion.Queue.MaxBytes != cfg.Ingestion.Queue.MaxBytes ||
 		len(again.Ingestion.Sources) != 2 || again.Ingestion.Sources[0].Labels["site"] != "dc1" {

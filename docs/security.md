@@ -235,3 +235,31 @@ default 400 days (configurable), pruned by a background job.
 - Keep VictoriaLogs and PostgreSQL on an internal network; do not publish their ports.
 - Prefer TLS syslog with client certificates for devices that support it.
 - Rotate the bootstrap admin password; create named accounts; restrict Admin role.
+
+## 14. As built (Phases 2–4)
+
+The sections above are the design. Implemented behaviour and known deviations:
+
+| Area | As built |
+|---|---|
+| Passwords | Argon2id PHC hashes with rehash-on-login; policy: 12–256 bytes, must not contain the username, rejected against a bundled list of common passwords (not yet a 100K breach corpus). |
+| Login throttling | Per-IP token bucket (burst 10) plus per-username exponential delay after 5 consecutive failures; identical responses and dummy hashing for unknown users. |
+| Bootstrap | `auth.bootstrap_admin.password_file`, or a generated password printed once to **stderr** with forced change. There is no password environment variable. A principal with `must_change_password` has no permissions until the password is changed. |
+| Sessions | Server-side, SHA-256-hashed token, `slc_session` cookie (`HttpOnly`, `SameSite=Lax`, `Secure` per `auth.cookie_secure`). No per-node session cache yet: one indexed PostgreSQL lookup per request. |
+| CSRF | Synchronizer token (`X-CSRF-Token` header, or `csrf_token` form field for export downloads) **and** `Origin`/`Sec-Fetch-Site` same-origin check on unsafe user requests. API keys are exempt (no ambient credentials). |
+| API keys | `slc_<key_id>_<secret>`; scopes `logs:ingest`, `logs:search`, `logs:tail`, `logs:export`, `logs:query_native`, `system:view`, intersected with the owner's role (`logs:ingest` is granted to keys only). Owner-created only; service keys and admin policy on expiry are not implemented yet. |
+| Native LogsQL | Requires `logs:query_native`. The user text is split at the first top-level `|`; the filter part is AND-ed with the AST filter, time range is passed as `start`/`end`, and server `sort`/`limit`/`fields` pipes are appended after user pipes. The `forbidigo` lint rule is not configured; LogsQL is only built in `internal/storage/victorialogs/compile.go` and `query.go`. |
+| Cursors | HMAC-SHA-256 (truncated to 16 bytes) over the resume timestamp and a hash of tenant, filter, native query, fields and the requested time range. |
+| Export | Streaming CSV/NDJSON/JSON; CSV cells starting with `= + - @ \t \r` are prefixed with `'`; every export is audited. |
+| Audit | Logins (success/failure), password changes, native queries, exports, saved-search and API-key changes; `query.audit_all` adds every search. Retained 400 days. |
+| Headers | `Content-Security-Policy` (`default-src 'self'` for the UI, `default-src 'none'` for API responses), `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. |
+
+### Query limits
+
+| Role | Max range | Max rows/page | Max export rows | Timeout | Concurrent queries | Tail sessions |
+|---|---|---|---|---|---|---|
+| Viewer | 7 days | 1,000 | 100,000 | 30 s | 4 | 2 |
+| Operator | 31 days | 5,000 | 1,000,000 | 60 s | 8 | 5 |
+| Admin | max(retention, 31 days) | 10,000 | 10,000,000 | 120 s | 16 | 10 |
+
+Exceeding concurrency returns `429` with `Retry-After`; timeouts return `504`.

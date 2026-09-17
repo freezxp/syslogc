@@ -1,0 +1,186 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Design tokens. Dark is the default; light is opt-in via data-theme="light". */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --surface: #111418;
+  --surface-2: #161a20;
+  --surface-3: #1d222a;
+  --border: #252b34;
+  --border-strong: #333b47;
+  --fg: #e6e9ee;
+  --fg-muted: #9aa4b2;
+  --fg-subtle: #6b7686;
+  --accent: #4c8dff;
+  --accent-fg: #ffffff;
+  --accent-muted: rgba(76, 141, 255, 0.16);
+  --danger: #f05252;
+  --warning: #f5a524;
+  --success: #3fb67f;
+  --focus: #6aa2ff;
+  --row-hover: rgba(255, 255, 255, 0.035);
+  --row-selected: rgba(76, 141, 255, 0.14);
+  --highlight: rgba(245, 165, 36, 0.35);
+  --sev-emergency: #ff4d6d;
+  --sev-alert: #ff5c5c;
+  --sev-critical: #f2555a;
+  --sev-error: #e5484d;
+  --sev-warning: #f5a524;
+  --sev-notice: #3ab8d4;
+  --sev-info: #7d8fa6;
+  --sev-debug: #5b6573;
+  --sev-other: #8b5cf6;
+  --chart-grid: #1f252d;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --surface-3: #e9edf2;
+  --border: #dde2e8;
+  --border-strong: #c9d0d9;
+  --fg: #151a21;
+  --fg-muted: #5a6573;
+  --fg-subtle: #8a94a3;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --accent-muted: rgba(37, 99, 235, 0.12);
+  --danger: #d92d20;
+  --warning: #b76e00;
+  --success: #12805c;
+  --focus: #2563eb;
+  --row-hover: rgba(0, 0, 0, 0.035);
+  --row-selected: rgba(37, 99, 235, 0.1);
+  --highlight: rgba(245, 165, 36, 0.4);
+  --sev-emergency: #c8102e;
+  --sev-alert: #d62839;
+  --sev-critical: #d92d20;
+  --sev-error: #c52a2a;
+  --sev-warning: #b76e00;
+  --sev-notice: #0e7c93;
+  --sev-info: #52606d;
+  --sev-debug: #8a94a3;
+  --sev-other: #7c3aed;
+  --chart-grid: #e6eaef;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--fg-muted);
+  --color-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-muted: var(--accent-muted);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.4;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+  }
+  ::selection {
+    background: var(--accent-muted);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}
+
+@layer components {
+  .mono {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+    background-size: 200% 100%;
+    animation: skeleton 1.4s ease-in-out infinite;
+    border-radius: 4px;
+  }
+  @keyframes skeleton {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+}
+
+/* CodeMirror inherits the app theme. */
+.cm-editor {
+  background: transparent;
+  font-size: 12.5px;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-content {
+  font-family: var(--font-mono);
+  caret-color: var(--fg);
+}
+.cm-tooltip {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--border-strong) !important;
+  color: var(--fg);
+}
+.cm-tooltip-autocomplete ul li[aria-selected] {
+  background: var(--accent-muted) !important;
+  color: var(--fg) !important;
+}
+.cm-diagnostic-error {
+  border-left-color: var(--danger) !important;
+}
+.recharts-wrapper,
+.recharts-surface {
+  outline: none;
+}

@@ -19,7 +19,41 @@ type Config struct {
 	Ingestion IngestionConfig `koanf:"ingestion"`
 	Retention RetentionConfig `koanf:"retention"`
 	Shutdown  ShutdownConfig  `koanf:"shutdown"`
-	Dev       DevConfig       `koanf:"dev"`
+	Metadata  MetadataConfig  `koanf:"metadata"`
+	Auth      AuthConfig      `koanf:"auth"`
+	Query     QueryConfig     `koanf:"query"`
+}
+
+type MetadataConfig struct {
+	Postgres PostgresConfig `koanf:"postgres"`
+}
+
+type PostgresConfig struct {
+	// DSN is a PostgreSQL connection string. Prefer DSNFile for secrets.
+	DSN      string `koanf:"dsn" redact:"true"`
+	DSNFile  string `koanf:"dsn_file"`
+	MaxConns int    `koanf:"max_conns"`
+}
+
+type AuthConfig struct {
+	// SecretKeyFile holds at least 32 random bytes used to sign cursors.
+	// All API nodes must share it. Generated in memory when empty.
+	SecretKeyFile      string          `koanf:"secret_key_file"`
+	SessionTTL         Duration        `koanf:"session_ttl"`
+	SessionIdleTimeout Duration        `koanf:"session_idle_timeout"`
+	CookieSecure       bool            `koanf:"cookie_secure"`
+	BootstrapAdmin     BootstrapConfig `koanf:"bootstrap_admin"`
+}
+
+type BootstrapConfig struct {
+	Username     string `koanf:"username"`
+	PasswordFile string `koanf:"password_file"`
+}
+
+type QueryConfig struct {
+	MaxTieGroup     int  `koanf:"max_tie_group"`
+	MaxTailSessions int  `koanf:"max_tail_sessions"`
+	AuditAll        bool `koanf:"audit_all"`
 }
 
 // Role names a runtime role of the process.
@@ -54,6 +88,13 @@ type HTTPConfig struct {
 	Address           string   `koanf:"address"`
 	ReadHeaderTimeout Duration `koanf:"read_header_timeout"`
 	IdleTimeout       Duration `koanf:"idle_timeout"`
+	// AllowedOrigins lists extra browser origins (scheme://host[:port]) accepted
+	// for state-changing requests, e.g. the public URL of a reverse proxy that
+	// does not preserve the Host header.
+	AllowedOrigins []string `koanf:"allowed_origins"`
+	// TrustedProxies lists proxy addresses/CIDRs whose X-Forwarded-For header
+	// is trusted to determine the client IP.
+	TrustedProxies []string `koanf:"trusted_proxies"`
 }
 
 type LogConfig struct {
@@ -80,15 +121,22 @@ type VictoriaLogsConfig struct {
 }
 
 type IngestionConfig struct {
-	Queue        QueueConfig  `koanf:"queue"`
-	ParseWorkers int          `koanf:"parse_workers"`
-	Batch        BatchConfig  `koanf:"batch"`
-	Writers      int          `koanf:"writers"`
-	BatchQueue   int          `koanf:"batch_queue"`
-	Retry        RetryConfig  `koanf:"retry"`
-	Time         TimeConfig   `koanf:"time"`
-	Limits       LimitsConfig `koanf:"limits"`
-	Sources      []Source     `koanf:"sources"`
+	Queue        QueueConfig      `koanf:"queue"`
+	ParseWorkers int              `koanf:"parse_workers"`
+	Batch        BatchConfig      `koanf:"batch"`
+	Writers      int              `koanf:"writers"`
+	BatchQueue   int              `koanf:"batch_queue"`
+	Retry        RetryConfig      `koanf:"retry"`
+	Time         TimeConfig       `koanf:"time"`
+	Limits       LimitsConfig     `koanf:"limits"`
+	HTTP         HTTPIngestConfig `koanf:"http"`
+	Sources      []Source         `koanf:"sources"`
+}
+
+type HTTPIngestConfig struct {
+	MaxBodyBytes   ByteSize `koanf:"max_body_bytes"`
+	MaxEvents      int      `koanf:"max_events"`
+	EnqueueTimeout Duration `koanf:"enqueue_timeout"`
 }
 
 type QueueConfig struct {
@@ -203,14 +251,6 @@ type RetentionConfig struct {
 type ShutdownConfig struct {
 	DrainDelay Duration `koanf:"drain_delay"`
 	Timeout    Duration `koanf:"timeout"`
-}
-
-// DevConfig holds development-only switches. None of them may be enabled
-// in production: they bypass authentication.
-type DevConfig struct {
-	// SearchEndpoint enables the unauthenticated GET /api/v1/dev/search
-	// endpoint (Phase 1 vertical slice; removed once the query API exists).
-	SearchEndpoint bool `koanf:"search_endpoint"`
 }
 
 // Duration is a time.Duration that also accepts a "d" (day) suffix, e.g. "30d".

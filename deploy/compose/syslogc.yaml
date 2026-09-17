@@ -46,6 +46,9 @@ ingestion:
       framing: auto
       max_connections: 2000
 
+    - name: http-json
+      type: http_json           # POST /api/v1/ingest with an API key
+
     - name: syslog-tls
       type: syslog
       protocol: tls
@@ -58,7 +61,12 @@ ingestion:
 retention:
   period: 30d                   # keep equal to VictoriaLogs -retentionPeriod
 
-# Phase 1 only: unauthenticated search endpoint used to verify ingestion.
-# Removed once the authenticated query API exists (Phase 3).
-dev:
-  search_endpoint: true
+metadata:
+  postgres:
+    dsn_file: /secrets/postgres_dsn
+
+auth:
+  secret_key_file: /secrets/secret_key
+  cookie_secure: false          # compose default is plain HTTP; see docker-compose.yml
+  bootstrap_admin:
+    username: admin             # generated password is printed once in the logs

@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/app"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/logentry"
+	"github.com/freezxp/syslogc/backend/internal/metadata/postgres/pgtest"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 	"github.com/freezxp/syslogc/backend/internal/storage/victorialogs"
 )
@@ -152,6 +155,11 @@ func TestWriteSearchRoundTrip(t *testing.T) {
 
 func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	t.Helper()
+	_, dsn := pgtest.OpenDSN(t)
+	secretDir := t.TempDir()
+	adminPw := filepath.Join(secretDir, "admin")
+	_ = os.WriteFile(adminPw, []byte(adminPassword), 0o600)
+
 	cfg := config.Default()
 	cfg.Node.ID = "integration"
 	cfg.Server.HTTP.Address = "127.0.0.1:0"
@@ -160,10 +168,13 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	cfg.Ingestion.Batch.MaxWait = config.Duration(100 * time.Millisecond)
 	cfg.Shutdown.DrainDelay = 0
 	cfg.Shutdown.Timeout = config.Duration(10 * time.Second)
-	cfg.Dev.SearchEndpoint = true
+	cfg.Metadata.Postgres.DSN = dsn
+	cfg.Auth.BootstrapAdmin.PasswordFile = adminPw
+	cfg.Auth.CookieSecure = false
 	cfg.Ingestion.Sources = []config.Source{
 		{Name: "it-udp", Protocol: "udp", Address: "127.0.0.1:0", UDP: config.UDPConfig{Sockets: 2}},
 		{Name: "it-tcp", Protocol: "tcp", Address: "127.0.0.1:0", Labels: map[string]string{"site": "lab"}},
+		{Name: "it-http", Type: "http_json"},
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -175,11 +186,12 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	if testing.Verbose() {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	}
-	a, err := app.New(&cfg, app.BuildInfo{Version: "test"}, log)
+	ctx, cancel := context.WithCancel(context.Background())
+	a, err := app.New(ctx, &cfg, app.BuildInfo{Version: "test"}, log)
 	if err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan struct{})
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx, func() { close(ready) }) }()
@@ -187,7 +199,7 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	case <-ready:
 	case err := <-done:
 		t.Fatalf("app exited during startup: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("app did not start")
 	}
 	t.Cleanup(func() {
@@ -199,10 +211,23 @@ func startApp(t *testing.T, mutate func(*config.Config)) *app.App {
 	return a
 }
 
+const adminPassword = "it-bootstrap-secret-9471"
+
 // applyDefaultsAndValidate mimics config.Load for programmatic configs.
 func applyDefaultsAndValidate(cfg *config.Config) error {
-	path := writeTemp(cfg)
-	loaded, err := config.Load(config.LoadOptions{File: path, Environ: []string{}})
+	dsn := cfg.Metadata.Postgres.DSN
+	out, err := cfg.YAML()
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp("", "syslogc-it-*.yaml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	_, _ = f.Write([]byte(strings.Replace(string(out), "[REDACTED]", dsn, 1)))
+	_ = f.Close()
+	loaded, err := config.Load(config.LoadOptions{File: f.Name(), Environ: []string{}})
 	if err != nil {
 		return err
 	}
@@ -210,18 +235,50 @@ func applyDefaultsAndValidate(cfg *config.Config) error {
 	return nil
 }
 
-func writeTemp(cfg *config.Config) string {
-	out, err := cfg.YAML()
-	if err != nil {
-		panic(err)
+// sendUDP writes a datagram and resends it until the source counts it.
+// UDP has no delivery guarantee: loopback datagrams are dropped when the
+// receive buffer is full, which happens on small CI machines.
+func sendUDP(t *testing.T, a *app.App, conn net.Conn, msg string) {
+	t.Helper()
+	want := udpReceived(t, a) + 1
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := io.WriteString(conn, msg); err != nil {
+			t.Fatal(err)
+		}
+		for until := time.Now().Add(2 * time.Second); time.Now().Before(until); {
+			if udpReceived(t, a) >= want {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("UDP datagram not received after retries: %s", msg)
+		}
 	}
-	f, err := os.CreateTemp("", "syslogc-it-*.yaml")
+}
+
+// udpReceived returns messages received by the it-udp source.
+func udpReceived(t *testing.T, a *app.App) int {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("http://%s/metrics", a.Server().Addr()))
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
-	defer f.Close()
-	_, _ = f.Write(out)
-	return f.Name()
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	for line := range strings.Lines(string(body)) {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), `syslogc_ingest_messages_received_total{protocol="udp",source="it-udp"} `)
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", line, err)
+		}
+		return n
+	}
+	return 0
 }
 
 // TestSyslogToStorage covers Syslog → Parser → Normalizer → Storage over
@@ -237,8 +294,10 @@ func TestSyslogToStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer udp.Close()
-	fmt.Fprintf(udp, "<165>1 2026-09-14T10:00:00.5Z fw01 vpnd 812 TUNNEL [meta@1 vpn=\"HQ-VPN\"] udp5424 %s", id)
-	fmt.Fprintf(udp, "<38>%s web-1 sshd[4021]: udp3164 %s", time.Now().UTC().Format("Jan _2 15:04:05"), id)
+	// A recent timestamp: the search window below is relative to now.
+	ts5424 := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05.9Z")
+	sendUDP(t, a, udp, fmt.Sprintf("<165>1 %s fw01 vpnd 812 TUNNEL [meta@1 vpn=\"HQ-VPN\"] udp5424 %s", ts5424, id))
+	sendUDP(t, a, udp, fmt.Sprintf("<38>%s web-1 sshd[4021]: udp3164 %s", time.Now().UTC().Format("Jan _2 15:04:05"), id))
 
 	tcp, err := net.Dial("tcp", tcpAddr)
 	if err != nil {
@@ -269,7 +328,7 @@ func TestSyslogToStorage(t *testing.T) {
 	expect := map[string]map[string]string{
 		"udp5424": {"format": "rfc5424", "protocol": "udp", "source": "it-udp", "hostname": "fw01", "app_name": "vpnd",
 			"process_id": "812", "message_id": "TUNNEL", "facility": "local4", "severity": "notice", "sd.meta@1.vpn": "HQ-VPN",
-			"_time": "2026-09-14T10:00:00.5Z", "source_ip": "127.0.0.1"},
+			"_time": ts5424, "source_ip": "127.0.0.1"},
 		"udp3164":  {"format": "rfc3164", "hostname": "web-1", "app_name": "sshd", "process_id": "4021", "facility": "auth", "severity": "info"},
 		"tcpoctet": {"format": "rfc5424", "protocol": "tcp", "source": "it-tcp", "app_name": "app", "time_source": "received", "labels.site": "lab"},
 		"tcplf":    {"format": "rfc3164", "hostname": "db01", "app_name": "postgres", "severity": "error"},
@@ -294,16 +353,15 @@ func TestSyslogToStorage(t *testing.T) {
 		}
 	}
 
-	// The same data through the HTTP dev search endpoint.
-	url := fmt.Sprintf("http://%s/api/v1/dev/search?query=%s&from=48h&fields=_msg,hostname", a.Server().Addr(), id)
-	resp, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	// The same data through the authenticated search API.
+	c := login(t, a)
+	resp, body := c.post(t, "/api/v1/logs/search", map[string]any{
+		"time_range": map[string]string{"from": "now-48h", "to": "now+1h"},
+		"filter":     map[string]any{"op": "text", "value": id},
+		"fields":     []string{"timestamp", "message", "hostname"},
+	})
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":6`) || strings.Contains(string(body), "raw_message") {
-		t.Errorf("dev search: HTTP %d %s", resp.StatusCode, body)
+		t.Errorf("search API: HTTP %d %s", resp.StatusCode, body)
 	}
 
 	// Readiness and metrics reflect the ingestion.
@@ -321,6 +379,7 @@ func TestSyslogToStorage(t *testing.T) {
 	resp.Body.Close()
 	for _, want := range []string{
 		`syslogc_ingest_messages_stored_total{source="it-tcp"} 4`,
+		`syslogc_storage_reachable{backend="victorialogs"} 1`,
 		`syslogc_ingest_messages_stored_total{source="it-udp"} 2`,
 		`syslogc_storage_healthy{backend="victorialogs"} 1`,
 	} {

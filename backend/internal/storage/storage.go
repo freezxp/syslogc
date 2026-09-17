@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/logentry"
+	"github.com/freezxp/syslogc/backend/internal/storage/filter"
 )
 
 // Backend is implemented once per storage engine.
@@ -51,12 +52,28 @@ type LogWriter interface {
 	WriteBatch(ctx context.Context, batch *logentry.Batch) error
 }
 
-// LogQuerier reads logs. The Phase 1 surface is intentionally minimal; the
-// full query API (filter AST, histograms, facets, fields, tail, export)
-// arrives in Phase 3.
+// LogQuerier reads logs. Aggregations are computed by the backend, never by
+// scanning rows in the application.
 type LogQuerier interface {
-	// Search returns up to q.Limit matching rows, newest first.
+	// Describe compiles the selection to native query text (for display) and
+	// reports whether the native part contains pipes (tabular results).
+	Describe(sel Selection) (native string, hasPipes bool, err error)
+	// Search returns up to q.Limit matching rows, newest first. The
+	// selection must not contain pipes.
 	Search(ctx context.Context, q SearchQuery) (Rows, error)
+	// Table runs a selection whose native part has pipes and returns up to
+	// q.Limit result rows.
+	Table(ctx context.Context, q SearchQuery) (Rows, error)
+	// Hits returns bucketed counts, optionally split by a field.
+	Hits(ctx context.Context, q HitsQuery) ([]HitsSeries, error)
+	// Top returns the most frequent non-empty values of a field.
+	Top(ctx context.Context, q TopQuery) ([]ValueCount, error)
+	// Count counts matching rows, or distinct values of DistinctField.
+	Count(ctx context.Context, q CountQuery) (int64, error)
+	// FieldNames lists field names present in the selection. Counts may be approximate.
+	FieldNames(ctx context.Context, sel Selection) ([]FieldInfo, error)
+	// Tail streams rows ingested after the call until ctx is done.
+	Tail(ctx context.Context, q TailQuery) (Rows, error)
 }
 
 // Admin exposes operational information about the backend.
@@ -88,12 +105,70 @@ type NativeQuery struct {
 	Text    string
 }
 
-// Selection is shared by all read queries.
+// Selection is shared by all read queries. Filter and Native are AND-ed.
 type Selection struct {
 	Tenant string
 	Range  TimeRange
+	Filter *filter.Expr
 	Native *NativeQuery
 }
+
+// HitsQuery requests bucketed counts.
+type HitsQuery struct {
+	Selection
+	Step time.Duration
+	// Offset shifts bucket boundaries (e.g. to align days to a timezone).
+	Offset time.Duration
+	// Field splits counts by its values; empty means no split.
+	Field      string
+	FieldLimit int
+}
+
+// HitsSeries is one series of bucket counts.
+type HitsSeries struct {
+	// Value is the split field value; Other marks the merged remainder.
+	Value      string
+	Other      bool
+	Timestamps []time.Time
+	Counts     []int64
+	Total      int64
+}
+
+// TopQuery requests the most frequent values of a field.
+type TopQuery struct {
+	Selection
+	Field string
+	Limit int
+	// Search keeps only values containing this substring (case-insensitive).
+	Search string
+}
+
+// ValueCount is a value with its number of occurrences.
+type ValueCount struct {
+	Value string
+	Count int64
+}
+
+// CountQuery counts rows or distinct values.
+type CountQuery struct {
+	Selection
+	DistinctField string
+}
+
+// FieldInfo describes a field present in stored logs.
+type FieldInfo struct {
+	Name  string
+	Count int64
+}
+
+// TailQuery selects rows for live tailing. Selection.Range is ignored.
+type TailQuery struct {
+	Selection
+	StartOffset time.Duration
+}
+
+// ErrPipesNotAllowed is returned when a query type cannot run pipes.
+var ErrPipesNotAllowed = errors.New("native query pipes are not allowed here")
 
 // SearchQuery selects log rows.
 type SearchQuery struct {

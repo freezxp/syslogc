@@ -50,9 +50,31 @@ type Supervisor struct {
 	metrics *metrics.Metrics
 	log     *slog.Logger
 
-	mu      sync.RWMutex
-	running map[string]*running
-	status  map[string]Status
+	mu         sync.RWMutex
+	running    map[string]*running
+	status     map[string]Status
+	httpSource *source.Settings
+}
+
+// HTTPSource returns the enabled http_json source, or nil.
+func (s *Supervisor) HTTPSource() *source.Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.httpSource
+}
+
+// SourceSettings returns the runtime settings of all started sources.
+func (s *Supervisor) SourceSettings() []*source.Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*source.Settings
+	for _, r := range s.running {
+		out = append(out, r.settings)
+	}
+	if s.httpSource != nil {
+		out = append(out, s.httpSource)
+	}
+	return out
 }
 
 func New(sink listener.Sink, m *metrics.Metrics, log *slog.Logger) *Supervisor {
@@ -76,10 +98,17 @@ func (s *Supervisor) Start(sources []config.Source) {
 		switch {
 		case !sc.IsEnabled():
 			st.State = StateDisabled
-		case sc.Type != config.SourceTypeSyslog:
-			// http_json sources are served by the API HTTP server (Phase 2).
-			st.State = StateStopped
-			st.Error = "http_json sources are not available until HTTP ingestion is implemented"
+		case sc.Type == config.SourceTypeHTTPJSON:
+			settings, err := source.New(sc, s.metrics)
+			switch {
+			case err != nil:
+				st.State, st.Error = StateError, err.Error()
+			case s.httpSource != nil:
+				st.State, st.Error = StateError, "only one http_json source is supported; "+s.httpSource.Name+" is active"
+			default:
+				s.httpSource = settings
+				st.State, st.Protocol, st.Address = StateRunning, "http", "POST /api/v1/ingest"
+			}
 		default:
 			r, err := s.start(sc)
 			if err != nil {
@@ -140,6 +169,12 @@ func (s *Supervisor) Stop(ctx context.Context) {
 	}
 	wg.Wait()
 	s.running = make(map[string]*running)
+	if s.httpSource != nil {
+		st := s.status[s.httpSource.Name]
+		st.State, st.Since = StateStopped, time.Now()
+		s.status[s.httpSource.Name] = st
+		s.httpSource = nil
+	}
 }
 
 // Statuses returns all source statuses sorted by name.
@@ -161,7 +196,7 @@ func (s *Supervisor) Ready() bool {
 	defer s.mu.RUnlock()
 	wanted := 0
 	for _, st := range s.status {
-		if st.State == StateRunning || st.State == StateError {
+		if st.Type == config.SourceTypeSyslog && (st.State == StateRunning || st.State == StateError) {
 			wanted++
 		}
 	}

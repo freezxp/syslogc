@@ -124,6 +124,16 @@ func TestApplyFieldRules(t *testing.T) {
 	}
 }
 
+func TestPayloadSourceIPKeepsPeer(t *testing.T) {
+	n := defaultNormalizer()
+	e := newEntry()
+	e.SourceIP = netip.MustParseAddr("10.10.10.20")
+	n.Apply(e, &Source{Name: "http"}, &Meta{ReceivedAt: recv, Peer: netip.MustParseAddrPort("192.0.2.7:443")})
+	if e.SourceIP.String() != "10.10.10.20" || e.PeerIP.String() != "192.0.2.7" || e.SourcePort != 0 {
+		t.Errorf("source=%s peer=%s port=%d", e.SourceIP, e.PeerIP, e.SourcePort)
+	}
+}
+
 func TestApplyInvalidUTF8(t *testing.T) {
 	n := defaultNormalizer()
 	e := newEntry()
