@@ -39,9 +39,11 @@ src/
 - Exports stream to disk with the File System Access API when available, otherwise fall back to a blob or a
   form POST (`request` JSON + `csrf_token` fields).
 - No `dangerouslySetInnerHTML` (enforced by ESLint); log values are rendered as text only.
-- `src/api/operations.ts` hand-writes the paths and schemas for the sources, users, audit, retention and
-  analytics endpoints, which `docs/openapi.yaml` does not describe yet, and intersects them into the client's
-  `paths` so `npm run gen:api` cannot drop them. Fold them into the generated schema once the spec catches up.
+- `src/api/operations.ts` hand-writes the paths and schemas for the sources, users, audit and retention
+  endpoints, which `docs/openapi.yaml` does not describe yet, and intersects them into the client's `paths`
+  so `npm run gen:api` cannot drop them. Fold them into the generated schema once the spec catches up.
+  The analytics types live there too; the spec gained those endpoints in the same phase, so they can move to
+  the generated schema at the next `npm run gen:api`.
 - Analytics (`/analytics`) reuses the explorer's query bar and time picker; its own URL params are
   `group,metric,mfield,top` (codec and comparison logic in `src/features/analytics/analytics-query.ts`). The
   previous-period comparison runs the breakdown a second time over the window immediately before the current
