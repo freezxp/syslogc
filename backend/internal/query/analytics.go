@@ -245,15 +245,14 @@ func (s *Service) Series(ctx context.Context, p *auth.Principal, req SeriesReque
 	}
 
 	resp := emptySeries(r, step, req)
-	// Buckets are aligned to the step, so the first one can start before the
-	// range; only buckets inside the range are charted.
+	// Buckets are aligned to the step, so the first one usually starts before
+	// the range. It is kept: it holds only rows inside the range (the query is
+	// bounded), and dropping it would hide up to a step's worth of data and
+	// make the points disagree with the totals. The histogram does the same.
 	index := map[int64]int{}
 	for t := r.sel.Range.Start.Truncate(step); t.Before(r.sel.Range.End); t = t.Add(step) {
-		if t.Before(r.sel.Range.Start) {
-			continue
-		}
 		index[t.UnixNano()] = len(resp.Timestamps)
-		resp.Timestamps = append(resp.Timestamps, t)
+		resp.Timestamps = append(resp.Timestamps, t.UTC())
 	}
 	series := map[string]*SeriesGroup{}
 	for _, row := range rows {

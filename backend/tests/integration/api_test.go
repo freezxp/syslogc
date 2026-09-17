@@ -455,6 +455,30 @@ func TestAnalyticsAgainstVictoriaLogs(t *testing.T) {
 	if total != 60 {
 		t.Errorf("series total = %v, want 60", total)
 	}
+	// A window that starts inside a bucket keeps that partial bucket, so the
+	// points still account for every matching log.
+	resp, body = c.post(t, "/api/v1/analytics/series", map[string]any{
+		"time_range": map[string]string{"from": time.Now().UTC().Add(-91 * time.Second).Format(time.RFC3339Nano), "to": "now+1m"},
+		"filter":     sel["filter"], "group_by": "hostname", "buckets": 4})
+	var partial struct {
+		Groups []struct {
+			Total  float64   `json:"total"`
+			Points []float64 `json:"points"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(body, &partial); err != nil || resp.StatusCode != http.StatusOK || len(partial.Groups) == 0 {
+		t.Fatalf("partial-bucket series: %d %s", resp.StatusCode, body)
+	}
+	for _, g := range partial.Groups {
+		sum := 0.0
+		for _, p := range g.Points {
+			sum += p
+		}
+		if sum != g.Total {
+			t.Errorf("points sum to %v but the total is %v: data hidden in the leading bucket", sum, g.Total)
+		}
+	}
+
 	// A distinct-count series reports the distinct count over the whole
 	// range, not the sum of per-bucket counts (the same client recurs).
 	resp, body = c.post(t, "/api/v1/analytics/series", map[string]any{"time_range": sel["time_range"],
