@@ -38,9 +38,10 @@ not exist.
 | [configuration.md](configuration.md) | Phase 1 ✔ |
 | [syslog.md](syslog.md) | Phase 1 ✔ |
 | [development.md](development.md) | Phase 1 ✔ |
-| `json-ingestion.md` | Phase 2 |
-| `querying.md` | Phase 3 |
-| `openapi.yaml` | Phase 2 (auth + ingest), completed Phase 3 |
-| `dashboards.md` | Phase 4 |
-| `troubleshooting.md` | Phase 5 |
+| [json-ingestion.md](json-ingestion.md) | Phase 2 ✔ |
+| [querying.md](querying.md) | Phase 3 ✔ |
+| [openapi.yaml](openapi.yaml) | Phase 2 (auth + ingest), completed Phase 3 ✔, extended Phase 5 |
+| [operations.md](operations.md) | Phase 5 ✔ (sources, users, retention, monitoring, backups) |
+| [troubleshooting.md](troubleshooting.md) | Phase 5 ✔ |
+| `dashboards.md` | folded into the UI; the dashboard is documented in [frontend.md](frontend.md) |
 | `performance.md` | Phase 6 (benchmark results only — no unmeasured claims) |

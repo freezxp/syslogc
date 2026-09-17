@@ -54,6 +54,8 @@ preserving sender IP addresses.
 | [Installation](docs/installation.md) | Compose, host networking, TLS, upgrades |
 | [Configuration](docs/configuration.md) | Every setting, environment variables, sources |
 | [Syslog ingestion](docs/syslog.md) | Formats, framing, field mapping, sender examples |
+| [Operations](docs/operations.md) | Sources, users, retention, monitoring, backups |
+| [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes and checks |
 | [JSON ingestion](docs/json-ingestion.md) | HTTP ingest API, API keys, field mapping |
 | [Querying](docs/querying.md) | Filters, LogsQL, pagination, tail, export |
 | [API reference](docs/openapi.yaml) | OpenAPI 3.1 |

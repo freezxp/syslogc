@@ -36,6 +36,9 @@ tags:
   - name: dashboard
   - name: saved-searches
   - name: api-keys
+  - name: sources
+  - name: users
+  - name: audit
   - name: ingest
   - name: system
 
@@ -473,6 +476,181 @@ paths:
             Retry-After: {schema: {type: integer}}
           content: {application/json: {schema: {$ref: "#/components/schemas/IngestResponse"}}}
 
+  /api/v1/sources:
+    get:
+      tags: [sources]
+      summary: List sources from the configuration file and the database
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sources]
+                properties:
+                  sources: {type: array, items: {$ref: "#/components/schemas/Source"}}
+    post:
+      tags: [sources]
+      summary: Create a database-managed source
+      description: |
+        Requires `sources:manage`. The source starts within five seconds
+        without restarting the node. Names and bind addresses must not clash
+        with the configuration file or another managed source.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/SourceInput"}}}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/Source"}}}}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/sources/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      tags: [sources]
+      summary: Read one database-managed source
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/Source"}}}}
+        "404": {$ref: "#/components/responses/Problem"}
+    put:
+      tags: [sources]
+      summary: Update a source (optimistic concurrency on `version`)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/SourceInput"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/Source"}}}}
+        "409": {description: Modified by someone else, content: {application/problem+json: {schema: {$ref: "#/components/schemas/Problem"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [sources]
+      summary: Delete a source and stop its listener
+      responses:
+        "204": {description: Deleted}
+        "404": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/users:
+    get:
+      tags: [users]
+      summary: List users (requires `users:manage`)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users: {type: array, items: {$ref: "#/components/schemas/User"}}
+    post:
+      tags: [users]
+      summary: Create a user
+      description: Without `password` the server generates one and returns it once as `generated_password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, role]
+              properties:
+                username: {type: string, minLength: 1, maxLength: 128}
+                display_name: {type: string, maxLength: 128}
+                role: {type: string, enum: [admin, operator, viewer]}
+                password: {type: string, minLength: 12}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}
+        "409": {$ref: "#/components/responses/Problem"}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/users/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    put:
+      tags: [users]
+      summary: Change a user's profile, role, state or password
+      description: |
+        You cannot change your own role or disable your own account.
+        Disabling a user, or resetting their password, ends all their sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: {type: string}
+                role: {type: string, enum: [admin, operator, viewer]}
+                disabled: {type: boolean}
+                new_password: {type: string, minLength: 12}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [users]
+      summary: Delete a user (not yourself, not the last administrator)
+      responses:
+        "204": {description: Deleted}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/users/{id}/revoke-sessions:
+    post:
+      tags: [users]
+      summary: Sign a user out of every session
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+      responses:
+        "204": {description: Sessions revoked}
+
+  /api/v1/audit:
+    get:
+      tags: [audit]
+      summary: Read the audit log (requires `audit:view`)
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 200}}
+        - {name: action, in: query, schema: {type: string}}
+        - {name: actor, in: query, schema: {type: string}}
+        - {name: outcome, in: query, schema: {type: string, enum: [success, failure]}}
+        - {name: since, in: query, schema: {type: string, format: date-time}}
+        - {name: before, in: query, schema: {type: string, format: date-time}}
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events: {type: array, items: {$ref: "#/components/schemas/AuditEvent"}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/system/config:
+    get:
+      tags: [system]
+      summary: Effective configuration of this node, with secrets redacted
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [node, yaml]
+                properties:
+                  node: {type: string}
+                  yaml: {type: string}
+
+  /api/v1/system/retention:
+    get:
+      tags: [system]
+      summary: Retention settings, drift status and storage usage
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/RetentionStatus"}}}}
+
   /api/v1/system/health:
     get:
       tags: [system]
@@ -567,8 +745,113 @@ components:
         display_name: {type: string}
         role: {$ref: "#/components/schemas/Role"}
         must_change_password: {type: boolean}
+        disabled: {type: boolean}
+        generated_password:
+          type: string
+          description: Returned once when an administrator created the account without choosing a password.
         created_at: {type: string, format: date-time}
         last_login_at: {type: [string, "null"], format: date-time}
+
+    SourceConfig:
+      type: object
+      description: |
+        A source definition, identical to an entry under `ingestion.sources`
+        in the configuration file. Durations ("10m") and sizes ("64KiB") are
+        strings. Defaults are applied by the server.
+      required: [name, type]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 128}
+        type: {type: string, enum: [syslog, http_json]}
+        protocol: {type: string, enum: [udp, tcp, tls]}
+        address: {type: string, description: "host:port to bind (syslog only)"}
+        format: {type: string, enum: [auto, rfc5424, rfc3164]}
+        timezone: {type: string, description: IANA name for RFC 3164 timestamps without an offset}
+        allowed_cidrs: {type: array, items: {type: string}}
+        max_message_bytes: {type: string}
+        raw_message: {type: string, enum: [always, on_error, never]}
+        hostname_fallback: {type: string, enum: [none, ip]}
+        sd_flatten: {type: string, enum: [full, short]}
+        labels: {type: object, additionalProperties: {type: string}}
+        tenant: {type: string}
+        framing: {type: string, enum: [auto, octet_counting, lf, nul]}
+        max_connections: {type: integer}
+        idle_timeout: {type: string}
+        udp:
+          type: object
+          properties:
+            sockets: {type: integer, description: "SO_REUSEPORT sockets (0 = CPU count)"}
+            read_buffer_bytes: {type: string}
+        tls:
+          type: object
+          properties:
+            cert_file: {type: string}
+            key_file: {type: string}
+            min_version: {type: string, enum: ["1.2", "1.3"]}
+            client_auth: {type: string, enum: [none, request, require_and_verify]}
+            client_ca_file: {type: string}
+
+    SourceStatusDetail:
+      allOf:
+        - $ref: "#/components/schemas/SourceStatus"
+        - type: object
+          properties:
+            origin: {type: string, enum: [file, database]}
+
+    Source:
+      type: object
+      required: [config, enabled, origin]
+      properties:
+        id: {type: string, format: uuid, description: Absent for configuration-file sources}
+        config: {$ref: "#/components/schemas/SourceConfig"}
+        enabled: {type: boolean}
+        origin:
+          type: string
+          enum: [file, database]
+          description: "`file` sources are read-only and win any name or address conflict."
+        status: {$ref: "#/components/schemas/SourceStatusDetail"}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        version: {type: integer}
+
+    SourceInput:
+      type: object
+      required: [config]
+      properties:
+        config: {$ref: "#/components/schemas/SourceConfig"}
+        enabled: {type: boolean, default: true}
+        version: {type: integer, description: Required on update; rejected with 409 when stale}
+
+    AuditEvent:
+      type: object
+      required: [id, time, actor_type, action, outcome]
+      properties:
+        id: {type: string, format: uuid}
+        time: {type: string, format: date-time}
+        actor_type: {type: string, enum: [user, api_key, anonymous, system]}
+        actor_id: {type: string, format: uuid}
+        actor_name: {type: string}
+        ip: {type: string}
+        user_agent: {type: string}
+        action: {type: string, example: sources.update}
+        outcome: {type: string, enum: [success, failure]}
+        details: {type: object, additionalProperties: true}
+        request_id: {type: string}
+
+    RetentionStatus:
+      type: object
+      required: [configured, backend, instructions]
+      properties:
+        configured: {type: string, example: 30d}
+        backend: {type: string, example: victorialogs}
+        instructions: {type: string}
+        status:
+          type: object
+          description: Drift between the configured period and the storage backend.
+          properties:
+            configured: {type: string}
+            backend: {type: string}
+            status: {type: string, enum: [in_sync, drift, unknown]}
+        usage: {$ref: "#/components/schemas/StorageUsage"}
 
     Session:
       type: object
