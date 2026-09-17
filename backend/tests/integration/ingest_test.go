@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,52 @@ func applyDefaultsAndValidate(cfg *config.Config) error {
 	return nil
 }
 
+// sendUDP writes a datagram and resends it until the source counts it.
+// UDP has no delivery guarantee: loopback datagrams are dropped when the
+// receive buffer is full, which happens on small CI machines.
+func sendUDP(t *testing.T, a *app.App, conn net.Conn, msg string) {
+	t.Helper()
+	want := udpReceived(t, a) + 1
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, err := io.WriteString(conn, msg); err != nil {
+			t.Fatal(err)
+		}
+		for until := time.Now().Add(2 * time.Second); time.Now().Before(until); {
+			if udpReceived(t, a) >= want {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("UDP datagram not received after retries: %s", msg)
+		}
+	}
+}
+
+// udpReceived returns messages received by the it-udp source.
+func udpReceived(t *testing.T, a *app.App) int {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("http://%s/metrics", a.Server().Addr()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	for line := range strings.Lines(string(body)) {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), `syslogc_ingest_messages_received_total{protocol="udp",source="it-udp"} `)
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(rest)
+		if err != nil {
+			t.Fatalf("parsing %q: %v", line, err)
+		}
+		return n
+	}
+	return 0
+}
+
 // TestSyslogToStorage covers Syslog → Parser → Normalizer → Storage over
 // UDP and TCP (both framings), then verifies through the dev search API.
 func TestSyslogToStorage(t *testing.T) {
@@ -247,8 +294,10 @@ func TestSyslogToStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer udp.Close()
-	fmt.Fprintf(udp, "<165>1 2026-09-14T10:00:00.5Z fw01 vpnd 812 TUNNEL [meta@1 vpn=\"HQ-VPN\"] udp5424 %s", id)
-	fmt.Fprintf(udp, "<38>%s web-1 sshd[4021]: udp3164 %s", time.Now().UTC().Format("Jan _2 15:04:05"), id)
+	// A recent timestamp: the search window below is relative to now.
+	ts5424 := time.Now().UTC().Add(-time.Minute).Format("2006-01-02T15:04:05.9Z")
+	sendUDP(t, a, udp, fmt.Sprintf("<165>1 %s fw01 vpnd 812 TUNNEL [meta@1 vpn=\"HQ-VPN\"] udp5424 %s", ts5424, id))
+	sendUDP(t, a, udp, fmt.Sprintf("<38>%s web-1 sshd[4021]: udp3164 %s", time.Now().UTC().Format("Jan _2 15:04:05"), id))
 
 	tcp, err := net.Dial("tcp", tcpAddr)
 	if err != nil {
@@ -279,7 +328,7 @@ func TestSyslogToStorage(t *testing.T) {
 	expect := map[string]map[string]string{
 		"udp5424": {"format": "rfc5424", "protocol": "udp", "source": "it-udp", "hostname": "fw01", "app_name": "vpnd",
 			"process_id": "812", "message_id": "TUNNEL", "facility": "local4", "severity": "notice", "sd.meta@1.vpn": "HQ-VPN",
-			"_time": "2026-09-14T10:00:00.5Z", "source_ip": "127.0.0.1"},
+			"_time": ts5424, "source_ip": "127.0.0.1"},
 		"udp3164":  {"format": "rfc3164", "hostname": "web-1", "app_name": "sshd", "process_id": "4021", "facility": "auth", "severity": "info"},
 		"tcpoctet": {"format": "rfc5424", "protocol": "tcp", "source": "it-tcp", "app_name": "app", "time_source": "received", "labels.site": "lab"},
 		"tcplf":    {"format": "rfc3164", "hostname": "db01", "app_name": "postgres", "severity": "error"},
