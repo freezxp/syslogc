@@ -203,11 +203,16 @@ docs: add installation, configuration and syslog guides
 9. Docs: `troubleshooting.md`, operations sections in `installation.md`.
 
 **Exit criteria (MVP):**
-- [ ] All 14 DoD items pass in E2E on a fresh `docker compose up -d`.
-- [ ] Source created in UI starts receiving within 5 s without restart; disabling stops the listener.
-- [ ] Security checklist: ZAP baseline clean (no high), permission matrix, audit events for all listed actions.
-- [ ] Documentation set from brief §45 complete except `performance.md`.
-- [ ] Release `v0.1.0` tagged with signed multi-arch images.
+- [x] All 14 DoD items pass end to end on the Compose stack — `backend/tests/e2e/smoke.sh`, plus a scripted Chromium walkthrough of all 15 pages against the real backend with no console or API errors.
+- [x] Source created in the UI starts receiving without a restart, and disabling stops the listener — verified in the UI (running within a second, a log sent to the new port was searchable under its source name) and in `TestManagedSourceLifecycle`.
+- [x] Security checklist: ZAP baseline 0 failures (2 informational warnings, see [security.md](security.md#baseline-scan)), route × role permission matrix green, audit events for every listed action.
+- [x] Documentation set complete, including `performance.md`.
+- [ ] Release `v0.1.0` tagged with signed multi-arch images — **not done**: no registry credentials or signing key in this environment.
+
+**As built (deviations):** sources are managed through the API and UI with
+PostgreSQL `NOTIFY` plus a five-second poll; per-node source status is
+reported, but a per-source "test" action was not built. The audit viewer
+filters by action, actor, outcome and time rather than paging a cursor.
 
 ---
 

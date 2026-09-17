@@ -254,6 +254,21 @@ The sections above are the design. Implemented behaviour and known deviations:
 | Audit | Logins (success/failure), password changes, native queries, exports, saved-search and API-key changes; `query.audit_all` adds every search. Retained 400 days. |
 | Headers | `Content-Security-Policy` (`default-src 'self'` for the UI, `default-src 'none'` for API responses), `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`. |
 
+### Baseline scan
+
+OWASP ZAP baseline (`zap-baseline.py -t http://host:8080`), 2026-09-17
+against the Compose stack: **0 failures**, 59 passing rules, 2 warnings:
+
+- `CSP: style-src unsafe-inline` — accepted. The UI's chart and editor
+  libraries set inline styles; `script-src` stays `'self'` with no
+  `unsafe-inline` or `unsafe-eval`.
+- `Modern Web Application` — informational (the scanner notes that a SPA's
+  links are not all crawlable).
+
+The baseline scan covers the unauthenticated surface, which is the login
+page plus `/health`, `/ready` and `/metrics`. Authenticated endpoints are
+covered by the route × role permission tests instead.
+
 ### Query limits
 
 | Role | Max range | Max rows/page | Max export rows | Timeout | Concurrent queries | Tail sessions |
