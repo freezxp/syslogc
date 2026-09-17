@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---- web UI ----------------------------------------------------------------
-FROM node:24.21.0-trixie-slim AS web
+# Built once on the build machine's architecture: the output is static assets.
+FROM --platform=$BUILDPLATFORM node:24.21.0-trixie-slim AS web
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
@@ -9,7 +10,9 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- build -------------------------------------------------------------
-FROM golang:1.27.1-trixie AS build
+# Go cross-compiles, so the build stage also runs natively and targets
+# $TARGETARCH. That keeps multi-architecture builds fast (no emulation).
+FROM --platform=$BUILDPLATFORM golang:1.27.1-trixie AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -18,11 +21,13 @@ COPY backend/ ./
 COPY --from=web /src/frontend/dist/ ./internal/api/webui/dist/
 ARG VERSION=dev
 ARG COMMIT=unknown
+ARG TARGETOS
+ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
       -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
       -o /out/syslogc ./cmd/syslogc && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/loggen ./cmd/loggen
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/loggen ./cmd/loggen
 
 # ---- loggen (synthetic traffic generator) -------------------------------
 FROM gcr.io/distroless/static-debian13:nonroot AS loggen
