@@ -207,6 +207,9 @@ roadmap Phases 1–5 (see [roadmap.md](roadmap.md#mvp-and-the-definition-of-done
 
 ### 4.1 Performance (NFR-PERF)
 
+Measured status for each target is in [performance.md](performance.md#against-the-stated-requirements);
+figures below are goals, not claims.
+
 All numbers are **targets to be verified by benchmark** (Phase 6). No figure
 may be published as a capability until measured per [testing.md](testing.md#8-benchmark-methodology).
 

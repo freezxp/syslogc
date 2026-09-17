@@ -51,6 +51,12 @@ logger --server 127.0.0.1 --tcp --port 514 --rfc3164 -p local4.err -t vpnd "VPN 
 make e2e    # logs in, searches, tails, exports; see backend/tests/e2e/smoke.sh
 ```
 
+### Monitoring and backups
+
+See [operations](operations.md) for the Prometheus alert rules, the Grafana
+dashboard (`docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d`)
+and the backup scripts in `deploy/backup/`.
+
 ### Reverse proxy
 
 Serve the UI under a hostname with TLS by putting a reverse proxy in front of

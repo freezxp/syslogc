@@ -184,3 +184,83 @@ func TestAuditAndNodeStats(t *testing.T) {
 		t.Errorf("deleted %d", n)
 	}
 }
+
+func TestSources(t *testing.T) {
+	s := pgtest.Open(t)
+	ctx := context.Background()
+	src := &metadata.Source{Tenant: "default", Name: "branch", Config: json.RawMessage(`{"type":"syslog"}`), Enabled: true}
+	if err := s.CreateSource(ctx, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateSource(ctx, &metadata.Source{Tenant: "default", Name: "BRANCH", Config: json.RawMessage(`{}`)}); !errors.Is(err, metadata.ErrConflict) {
+		t.Errorf("duplicate name (case-insensitive): %v", err)
+	}
+	got, err := s.SourceByID(ctx, "default", src.ID)
+	if err != nil || got.Name != "branch" || !got.Enabled || got.Version != 1 {
+		t.Fatalf("read back: %+v %v", got, err)
+	}
+	list, err := s.ListSources(ctx, "default")
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+
+	stale := *got
+	got.Enabled = false
+	got.Config = json.RawMessage(`{"type":"syslog","protocol":"tcp"}`)
+	if err := s.UpdateSource(ctx, got); err != nil || got.Version != 2 {
+		t.Fatalf("update: %v version=%d", err, got.Version)
+	}
+	if err := s.UpdateSource(ctx, &stale); !errors.Is(err, metadata.ErrVersionConflict) {
+		t.Errorf("stale update: %v", err)
+	}
+	if err := s.DeleteSource(ctx, "default", src.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSource(ctx, "default", src.ID); !errors.Is(err, metadata.ErrNotFound) {
+		t.Errorf("delete twice: %v", err)
+	}
+}
+
+func TestUserAdministrationAndAudit(t *testing.T) {
+	s := pgtest.Open(t)
+	ctx := context.Background()
+	u := &metadata.User{Tenant: "default", Username: "dana", PasswordHash: "x", Role: "viewer"}
+	if err := s.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	u.Role, u.DisplayName, u.Disabled = "operator", "Dana", true
+	if err := s.UpdateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	users, err := s.ListUsers(ctx, "default")
+	if err != nil || len(users) != 1 || users[0].Role != "operator" || !users[0].Disabled || users[0].DisplayName != "Dana" {
+		t.Fatalf("list users: %+v %v", users, err)
+	}
+
+	for i, action := range []string{"auth.login", "users.create", "auth.login"} {
+		e := &metadata.AuditEvent{Tenant: "default", ActorType: "user", ActorName: "admin", Action: action,
+			Outcome: "success", Time: time.Now().Add(-time.Duration(i) * time.Hour)}
+		if err := s.InsertAuditEvent(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := s.ListAuditEvents(ctx, metadata.ListAuditEvents{Tenant: "default", Limit: 10})
+	if err != nil || len(all) != 3 || !all[0].Time.After(all[1].Time) {
+		t.Fatalf("list audit: %d events %v", len(all), err)
+	}
+	byAction, err := s.ListAuditEvents(ctx, metadata.ListAuditEvents{Tenant: "default", Action: "users.create", Limit: 10})
+	if err != nil || len(byAction) != 1 {
+		t.Errorf("filter by action: %d events %v", len(byAction), err)
+	}
+	recent, err := s.ListAuditEvents(ctx, metadata.ListAuditEvents{Tenant: "default", Since: time.Now().Add(-90 * time.Minute), Limit: 10})
+	if err != nil || len(recent) != 2 {
+		t.Errorf("filter by time: %d events %v", len(recent), err)
+	}
+
+	if err := s.DeleteUser(ctx, "default", u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UserByID(ctx, u.ID); !errors.Is(err, metadata.ErrNotFound) {
+		t.Errorf("deleted user: %v", err)
+	}
+}

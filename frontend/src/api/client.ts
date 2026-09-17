@@ -1,7 +1,11 @@
 import createClient, { type Middleware } from 'openapi-fetch'
 
+import type { OperationsPaths } from './operations'
 import type { paths } from './schema'
 import type { Problem } from './types'
+
+/** Generated paths plus the hand-written operations endpoints. */
+export type ApiPaths = paths & OperationsPaths
 
 /** Error thrown for non-2xx API responses, carrying RFC 9457 problem details when present. */
 export class ApiError extends Error {
@@ -53,7 +57,7 @@ const middleware: Middleware = {
   },
 }
 
-export const client = createClient<paths>({
+export const client = createClient<ApiPaths>({
   baseUrl: typeof window === 'undefined' ? 'http://localhost' : window.location.origin,
   credentials: 'same-origin',
 })

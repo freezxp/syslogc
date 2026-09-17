@@ -95,6 +95,32 @@ try {
   await page.goto(`${base}/searches`)
   await page.getByText('VPN Failures').waitFor()
   await shot('saved-searches')
+
+  await page.goto(`${base}/sources`)
+  await page.getByTestId('source-name').first().waitFor()
+  await shot('sources')
+
+  await page.getByTestId('source-name').filter({ hasText: 'edge-tls' }).click()
+  await page.waitForURL(/\/sources\//)
+  await page.getByLabel('Certificate file').waitFor()
+  await shot('source-detail')
+
+  await page.goto(`${base}/users`)
+  await page.getByText('Alice Chen').waitFor()
+  await shot('users')
+
+  await page.goto(`${base}/audit?from=now-24h&to=now`)
+  await page.getByTestId('audit-row').first().waitFor()
+  await page.getByTestId('audit-row').nth(1).click()
+  await shot('audit')
+
+  await page.goto(`${base}/settings`)
+  await page.getByText('Changing retention').waitFor()
+  await shot('settings-retention')
+
+  await page.goto(`${base}/settings?tab=config`)
+  await page.getByText('victorialogs:').waitFor()
+  await shot('settings-config')
 } finally {
   await browser.close()
   server?.kill()

@@ -1,7 +1,21 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useNavigate } from '@tanstack/react-router'
 import { Command } from 'cmdk'
-import { Clock, Keyboard, KeyRound, LayoutDashboard, Moon, Radio, Search, Server, Star } from 'lucide-react'
+import {
+  Clock,
+  Cog,
+  Keyboard,
+  KeyRound,
+  LayoutDashboard,
+  Moon,
+  Network,
+  Radio,
+  ScrollText,
+  Search,
+  Server,
+  Star,
+  Users,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import { useSavedSearches } from '@/api/hooks'
@@ -62,6 +76,11 @@ export function CommandPalette({
                 <Item icon={<Star />} onSelect={close(() => navigate({ to: '/searches' }))}>
                   Saved searches
                 </Item>
+                {can('sources:read') && (
+                  <Item icon={<Network />} onSelect={close(() => navigate({ to: '/sources' }))}>
+                    Sources
+                  </Item>
+                )}
                 {can('system:view') && (
                   <Item icon={<Server />} onSelect={close(() => navigate({ to: '/system' }))}>
                     System health
@@ -70,6 +89,21 @@ export function CommandPalette({
                 <Item icon={<KeyRound />} onSelect={close(() => navigate({ to: '/settings/api-keys' }))}>
                   API keys
                 </Item>
+                {can('users:manage') && (
+                  <Item icon={<Users />} onSelect={close(() => navigate({ to: '/users' }))}>
+                    Users
+                  </Item>
+                )}
+                {can('audit:view') && (
+                  <Item icon={<ScrollText />} onSelect={close(() => navigate({ to: '/audit' }))}>
+                    Audit log
+                  </Item>
+                )}
+                {can('system:view') && (
+                  <Item icon={<Cog />} onSelect={close(() => navigate({ to: '/settings' }))}>
+                    Settings &amp; retention
+                  </Item>
+                )}
               </Group>
               {can('logs:search') && (
                 <Group heading="Search logs in…">

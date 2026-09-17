@@ -36,6 +36,18 @@ export const timeSearchSchema = z.object({
 })
 export type TimeSearch = z.infer<typeof timeSearchSchema>
 
+export const auditSearchSchema = z.object({
+  from: str('now-24h'),
+  to: str('now'),
+  action: optStr(),
+  actor: optStr(),
+  outcome: z._default(z.catch(z.enum(['', 'success', 'failure']), ''), ''),
+  // Search params are always strings; the numeric range is checked when the
+  // API query is built.
+  limit: str('200'),
+})
+export type AuditSearch = z.infer<typeof auditSearchSchema>
+
 export function parseColumns(cols: string | undefined): string[] {
   if (!cols) return DEFAULT_COLUMNS
   const list = cols

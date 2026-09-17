@@ -2,7 +2,9 @@
 import { delay, http, HttpResponse } from 'msw'
 
 import type {
+  AdminUser,
   ApiKey,
+  AuditEvent,
   ExportRequest,
   FacetsRequest,
   FieldInfo,
@@ -10,7 +12,9 @@ import type {
   FilterExpr,
   HistogramRequest,
   LogRow,
+  ManagedSource,
   Problem,
+  SourceInput,
   SavedSearch,
   SavedSearchInput,
   SearchRequest,
@@ -18,6 +22,8 @@ import type {
   Session,
   StatsRequest,
   TimeRange,
+  UserCreateInput,
+  UserUpdateInput,
 } from '@/api/types'
 import { CORE_FIELDS, getField } from '@/lib/fields'
 import { formatFilter } from '@/lib/filter-text'
@@ -58,8 +64,10 @@ const SESSION: Session = {
     'searches:read',
     'searches:write',
     'sources:read',
+    'sources:manage',
     'system:view',
     'config:view',
+    'retention:manage',
     'apikeys:own',
     'apikeys:manage',
     'users:manage',
@@ -283,6 +291,213 @@ let apiKeys: ApiKey[] = [
     last_used_at: new Date(NOW - 120_000).toISOString(),
   },
 ]
+
+const FILE_SOURCES: ManagedSource[] = [
+  {
+    config: {
+      name: 'syslog-udp',
+      type: 'syslog',
+      protocol: 'udp',
+      address: '[::]:5514',
+      format: 'auto',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      max_message_bytes: '65535',
+      udp: { sockets: 4, read_buffer_bytes: '8MiB' },
+    },
+    enabled: true,
+    origin: 'file',
+    status: {
+      name: 'syslog-udp',
+      type: 'syslog',
+      protocol: 'udp',
+      address: '[::]:5514',
+      state: 'running',
+      since: new Date(NOW - 3 * 86400_000).toISOString(),
+      origin: 'file',
+    },
+  },
+  {
+    config: {
+      name: 'syslog-tcp',
+      type: 'syslog',
+      protocol: 'tcp',
+      address: '[::]:5514',
+      format: 'auto',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'none',
+      sd_flatten: 'full',
+      framing: 'auto',
+      max_connections: 2000,
+      idle_timeout: '10m',
+    },
+    enabled: true,
+    origin: 'file',
+    status: {
+      name: 'syslog-tcp',
+      type: 'syslog',
+      protocol: 'tcp',
+      address: '[::]:5514',
+      state: 'running',
+      since: new Date(NOW - 3 * 86400_000).toISOString(),
+      origin: 'file',
+    },
+  },
+  {
+    config: { name: 'http-json', type: 'http_json', format: 'auto', timezone: 'UTC', raw_message: 'never' },
+    enabled: true,
+    origin: 'file',
+    status: {
+      name: 'http-json',
+      type: 'http_json',
+      protocol: 'http',
+      state: 'running',
+      since: new Date(NOW - 3 * 86400_000).toISOString(),
+      origin: 'file',
+    },
+  },
+]
+
+let managedSources: ManagedSource[] = [
+  {
+    id: '0192f0c4-3333-7000-8000-000000000001',
+    config: {
+      name: 'branch-office',
+      type: 'syslog',
+      protocol: 'tcp',
+      address: '0.0.0.0:6514',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      allowed_cidrs: ['10.20.0.0/16'],
+      labels: { site: 'dc2', env: 'prod' },
+      framing: 'octet_counting',
+      max_connections: 500,
+      idle_timeout: '5m',
+    },
+    enabled: true,
+    origin: 'database',
+    status: {
+      name: 'branch-office',
+      type: 'syslog',
+      protocol: 'tcp',
+      address: '0.0.0.0:6514',
+      state: 'running',
+      since: new Date(NOW - 26 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 8 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 26 * 3600_000).toISOString(),
+    version: 3,
+  },
+  {
+    id: '0192f0c4-3333-7000-8000-000000000002',
+    config: {
+      name: 'edge-tls',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6515',
+      format: 'auto',
+      timezone: 'UTC',
+      raw_message: 'always',
+      hostname_fallback: 'none',
+      sd_flatten: 'full',
+      tls: { cert_file: '/etc/syslogc/tls/edge.crt', key_file: '/etc/syslogc/tls/edge.key', min_version: '1.2' },
+    },
+    enabled: true,
+    origin: 'database',
+    status: {
+      name: 'edge-tls',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6515',
+      state: 'error',
+      error: 'open /etc/syslogc/tls/edge.key: no such file or directory',
+      since: new Date(NOW - 45 * 60_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 2 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 45 * 60_000).toISOString(),
+    version: 1,
+  },
+]
+
+let users: AdminUser[] = [
+  {
+    id: SESSION.user.id,
+    username: 'admin',
+    display_name: 'Administrator',
+    role: 'admin',
+    must_change_password: false,
+    created_at: new Date(NOW - 30 * 86400_000).toISOString(),
+    last_login_at: new Date(NOW - 3600_000).toISOString(),
+  },
+  {
+    id: '0192f0c4-0000-7000-8000-000000000002',
+    username: 'alice',
+    display_name: 'Alice Chen',
+    role: 'operator',
+    must_change_password: false,
+    created_at: new Date(NOW - 21 * 86400_000).toISOString(),
+    last_login_at: new Date(NOW - 5 * 3600_000).toISOString(),
+  },
+  {
+    id: '0192f0c4-0000-7000-8000-000000000003',
+    username: 'bob',
+    display_name: 'Bob Novak',
+    role: 'viewer',
+    must_change_password: true,
+    created_at: new Date(NOW - 2 * 86400_000).toISOString(),
+    last_login_at: null,
+  },
+  {
+    id: '0192f0c4-0000-7000-8000-000000000004',
+    username: 'contractor',
+    role: 'viewer',
+    must_change_password: false,
+    disabled: true,
+    created_at: new Date(NOW - 90 * 86400_000).toISOString(),
+    last_login_at: new Date(NOW - 40 * 86400_000).toISOString(),
+  },
+]
+
+const AUDIT_SEED: [number, string, string, string, unknown][] = [
+  [2, 'admin', 'sources.update', 'success', { source: 'edge-tls', id: '0192f0c4-3333-7000-8000-000000000002' }],
+  [14, 'alice', 'logs.export', 'success', { format: 'csv', rows: 48210, filter: 'severity in (error, critical)' }],
+  [38, 'admin', 'users.create', 'success', { user: 'bob', role: 'viewer' }],
+  [55, 'bob', 'auth.login', 'failure', { username: 'bob', reason: 'invalid credentials' }],
+  [61, 'bob', 'auth.login', 'success', {}],
+  [90, 'alice', 'saved_search.update', 'success', { name: 'VPN Failures', id: '0192f0c4-1111-7000-8000-000000000001' }],
+  [140, 'admin', 'apikey.create', 'success', { name: 'vector-shippers', scopes: ['logs:ingest'] }],
+  [190, 'alice', 'logs.query_native', 'success', { dialect: 'logsql', text: 'app_name:=nginx | stats count()' }],
+  [260, 'admin', 'sources.create', 'success', { source: 'branch-office' }],
+  [320, 'admin', 'users.revoke_sessions', 'success', { id: '0192f0c4-0000-7000-8000-000000000004' }],
+  [400, 'admin', 'auth.password_change', 'success', {}],
+  [480, 'contractor', 'auth.login', 'failure', { username: 'contractor', reason: 'account disabled' }],
+]
+
+const auditEvents: AuditEvent[] = AUDIT_SEED.map(([minutes, actor, action, outcome, details], i) => ({
+  id: `0192f0c4-4444-7000-8000-${String(i + 1).padStart(12, '0')}`,
+  time: new Date(NOW - minutes * 60_000).toISOString(),
+  actor_type: 'user',
+  actor_id: users.find((u) => u.username === actor)?.id,
+  actor_name: actor,
+  ip: ['198.51.100.14', '203.0.113.7', '10.20.3.41'][i % 3],
+  user_agent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/141.0 Safari/537.36',
+  action,
+  outcome,
+  details,
+  request_id: `mock-${(i + 1).toString(16).padStart(8, '0')}`,
+}))
+
+function validationProblem(pointer: string, message: string) {
+  return problem(422, 'validation_failed', 'Validation failed', message, { errors: [{ pointer, message }] })
+}
 
 function requireAuth(): Response | null {
   return loggedIn ? null : unauthenticated()
@@ -780,4 +995,240 @@ export const handlers = [
         retention: { configured: '30d', backend: '30d', status: 'in_sync' },
       }),
   ),
+  http.get(
+    api('/system/retention'),
+    () =>
+      requireAuth() ??
+      HttpResponse.json({
+        configured: '30d',
+        backend: 'victorialogs',
+        instructions:
+          'Retention is enforced by the storage backend. Set the same period in both places: ' +
+          'VictoriaLogs -retentionPeriod (SYSLOGC_RETENTION in the Compose stack) and retention.period ' +
+          'in the Syslogc configuration, then restart both.',
+        status: { configured: '30d', backend: '45d', status: 'drift' },
+        usage: {
+          compressed_bytes: 38_400_000_000,
+          uncompressed_bytes: 412_000_000_000,
+          free_disk_bytes: 610_000_000_000,
+          total_disk_bytes: 1_000_000_000_000,
+        },
+      }),
+  ),
+  http.get(
+    api('/system/config'),
+    () =>
+      requireAuth() ??
+      HttpResponse.json({
+        node: 'syslogc-01',
+        yaml: MOCK_CONFIG_YAML,
+      }),
+  ),
+
+  http.get(
+    api('/sources'),
+    () => requireAuth() ?? HttpResponse.json({ sources: [...FILE_SOURCES, ...managedSources] }),
+  ),
+  http.get(api('/sources/:id'), ({ params }) => {
+    const s = managedSources.find((x) => x.id === params.id)
+    return s ? HttpResponse.json(s) : problem(404, 'not_found', 'Not found', 'no such source')
+  }),
+  http.post(api('/sources'), async ({ request }) => {
+    const body = (await request.json()) as SourceInput
+    const invalid = sourceValidationError(body, null)
+    if (invalid) return invalid
+    const now = new Date().toISOString()
+    const s: ManagedSource = {
+      id: crypto.randomUUID(),
+      config: body.config,
+      enabled: body.enabled ?? true,
+      origin: 'database',
+      created_at: now,
+      updated_at: now,
+      version: 1,
+    }
+    managedSources = [...managedSources, s]
+    // The supervisor starts listeners asynchronously; report the state the UI
+    // polls for only after a short delay, like the real server.
+    setTimeout(() => {
+      managedSources = managedSources.map((x) =>
+        x.id === s.id
+          ? {
+              ...x,
+              status: {
+                name: x.config.name,
+                type: x.config.type,
+                protocol: x.config.protocol,
+                address: x.config.address,
+                state: x.enabled ? 'running' : 'disabled',
+                since: new Date().toISOString(),
+                origin: 'database',
+              },
+            }
+          : x,
+      )
+    }, 2500)
+    return HttpResponse.json(s, { status: 201 })
+  }),
+  http.put(api('/sources/:id'), async ({ request, params }) => {
+    const body = (await request.json()) as SourceInput
+    const s = managedSources.find((x) => x.id === params.id)
+    if (!s) return problem(404, 'not_found', 'Not found', 'no such source')
+    if (s.version !== body.version)
+      return problem(409, 'version_conflict', 'Conflict', 'the source was modified by someone else; reload it')
+    const invalid = sourceValidationError(body, s.id ?? null)
+    if (invalid) return invalid
+    const updated: ManagedSource = {
+      ...s,
+      config: body.config,
+      enabled: body.enabled ?? s.enabled,
+      updated_at: new Date().toISOString(),
+      version: (s.version ?? 1) + 1,
+      status: {
+        name: body.config.name,
+        type: body.config.type,
+        protocol: body.config.protocol,
+        address: body.config.address,
+        state: body.enabled === false ? 'disabled' : 'running',
+        since: new Date().toISOString(),
+        origin: 'database',
+      },
+    }
+    managedSources = managedSources.map((x) => (x.id === s.id ? updated : x))
+    return HttpResponse.json(updated)
+  }),
+  http.delete(api('/sources/:id'), ({ params }) => {
+    managedSources = managedSources.filter((x) => x.id !== params.id)
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  http.get(api('/users'), () => requireAuth() ?? HttpResponse.json({ users })),
+  http.post(api('/users'), async ({ request }) => {
+    const body = (await request.json()) as UserCreateInput
+    if (users.some((u) => u.username === body.username))
+      return problem(409, 'conflict', 'Conflict', `a user named "${body.username}" already exists`)
+    if (body.password && body.password.length < 12)
+      return validationProblem('/password', 'password must be at least 12 characters')
+    const u: AdminUser = {
+      id: crypto.randomUUID(),
+      username: body.username,
+      display_name: body.display_name,
+      role: body.role,
+      must_change_password: true,
+      created_at: new Date().toISOString(),
+      last_login_at: null,
+      generated_password: body.password ? undefined : 'rk7-' + btoa(crypto.randomUUID()).slice(0, 16),
+    }
+    users = [...users, { ...u, generated_password: undefined }]
+    return HttpResponse.json(u, { status: 201 })
+  }),
+  http.put(api('/users/:id'), async ({ request, params }) => {
+    const body = (await request.json()) as UserUpdateInput
+    const u = users.find((x) => x.id === params.id)
+    if (!u) return problem(404, 'not_found', 'Not found', 'no such user')
+    const self = u.id === SESSION.user.id
+    if (self && body.role && body.role !== u.role) return validationProblem('/role', 'you cannot change your own role')
+    if (self && body.disabled) return validationProblem('/disabled', 'you cannot disable your own account')
+    if (body.new_password && body.new_password.length < 12)
+      return validationProblem('/new_password', 'password must be at least 12 characters')
+    const updated: AdminUser = {
+      ...u,
+      display_name: body.display_name ?? u.display_name,
+      role: body.role ?? u.role,
+      disabled: body.disabled ?? u.disabled,
+      must_change_password: body.new_password ? true : u.must_change_password,
+    }
+    users = users.map((x) => (x.id === u.id ? updated : x))
+    return HttpResponse.json(updated)
+  }),
+  http.delete(api('/users/:id'), ({ params }) => {
+    const u = users.find((x) => x.id === params.id)
+    if (!u) return problem(404, 'not_found', 'Not found', 'no such user')
+    if (u.id === SESSION.user.id) return validationProblem('/id', 'you cannot delete your own account')
+    if (u.role === 'admin' && users.filter((x) => x.role === 'admin' && !x.disabled).length <= 1)
+      return validationProblem('/id', 'the last administrator cannot be deleted')
+    users = users.filter((x) => x.id !== u.id)
+    return new HttpResponse(null, { status: 204 })
+  }),
+  http.post(api('/users/:id/revoke-sessions'), () => new HttpResponse(null, { status: 204 })),
+
+  http.get(api('/audit'), ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const p = new URL(request.url).searchParams
+    const since = p.get('since') ? Date.parse(p.get('since')!) : -Infinity
+    const before = p.get('before') ? Date.parse(p.get('before')!) : Infinity
+    const events = auditEvents
+      .filter((e) => {
+        const t = Date.parse(e.time)
+        if (t < since || t >= before) return false
+        if (p.get('action') && !e.action.includes(p.get('action')!)) return false
+        if (p.get('actor') && !(e.actor_name ?? '').includes(p.get('actor')!)) return false
+        if (p.get('outcome') && e.outcome !== p.get('outcome')) return false
+        return true
+      })
+      .slice(0, Number(p.get('limit') ?? 200))
+    return HttpResponse.json({ events })
+  }),
 ]
+
+/** Mirrors the few server-side checks the source editor surfaces inline. */
+function sourceValidationError(body: SourceInput, selfId: string | null): Response | null {
+  const c = body.config
+  const complaints: string[] = []
+  if (!c.name) complaints.push('source: name is required')
+  if (c.type === 'syslog') {
+    if (!c.address) complaints.push('source: address: missing port')
+    if (c.protocol === 'tls' && (!c.tls?.cert_file || !c.tls?.key_file))
+      complaints.push('source: tls.cert_file and tls.key_file are required for tls sources')
+    if (c.protocol === 'udp' && c.max_message_bytes && Number(c.max_message_bytes) > 65535)
+      complaints.push('source: max_message_bytes cannot exceed 65535 for udp')
+  }
+  const clash = [...FILE_SOURCES, ...managedSources].find(
+    (s) => s.id !== selfId && s.config.name.toLowerCase() === c.name.toLowerCase(),
+  )
+  if (clash) complaints.push(`source: name is already used by source "${clash.config.name}"`)
+  if (complaints.length === 0) return null
+  return validationProblem('/config', complaints.join('; '))
+}
+
+const MOCK_CONFIG_YAML = `node:
+  id: syslogc-01
+  roles: [all]
+server:
+  http:
+    address: :8080
+    read_timeout: 15s
+ingestion:
+  queue:
+    capacity_messages: 500000
+    capacity_bytes: 256MiB
+  sources:
+    - name: syslog-udp
+      type: syslog
+      protocol: udp
+      address: "[::]:5514"
+      max_message_bytes: 65535
+      hostname_fallback: ip
+    - name: syslog-tcp
+      type: syslog
+      protocol: tcp
+      address: "[::]:5514"
+      framing: auto
+      idle_timeout: 10m
+    - name: http-json
+      type: http_json
+      raw_message: never
+storage:
+  victorialogs:
+    insert_url: http://victorialogs:9428
+    select_url: http://victorialogs:9428
+metadata:
+  postgres:
+    dsn: "postgres://syslogc:***@postgres:5432/syslogc?sslmode=disable"
+auth:
+  session_ttl: 12h
+  cookie_secure: true
+retention:
+  period: 30d
+`
