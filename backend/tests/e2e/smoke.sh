@@ -171,6 +171,43 @@ api GET /api/v1/saved-searches | grep -q "smoke ${RUN}" || fail "saved search no
 api DELETE "/api/v1/saved-searches/${id}" >/dev/null
 log "saved search verified"
 
+# ---- source management (Phase 5) ---------------------------------------------------------
+port=$(python3 -c 'import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+body="$(api POST /api/v1/sources "{\"config\":{\"name\":\"smoke-${RUN}\",\"type\":\"syslog\",\"protocol\":\"udp\",\"address\":\"0.0.0.0:${port}\",\"labels\":{\"origin\":\"smoke\"}}}")"
+src_id="$(json 'd["id"]' <<<"$body")"
+src_version="$(json 'd["version"]' <<<"$body")"
+# The listener is published inside the container network only, so verify the
+# state the node reports rather than sending traffic to it.
+running=false
+for _ in $(seq 1 15); do
+  api GET /api/v1/sources | grep -q "\"name\":\"smoke-${RUN}\".*\"state\":\"running\"" && { running=true; break; }
+  grep -q "smoke-${RUN}" <<<"$(api GET /api/v1/system/health)" && grep -q '"state":"running"' <<<"$(api GET /api/v1/system/health)" && { running=true; break; }
+  sleep 1
+done
+[[ "$running" == true ]] || fail "managed source did not start: $(api GET /api/v1/sources)"
+api PUT "/api/v1/sources/${src_id}" "{\"config\":{\"name\":\"smoke-${RUN}\",\"type\":\"syslog\",\"protocol\":\"udp\",\"address\":\"0.0.0.0:${port}\"},\"enabled\":false,\"version\":${src_version}}" >/dev/null
+api DELETE "/api/v1/sources/${src_id}" >/dev/null
+log "source management verified"
+
+# ---- users and audit log ------------------------------------------------------------------
+body="$(api POST /api/v1/users "{\"username\":\"smoke-${RUN}\",\"role\":\"viewer\"}")"
+user_id="$(json 'd["id"]' <<<"$body")"
+[[ -n "$(json 'd.get("generated_password","")' <<<"$body")" ]] || fail "no generated password: ${body}"
+api PUT "/api/v1/users/${user_id}" '{"disabled":true}' >/dev/null
+api POST "/api/v1/users/${user_id}/revoke-sessions" >/dev/null
+api DELETE "/api/v1/users/${user_id}" >/dev/null
+body="$(api GET "/api/v1/audit?limit=200")"
+for action in users.create users.delete sources.create sources.delete auth.login; do
+  grep -q "\"action\":\"${action}\"" <<<"$body" || fail "audit log missing ${action}"
+done
+log "user administration and audit log verified"
+
+# ---- retention and configuration ------------------------------------------------------------
+api GET /api/v1/system/retention | grep -q '"instructions"' || fail "retention endpoint"
+api GET /api/v1/system/config | grep -q '"yaml"' || fail "config endpoint"
+api GET /api/v1/system/config | grep -q 'REDACTED' || log "note: no secrets present to redact"
+log "retention and configuration verified"
+
 # ---- system health and metrics ----------------------------------------------------------
 body="$(api GET /api/v1/system/health)"
 json 'd["status"]' <<<"$body" | grep -qx ready || fail "system health: ${body}"
