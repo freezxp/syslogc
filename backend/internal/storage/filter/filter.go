@@ -227,3 +227,6 @@ func AndAll(exprs ...*Expr) *Expr {
 	}
 	return &Expr{Op: And, Args: args}
 }
+
+// ValidateField reports whether a field name may be used in a query.
+func ValidateField(f string) error { return validateField(f) }

@@ -166,3 +166,31 @@ func (s *Server) handleIngestionRate(w http.ResponseWriter, r *http.Request, p *
 	writeJSON(w, http.StatusOK, resp)
 	return nil
 }
+
+func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
+	var req query.BreakdownRequest
+	if err := decodeJSON(w, r, &req, false); err != nil {
+		return err
+	}
+	resp, err := s.opts.API.Query.Breakdown(r.Context(), p, req)
+	if err != nil {
+		return err
+	}
+	s.auditQuery(r, p, "logs.breakdown", req.Selection)
+	writeJSON(w, http.StatusOK, resp)
+	return nil
+}
+
+func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
+	var req query.SeriesRequest
+	if err := decodeJSON(w, r, &req, false); err != nil {
+		return err
+	}
+	resp, err := s.opts.API.Query.Series(r.Context(), p, req)
+	if err != nil {
+		return err
+	}
+	s.auditQuery(r, p, "logs.series", req.Selection)
+	writeJSON(w, http.StatusOK, resp)
+	return nil
+}

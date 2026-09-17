@@ -349,3 +349,116 @@ func jsonBody(v any) io.Reader {
 	data, _ := json.Marshal(v)
 	return bytes.NewReader(data)
 }
+
+// TestAnalyticsAgainstVictoriaLogs checks the aggregation primitives against
+// real data: group counts, distinct counts and bucketed series.
+func TestAnalyticsAgainstVictoriaLogs(t *testing.T) {
+	a := startApp(t, nil)
+	c := login(t, a)
+	id := runID()
+
+	resp, body := c.post(t, "/api/v1/api-keys", map[string]any{"name": "an", "scopes": []string{"logs:ingest"}})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create key: %d %s", resp.StatusCode, body)
+	}
+	var key struct {
+		Secret string `json:"secret"`
+	}
+	_ = json.Unmarshal(body, &key)
+
+	// Two minutes of traffic: three hosts with known shares, two clients each.
+	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Minute)
+	hosts := map[string]int{"web-1": 30, "web-2": 20, "db-1": 10}
+	var nd bytes.Buffer
+	for host, n := range hosts {
+		for i := range n {
+			ts := base.Add(time.Duration(i%2) * time.Minute)
+			fmt.Fprintf(&nd, `{"timestamp":%q,"message":"analytics %s","host":%q,"level":"info","source_ip":"10.1.0.%d"}`+"\n",
+				ts.Format(time.RFC3339), id, host, i%2)
+		}
+	}
+	ingest := &apiClient{base: c.base, http: &http.Client{Timeout: 30 * time.Second}}
+	resp, body = ingest.do(t, "POST", "/api/v1/ingest", &nd, map[string]string{
+		"Authorization": "Bearer " + key.Secret, "Content-Type": "application/x-ndjson"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("ingest: %d %s", resp.StatusCode, body)
+	}
+	waitSearch(t, c, id, 60)
+
+	sel := map[string]any{"time_range": map[string]string{"from": "now-15m", "to": "now+1m"},
+		"filter": map[string]any{"op": "text", "value": id}}
+
+	// Breakdown: exact counts, honest shares, and the number of groups.
+	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{"time_range": sel["time_range"],
+		"filter": sel["filter"], "group_by": "hostname", "limit": 2})
+	var bd struct {
+		Rows []struct {
+			Value  string  `json:"value"`
+			Metric float64 `json:"metric"`
+			Share  float64 `json:"share"`
+		} `json:"rows"`
+		Total          float64 `json:"total"`
+		DistinctGroups int64   `json:"distinct_groups"`
+	}
+	if err := json.Unmarshal(body, &bd); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("breakdown: %d %s", resp.StatusCode, body)
+	}
+	if len(bd.Rows) != 2 || bd.Rows[0].Value != "web-1" || bd.Rows[0].Metric != 30 || bd.Rows[1].Metric != 20 {
+		t.Errorf("breakdown rows = %+v", bd.Rows)
+	}
+	if bd.Total != 60 || bd.DistinctGroups != 3 {
+		t.Errorf("breakdown total = %v over %d groups, want 60 over 3", bd.Total, bd.DistinctGroups)
+	}
+	if share := bd.Rows[0].Share; share < 0.49 || share > 0.51 {
+		t.Errorf("top share = %v, want 0.5", share)
+	}
+
+	// Distinct metric: two client addresses per host.
+	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{"time_range": sel["time_range"],
+		"filter": sel["filter"], "group_by": "hostname", "metric": map[string]string{"type": "count_distinct", "field": "source_ip"}})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"metric":2`) {
+		t.Errorf("distinct breakdown: %d %s", resp.StatusCode, body)
+	}
+
+	// Series: one bucket per minute, counts split by host.
+	resp, body = c.post(t, "/api/v1/analytics/series", map[string]any{"time_range": sel["time_range"],
+		"filter": sel["filter"], "group_by": "hostname", "buckets": 15, "limit": 3})
+	var sr struct {
+		StepSeconds int64 `json:"step_seconds"`
+		Timestamps  []any `json:"timestamps"`
+		Groups      []struct {
+			Value  string    `json:"value"`
+			Total  float64   `json:"total"`
+			Points []float64 `json:"points"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(body, &sr); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("series: %d %s", resp.StatusCode, body)
+	}
+	if len(sr.Groups) != 3 {
+		t.Fatalf("series groups = %d, want 3: %s", len(sr.Groups), body)
+	}
+	total := 0.0
+	for _, g := range sr.Groups {
+		if len(g.Points) != len(sr.Timestamps) {
+			t.Fatalf("%s: %d points for %d timestamps", g.Value, len(g.Points), len(sr.Timestamps))
+		}
+		sum := 0.0
+		for _, p := range g.Points {
+			sum += p
+		}
+		if sum != g.Total {
+			t.Errorf("%s: points sum to %v but total is %v", g.Value, sum, g.Total)
+		}
+		total += g.Total
+	}
+	if total != 60 {
+		t.Errorf("series total = %v, want 60", total)
+	}
+	// Pipes belong to the explorer, not to analytics.
+	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{"time_range": sel["time_range"],
+		"group_by": "hostname", "native": map[string]string{"dialect": "logsql", "text": "* | stats count()"}})
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "pipes") {
+		t.Errorf("native pipes in analytics: %d %s", resp.StatusCode, body)
+	}
+}

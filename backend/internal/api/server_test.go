@@ -115,6 +115,26 @@ func (f *fakeQuerier) Count(context.Context, storage.CountQuery) (int64, error) 
 	return int64(len(f.rows)), nil
 }
 
+// Aggregate returns two groups, each with a value in every bucket, so the
+// analytics handlers can be exercised without a storage backend.
+func (f *fakeQuerier) Aggregate(_ context.Context, q storage.AggregateQuery) ([]storage.AggRow, error) {
+	groups := []string{"alpha", "beta"}
+	if q.GroupBy == "" {
+		groups = []string{""}
+	}
+	out := []storage.AggRow{}
+	for i, g := range groups {
+		if q.Step == 0 {
+			out = append(out, storage.AggRow{Group: g, Value: float64(10 - i)})
+			continue
+		}
+		for t := q.Range.Start.Truncate(q.Step); t.Before(q.Range.End); t = t.Add(q.Step) {
+			out = append(out, storage.AggRow{Time: t, Group: g, Value: float64(i + 1)})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeQuerier) FieldNames(context.Context, storage.Selection) ([]storage.FieldInfo, error) {
 	return []storage.FieldInfo{{Name: "_msg", Count: 5}, {Name: "_stream", Count: 5}, {Name: "labels.site", Count: 5}, {Name: "vpn_name", Count: 2}, {Name: "hostname", Count: 5}}, nil
 }
@@ -1126,5 +1146,60 @@ func TestSystemConfigAndRetention(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"configured":"30d"`) ||
 		!strings.Contains(string(body), "instructions") {
 		t.Errorf("retention: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestAnalytics(t *testing.T) {
+	e := newEnv(t)
+	viewer := e.login("viewer")
+	rng := map[string]string{"from": "now-1h", "to": "now"}
+
+	resp, body := viewer.do("POST", "/api/v1/analytics/breakdown",
+		map[string]any{"time_range": rng, "group_by": "hostname", "limit": 2}, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"value":"alpha"`) ||
+		!strings.Contains(string(body), `"share"`) {
+		t.Fatalf("breakdown: %d %s", resp.StatusCode, body)
+	}
+	resp, body = viewer.do("POST", "/api/v1/analytics/series",
+		map[string]any{"time_range": rng, "group_by": "hostname", "buckets": 12,
+			"metric": map[string]string{"type": "count_distinct", "field": "source_ip"}}, nil)
+	var series struct {
+		StepSeconds int64 `json:"step_seconds"`
+		Timestamps  []any `json:"timestamps"`
+		Groups      []struct {
+			Value  string    `json:"value"`
+			Total  float64   `json:"total"`
+			Points []float64 `json:"points"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(body, &series); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("series: %d %s", resp.StatusCode, body)
+	}
+	if len(series.Groups) != 2 || len(series.Timestamps) == 0 ||
+		len(series.Groups[0].Points) != len(series.Timestamps) {
+		t.Fatalf("series shape: %s", body)
+	}
+	if series.Groups[0].Total < series.Groups[1].Total {
+		t.Errorf("groups are not ordered by total: %s", body)
+	}
+
+	// Validation: unknown metric, missing field, oversized limits.
+	for _, tc := range []struct {
+		name string
+		in   map[string]any
+	}{
+		{"unknown metric", map[string]any{"time_range": rng, "group_by": "hostname", "metric": map[string]string{"type": "median"}}},
+		{"distinct without field", map[string]any{"time_range": rng, "group_by": "hostname", "metric": map[string]string{"type": "count_distinct"}}},
+		{"limit too large", map[string]any{"time_range": rng, "group_by": "hostname", "limit": 500}},
+		{"missing group_by", map[string]any{"time_range": rng}},
+	} {
+		if resp, body := viewer.do("POST", "/api/v1/analytics/breakdown", tc.in, nil); resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+	// A viewer may not run native queries here either.
+	if resp, _ := viewer.do("POST", "/api/v1/analytics/series", map[string]any{"time_range": rng,
+		"native": map[string]string{"dialect": "logsql", "text": "*"}}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer native analytics: %d", resp.StatusCode)
 	}
 }
