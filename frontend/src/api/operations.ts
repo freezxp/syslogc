@@ -1,6 +1,6 @@
 /**
- * Hand-written API surface for the operations endpoints (sources, users, audit
- * log, retention and effective configuration).
+ * Hand-written API surface for the operations and analytics endpoints (sources,
+ * users, audit log, retention, effective configuration, breakdown and series).
  *
  * `npm run gen:api` regenerates `schema.d.ts` from `../docs/openapi.yaml`, which
  * does not describe these endpoints yet; keeping them here means regenerating
@@ -164,6 +164,74 @@ export interface SystemConfig {
   yaml: string
 }
 
+// ---- analytics -------------------------------------------------------------
+
+export type AnalyticsMetricType = 'count' | 'count_distinct'
+
+export interface AnalyticsMetric {
+  type: AnalyticsMetricType
+  /** Required for `count_distinct`; a 422 with pointer `/metric/field` otherwise. */
+  field?: string
+}
+
+/** Shared request shape: a Selection plus the aggregation to compute over it. */
+type AnalyticsRequest = S['Selection'] & {
+  metric: AnalyticsMetric
+  /** At most 50. */
+  limit?: number
+}
+
+export type BreakdownRequest = AnalyticsRequest & {
+  group_by: string
+}
+
+export interface BreakdownRow {
+  /** Empty when the group-by field is absent from the matching logs. */
+  value: string
+  metric: number
+  /** `metric / total`, so the shown rows need not add up to 1. */
+  share: number
+}
+
+export interface BreakdownResponse {
+  resolved_range: S['ResolvedRange']
+  group_by: string
+  metric: AnalyticsMetric
+  /** Highest first, at most `limit` rows. */
+  rows: BreakdownRow[]
+  /** The metric over everything matching, including groups past `limit`. */
+  total: number
+  distinct_groups: number
+  stats: { duration_ms: number }
+}
+
+export type SeriesRequest = AnalyticsRequest & {
+  /** Omit for a single unnamed series. */
+  group_by?: string
+  /** Target bucket count, at most 1000; the server picks a round step near it. */
+  buckets?: number
+}
+
+export interface SeriesGroup {
+  value: string
+  total: number
+  /** Aligned index-for-index with `timestamps`. */
+  points: number[]
+}
+
+export interface SeriesResponse {
+  resolved_range: S['ResolvedRange']
+  /** Human label for the bucket width, e.g. "10m". */
+  step: string
+  step_seconds: number
+  group_by?: string | null
+  metric: AnalyticsMetric
+  timestamps: string[]
+  /** Only the top `limit` groups; there is no "other" bucket. */
+  groups: SeriesGroup[]
+  stats: { duration_ms: number }
+}
+
 // ---- path definitions ------------------------------------------------------
 //
 // The shape openapi-fetch expects: `parameters`, `requestBody` and `responses`
@@ -212,6 +280,12 @@ interface Remove<Params = ById> {
 }
 
 export interface OperationsPaths {
+  '/api/v1/analytics/breakdown': {
+    post: Write<BreakdownResponse, BreakdownRequest>
+  }
+  '/api/v1/analytics/series': {
+    post: Write<SeriesResponse, SeriesRequest>
+  }
   '/api/v1/sources': {
     get: Read<{ sources: ManagedSource[] }>
     post: Write<ManagedSource, SourceInput, NoParams, 201>

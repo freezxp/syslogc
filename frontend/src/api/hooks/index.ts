@@ -10,8 +10,10 @@ import {
 import { client, setCsrfToken, unwrap } from '../client'
 import type {
   AdminUser,
+  AnalyticsMetric,
   AuditEvent,
   AuditQuery,
+  BreakdownResponse,
   DashboardOverview,
   FacetsResponse,
   FieldsResponse,
@@ -25,6 +27,7 @@ import type {
   SavedSearchInput,
   SearchResponse,
   Selection,
+  SeriesResponse,
   Session,
   SourceInput,
   StatsResponse,
@@ -255,6 +258,60 @@ export function useIngestionRate(range: TimeRange, refreshMs: number | false) {
       ) as Promise<IngestionRateResponse>,
     refetchInterval: refreshMs,
     placeholderData: keepPreviousData,
+  })
+}
+
+// ---- analytics -------------------------------------------------------------
+
+/** A metric is only answerable once `count_distinct` has the field it counts. */
+function metricReady(metric: AnalyticsMetric): boolean {
+  return metric.type !== 'count_distinct' || !!metric.field
+}
+
+export function useBreakdown(
+  selection: Selection | null,
+  groupBy: string,
+  metric: AnalyticsMetric,
+  limit: number,
+  runId: number,
+) {
+  return useQuery({
+    queryKey: ['analytics', 'breakdown', selection, groupBy, metric, limit, runId],
+    enabled: selection !== null && !!groupBy && metricReady(metric),
+    queryFn: ({ signal }) =>
+      unwrap(
+        client.POST('/api/v1/analytics/breakdown', {
+          body: { ...selection!, group_by: groupBy, metric, limit },
+          signal,
+        }),
+      ) as Promise<BreakdownResponse>,
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+    retry: false,
+  })
+}
+
+export function useSeries(
+  selection: Selection | null,
+  groupBy: string,
+  metric: AnalyticsMetric,
+  limit: number,
+  runId: number,
+  buckets = 120,
+) {
+  return useQuery({
+    queryKey: ['analytics', 'series', selection, groupBy, metric, limit, buckets, runId],
+    enabled: selection !== null && !!groupBy && metricReady(metric),
+    queryFn: ({ signal }) =>
+      unwrap(
+        client.POST('/api/v1/analytics/series', {
+          body: { ...selection!, group_by: groupBy, metric, limit, buckets },
+          signal,
+        }),
+      ) as Promise<SeriesResponse>,
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+    retry: false,
   })
 }
 
