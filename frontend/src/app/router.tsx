@@ -14,6 +14,7 @@ import { ApiError } from '@/api/client'
 import type { Session } from '@/api/types'
 import { LoginPage } from '@/features/auth/LoginPage'
 import {
+  analyticsSearchSchema,
   auditSearchSchema,
   explorerSearchSchema,
   liveSearchSchema,
@@ -94,6 +95,17 @@ const liveRoute = createRoute({
   component: lazyRouteComponent(() => import('@/features/live-tail/LiveTailPage'), 'LiveTailPage'),
 })
 
+const analyticsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/analytics',
+  validateSearch: analyticsSearchSchema,
+  beforeLoad: ({ context }) => {
+    // Both analytics endpoints need logs:search; send viewers without it somewhere useful.
+    if (!context.session.permissions.includes('logs:search')) throw redirect({ to: '/dashboard' })
+  },
+  component: lazyRouteComponent(() => import('@/features/analytics/AnalyticsPage'), 'AnalyticsPage'),
+})
+
 const searchesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/searches',
@@ -168,6 +180,7 @@ export const routeTree = rootRoute.addChildren([
     dashboardRoute,
     logsRoute,
     liveRoute,
+    analyticsRoute,
     searchesRoute,
     searchRoute,
     sourcesRoute,

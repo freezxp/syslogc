@@ -5,7 +5,7 @@ const SHORTCUTS: [string, string[]][] = [
   ['Command palette', ['⌘/Ctrl', 'K']],
   ['Show shortcuts', ['?']],
   ['Toggle sidebar', ['[']],
-  ['Go to dashboard / logs / live tail / saved searches / system', ['g', 'd | l | t | s | y']],
+  ['Go to dashboard / logs / live tail / analytics / saved searches / system', ['g', 'd | l | t | a | s | y']],
   ['Focus query bar', ['/']],
   ['Run query', ['⌘/Ctrl', 'Enter']],
   ['Open time picker', ['t']],

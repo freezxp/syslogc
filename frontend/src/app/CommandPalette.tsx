@@ -2,6 +2,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useNavigate } from '@tanstack/react-router'
 import { Command } from 'cmdk'
 import {
+  BarChart3,
   Clock,
   Cog,
   Keyboard,
@@ -71,6 +72,11 @@ export function CommandPalette({
                 {can('logs:tail') && (
                   <Item icon={<Radio />} onSelect={close(() => navigate({ to: '/logs/live' }))}>
                     Live tail
+                  </Item>
+                )}
+                {can('logs:search') && (
+                  <Item icon={<BarChart3 />} onSelect={close(() => navigate({ to: '/analytics' }))}>
+                    Analytics
                   </Item>
                 )}
                 <Item icon={<Star />} onSelect={close(() => navigate({ to: '/searches' }))}>
