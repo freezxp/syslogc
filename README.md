@@ -56,6 +56,7 @@ preserving sender IP addresses.
 | [Syslog ingestion](docs/syslog.md) | Formats, framing, field mapping, sender examples |
 | [Operations](docs/operations.md) | Sources, users, retention, monitoring, backups |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms, causes and checks |
+| [Performance](docs/performance.md) | Measured throughput, storage and query latency |
 | [JSON ingestion](docs/json-ingestion.md) | HTTP ingest API, API keys, field mapping |
 | [Querying](docs/querying.md) | Filters, LogsQL, pagination, tail, export |
 | [API reference](docs/openapi.yaml) | OpenAPI 3.1 |

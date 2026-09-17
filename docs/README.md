@@ -44,4 +44,4 @@ not exist.
 | [operations.md](operations.md) | Phase 5 ✔ (sources, users, retention, monitoring, backups) |
 | [troubleshooting.md](troubleshooting.md) | Phase 5 ✔ |
 | `dashboards.md` | folded into the UI; the dashboard is documented in [frontend.md](frontend.md) |
-| `performance.md` | Phase 6 (benchmark results only — no unmeasured claims) |
+| [performance.md](performance.md) | Phase 6 ✔ (benchmark results only — no unmeasured claims) |
