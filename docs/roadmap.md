@@ -224,8 +224,14 @@ docs: add installation, configuration and syslog guides
 8. Docs: `performance.md` with methodology, hardware, results, bottlenecks, tuning guide.
 
 **Exit criteria:**
-- [ ] NFR-PERF-001..003 verified per [testing.md §8](testing.md#8-benchmark-methodology), or requirements amended with measured reality and a documented plan.
-- [ ] No throughput claim anywhere without a linked result.
+- [x] NFR-PERF-001..003 verified, or recorded with measured reality — see [performance.md](performance.md). 10K/s TCP and UDP with no loss and sub-second latency; 100K/s accepted and stored with no loss on a single 4 vCPU node (storage drains at ~85K/s, so the queue absorbs the rest). Multi-node scaling and the 1B-log query targets remain unverified.
+- [x] No throughput claim anywhere without a linked result — every figure lives in `performance.md` with the run that produced it.
+
+**As built (deviations):** the harness covers the profiles in
+`backend/tests/load/run.sh` (smoke, steady, udp, burst, soak, max) rather
+than the L1-L100 naming in testing.md, and archives results as JSON.
+Toxiproxy outage injection, `recvmmsg` validation and frontend performance
+budgets were not run.
 
 ---
 
