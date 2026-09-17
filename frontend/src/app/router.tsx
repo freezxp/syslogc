@@ -14,6 +14,7 @@ import { ApiError } from '@/api/client'
 import type { Session } from '@/api/types'
 import { LoginPage } from '@/features/auth/LoginPage'
 import {
+  auditSearchSchema,
   explorerSearchSchema,
   liveSearchSchema,
   parseSearchParams,
@@ -114,6 +115,40 @@ const systemRoute = createRoute({
   component: lazyRouteComponent(() => import('@/features/system/SystemPage'), 'SystemPage'),
 })
 
+const sourcesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/sources',
+  component: lazyRouteComponent(() => import('@/features/sources/SourcesPage'), 'SourcesPage'),
+})
+
+const sourceRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/sources/$id',
+  component: lazyRouteComponent(() => import('@/features/sources/SourceDetailPage'), 'SourceDetailPage'),
+})
+
+const usersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/users',
+  component: lazyRouteComponent(() => import('@/features/users/UsersPage'), 'UsersPage'),
+})
+
+const auditRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/audit',
+  validateSearch: auditSearchSchema,
+  component: lazyRouteComponent(() => import('@/features/audit/AuditPage'), 'AuditPage'),
+})
+
+const settingsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings',
+  validateSearch: z.object({
+    tab: z._default(z.catch(z.enum(['retention', 'config', 'account']), 'retention'), 'retention'),
+  }),
+  component: lazyRouteComponent(() => import('@/features/settings/SettingsPage'), 'SettingsPage'),
+})
+
 const apiKeysRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/api-keys',
@@ -135,6 +170,11 @@ export const routeTree = rootRoute.addChildren([
     liveRoute,
     searchesRoute,
     searchRoute,
+    sourcesRoute,
+    sourceRoute,
+    usersRoute,
+    auditRoute,
+    settingsRoute,
     systemRoute,
     apiKeysRoute,
     passwordRoute,

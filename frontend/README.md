@@ -21,7 +21,8 @@ src/
 ├── api/            # generated schema, openapi-fetch client (CSRF, 401 handling), TanStack Query hooks
 ├── app/            # router, app shell, command palette, shortcuts help
 ├── components/     # ui/ (Radix-based primitives), data/ (badges, panels), charts/ (Recharts wrappers)
-├── features/       # auth, dashboard, explorer, live-tail, saved-searches, system, settings, time-range
+├── features/       # auth, dashboard, explorer, live-tail, saved-searches, sources, users, audit, system,
+│                  #   settings, time-range
 ├── lib/            # filter text parser/formatter, time ranges, URL state, ring buffer, preferences
 ├── mocks/          # MSW handlers and synthetic data (only bundled in mock mode)
 └── styles/         # Tailwind v4 tokens (dark default, light theme)
@@ -38,3 +39,9 @@ src/
 - Exports stream to disk with the File System Access API when available, otherwise fall back to a blob or a
   form POST (`request` JSON + `csrf_token` fields).
 - No `dangerouslySetInnerHTML` (enforced by ESLint); log values are rendered as text only.
+- `src/api/operations.ts` hand-writes the paths and schemas for the sources, users, audit and retention
+  endpoints, which `docs/openapi.yaml` does not describe yet, and intersects them into the client's `paths`
+  so `npm run gen:api` cannot drop them. Fold them into the generated schema once the spec catches up.
+- The source editor keeps a flat string form state (`src/features/sources/source-form.ts`) and converts to the
+  `config` object on save. The server validates a source as a whole and answers one `/config` pointer whose
+  detail joins every complaint, so the detail is split back apart to place messages next to their inputs.

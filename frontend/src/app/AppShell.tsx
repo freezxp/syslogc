@@ -13,6 +13,7 @@ import {
   Moon,
   Network,
   Radio,
+  ScrollText,
   Search,
   Server,
   Star,
@@ -63,7 +64,7 @@ const NAV: NavItem[] = [
       { to: '/logs/live', label: 'Live Tail', icon: <Radio />, perm: 'logs:tail' },
     ],
   },
-  { label: 'Sources', icon: <Network />, disabled: true },
+  { to: '/sources', label: 'Sources', icon: <Network />, perm: 'sources:read' },
   { to: '/searches', label: 'Saved Searches', icon: <Star />, perm: 'searches:read' },
   { label: 'Analytics', icon: <BarChart3 />, disabled: true },
   { to: '/system', label: 'System', icon: <Server />, perm: 'system:view' },
@@ -72,8 +73,9 @@ const NAV: NavItem[] = [
     icon: <Cog />,
     children: [
       { to: '/settings/api-keys', label: 'API Keys', icon: <KeyRound />, perm: 'apikeys:own' },
-      { label: 'Users', icon: <Users />, disabled: true },
-      { label: 'Settings & Retention', icon: <Cog />, disabled: true },
+      { to: '/users', label: 'Users', icon: <Users />, perm: 'users:manage' },
+      { to: '/audit', label: 'Audit Log', icon: <ScrollText />, perm: 'audit:view' },
+      { to: '/settings', label: 'Settings & Retention', icon: <Cog />, perm: 'system:view' },
     ],
   },
 ]
