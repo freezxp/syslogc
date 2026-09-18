@@ -57,8 +57,11 @@ type Forwarder struct {
 	queue    chan []logentry.Entry
 	queued   atomic.Int64 // messages waiting, including the batch being written
 	bytes    atomic.Int64
+	sent     atomic.Int64
+	dropped  atomic.Int64
 	healthy  atomic.Bool
 	lastSend atomic.Int64 // unix nanos of the last successful write
+	lastErr  atomic.Pointer[string]
 
 	stopCtx context.Context
 	stop    context.CancelFunc
@@ -152,7 +155,7 @@ func (f *Forwarder) Forward(tenant string, entries []logentry.Entry) {
 	}
 	if f.queued.Load()+int64(len(out)) > int64(f.opts.QueueMaxMessages) ||
 		(f.opts.QueueMaxBytes > 0 && f.bytes.Load()+size > f.opts.QueueMaxBytes) {
-		f.m.Dropped(DropQueueFull).Add(float64(len(out)))
+		f.drop(DropQueueFull, len(out))
 		return
 	}
 	select {
@@ -160,7 +163,7 @@ func (f *Forwarder) Forward(tenant string, entries []logentry.Entry) {
 		f.queued.Add(int64(len(out)))
 		f.bytes.Add(size)
 	default:
-		f.m.Dropped(DropQueueFull).Add(float64(len(out)))
+		f.drop(DropQueueFull, len(out))
 	}
 }
 
@@ -252,27 +255,31 @@ func (f *Forwarder) write(tenant string, entries []logentry.Entry) {
 		err := f.opts.Writer.WriteBatch(f.stopCtx, batch)
 		if err == nil {
 			f.m.Sent.Add(float64(len(entries)))
+			f.sent.Add(int64(len(entries)))
 			f.lastSend.Store(time.Now().UnixNano())
 			f.setHealthy(true)
+			f.lastErr.Store(nil)
 			return
 		}
 		if f.stopCtx.Err() != nil {
-			f.m.Dropped(DropShutdown).Add(float64(len(entries)))
+			f.drop(DropShutdown, len(entries))
 			return
 		}
 		class := storage.ClassOf(err)
 		f.m.Errors(class.String()).Inc()
 		f.setHealthy(false)
+		msg := err.Error()
+		f.lastErr.Store(&msg)
 		if class == storage.Rejected {
 			f.opts.Log.Warn("forward target rejected a batch; dropping it",
 				"target", f.opts.Name, "rows", len(entries), "error", err)
-			f.m.Dropped(DropRejected).Add(float64(len(entries)))
+			f.drop(DropRejected, len(entries))
 			return
 		}
 		f.opts.Log.Warn("forward write failed; retrying", "target", f.opts.Name, "error", err, "backoff", backoff)
 		select {
 		case <-f.stopCtx.Done():
-			f.m.Dropped(DropShutdown).Add(float64(len(entries)))
+			f.drop(DropShutdown, len(entries))
 			return
 		case <-time.After(backoff):
 		}
@@ -280,6 +287,12 @@ func (f *Forwarder) write(tenant string, entries []logentry.Entry) {
 			backoff = f.opts.MaxBackoff
 		}
 	}
+}
+
+// drop records messages that will never reach the remote.
+func (f *Forwarder) drop(reason string, n int) {
+	f.m.Dropped(reason).Add(float64(n))
+	f.dropped.Add(int64(n))
 }
 
 func (f *Forwarder) setHealthy(ok bool) {
@@ -292,18 +305,26 @@ func (f *Forwarder) setHealthy(ok bool) {
 
 // Status describes a target for the system API.
 type Status struct {
-	Name           string    `json:"name"`
-	Healthy        bool      `json:"healthy"`
-	QueuedMessages int64     `json:"queued_messages"`
-	LastSuccessAt  time.Time `json:"last_success_at,omitzero"`
-	MinSeverity    string    `json:"min_severity,omitempty"`
-	Sources        []string  `json:"sources,omitempty"`
+	Name           string `json:"name"`
+	Healthy        bool   `json:"healthy"`
+	QueuedMessages int64  `json:"queued_messages"`
+	// SentMessages and DroppedMessages count since this node started.
+	SentMessages    int64     `json:"sent_messages"`
+	DroppedMessages int64     `json:"dropped_messages"`
+	LastSuccessAt   time.Time `json:"last_success_at,omitzero"`
+	// LastError explains an unhealthy target; empty while writes succeed.
+	LastError   string   `json:"last_error,omitempty"`
+	MinSeverity string   `json:"min_severity,omitempty"`
+	Sources     []string `json:"sources,omitempty"`
 }
 
 func (f *Forwarder) Status() Status {
 	st := Status{
 		Name: f.opts.Name, Healthy: f.healthy.Load(), QueuedMessages: f.queued.Load(),
-		Sources: f.opts.Sources,
+		SentMessages: f.sent.Load(), DroppedMessages: f.dropped.Load(), Sources: f.opts.Sources,
+	}
+	if msg := f.lastErr.Load(); msg != nil {
+		st.LastError = *msg
 	}
 	if ns := f.lastSend.Load(); ns > 0 {
 		st.LastSuccessAt = time.Unix(0, ns).UTC()

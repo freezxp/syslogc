@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -222,4 +223,34 @@ func TestStopDrainsPending(t *testing.T) {
 	}
 	// Forwarding after Stop is a no-op rather than a panic on a closed channel.
 	f.Forward("default", entries(1, "s", logentry.SeverityInfo))
+}
+
+func TestStatusExplainsAnUnhealthyTarget(t *testing.T) {
+	w := &fakeWriter{}
+	w.setErr(errors.New("dial tcp 10.0.0.9:9428: connection refused"))
+	f := newForwarder(t, w, Options{InitialBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond})
+
+	f.Forward("default", entries(2, "s", logentry.SeverityInfo))
+	waitFor(t, "the failure to be reported", func() bool { return !f.Status().Healthy })
+	if st := f.Status(); !strings.Contains(st.LastError, "connection refused") {
+		t.Errorf("last error = %q, want the write failure", st.LastError)
+	}
+
+	w.setErr(nil)
+	waitFor(t, "recovery", func() bool { return f.Status().Healthy })
+	st := f.Status()
+	if st.LastError != "" {
+		t.Errorf("last error still set after recovery: %q", st.LastError)
+	}
+	if st.SentMessages != 2 {
+		t.Errorf("sent = %d, want 2", st.SentMessages)
+	}
+}
+
+func TestStatusCountsDrops(t *testing.T) {
+	w := &fakeWriter{}
+	w.setErr(&storage.WriteError{Class: storage.Rejected, StatusCode: 400, Err: errors.New("bad row")})
+	f := newForwarder(t, w, Options{InitialBackoff: time.Millisecond})
+	f.Forward("default", entries(3, "s", logentry.SeverityInfo))
+	waitFor(t, "the drop to be counted", func() bool { return f.Status().DroppedMessages == 3 })
 }

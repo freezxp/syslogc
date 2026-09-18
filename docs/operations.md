@@ -103,7 +103,9 @@ How it behaves:
   unlike sources.
 
 Watch a target on the **System → Ingestion** page, in
-`/api/v1/system/ingestion`, or with these metrics:
+`/api/v1/system/ingestion` (which reports queued, sent and dropped counts,
+the last successful write and, for an unhealthy target, the last error), or
+with these metrics:
 
 | Metric | Meaning |
 |---|---|

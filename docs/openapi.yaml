@@ -1463,11 +1463,14 @@ components:
 
     ForwardTargetStatus:
       type: object
-      required: [name, healthy, queued_messages]
+      required: [name, healthy, queued_messages, sent_messages, dropped_messages]
       properties:
         name: {type: string}
         healthy: {type: boolean, description: False while writes to the remote are failing}
         queued_messages: {type: integer, description: Copies waiting to be sent}
+        sent_messages: {type: integer, description: Copies written since this node started}
+        dropped_messages: {type: integer, description: Copies that will never be sent, since this node started}
+        last_error: {type: string, description: Why the target is unhealthy; absent while writes succeed}
         last_success_at: {type: string, format: date-time}
         min_severity: {type: string, description: Only this severity or more severe is forwarded}
         sources: {type: array, items: {type: string}, description: Only these sources are forwarded}
