@@ -68,6 +68,56 @@ queries. Administrators read it on the **Audit** page or through
 Events are kept for 400 days and pruned hourly. They are also written to the
 process log, so a log shipper can forward them off the node.
 
+## Forwarding logs to another instance
+
+Syslogc can mirror everything it stores to one or more other VictoriaLogs
+instances — a disaster-recovery site, a central collector, or a second
+system you are migrating to. Configure targets under
+[`forwarding`](configuration.md#forwarding) and restart:
+
+```yaml
+forwarding:
+  targets:
+    - name: dr-site
+      url: http://vl-dr.example.com:9428
+      min_severity: warning     # optional: only warnings and worse
+      sources: [firewalls]      # optional: only this source
+```
+
+How it behaves:
+
+- A copy is sent **after** the log is stored locally, so the remote receives
+  what you can search locally, and nothing is forwarded twice for a retried
+  local write.
+- Each target has its own buffer, batching and retries. **A slow or broken
+  remote never slows local ingestion**: when its buffer fills, forwarded
+  copies are dropped and counted in
+  `syslogc_forward_messages_dropped_total{reason="queue_full"}`. Local
+  storage and search are unaffected.
+- Batches the remote rejects outright (a 400, say) are dropped rather than
+  retried forever, so one bad batch cannot block the rest.
+- Forwarding starts from the moment it is enabled. It does not copy logs
+  already stored; seed a new target from a
+  [backup](#backup-and-restore) if you need the history.
+- Targets restart with the process: a configuration change needs a restart,
+  unlike sources.
+
+Watch a target on the **System → Ingestion** page, in
+`/api/v1/system/ingestion`, or with these metrics:
+
+| Metric | Meaning |
+|---|---|
+| `syslogc_forward_messages_total{target}` | copies written to the remote |
+| `syslogc_forward_messages_dropped_total{target,reason}` | copies not sent: `queue_full`, `rejected`, `shutdown` |
+| `syslogc_forward_write_errors_total{target,class}` | failed writes by error class |
+| `syslogc_forward_queue_messages{target}` | copies waiting to be sent |
+| `syslogc_forward_healthy{target}` | 1 while the last write succeeded |
+| `syslogc_forward_last_success_timestamp_seconds{target}` | when the remote last accepted a batch |
+
+A sustained `queue_full` rate means the remote cannot keep up with your
+ingest rate: give it faster storage, or narrow what you forward with
+`sources` and `min_severity`.
+
 ## Retention
 
 Syslogc never deletes data itself: VictoriaLogs enforces retention. Keep the

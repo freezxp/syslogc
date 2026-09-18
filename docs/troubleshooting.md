@@ -89,6 +89,20 @@ curl -s http://127.0.0.1:8080/api/v1/system/storage   # requires login
 - **Locked out after repeated failures**: logins are delayed per username
   after five failures, up to 15 minutes. Wait, or use another account.
 
+## A forward target is behind or empty
+
+- **Nothing arrives at all**: check `syslogc_forward_healthy{target}` and the
+  server log. A wrong URL or an unreachable host shows as repeated
+  "forward write failed; retrying" warnings.
+- **Only some logs arrive**: that is what `sources` and `min_severity` do;
+  the System page shows the active filters per target.
+- **Logs stop arriving under load**:
+  `syslogc_forward_messages_dropped_total{reason="queue_full"}` is rising —
+  the remote is slower than local ingestion. Local storage is unaffected.
+  Raise `queue.max_messages`, speed up the remote, or forward less.
+- **Older logs are missing**: forwarding is live only. It never backfills
+  what was stored before the target was enabled.
+
 ## Reverse proxy issues
 
 - **Live tail shows nothing**: the proxy is buffering the event stream. Set

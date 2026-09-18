@@ -139,6 +139,47 @@ ingestion:
 A UDP and a TCP source may share a port number; two sources of the same
 transport may not.
 
+### `forwarding`
+
+Mirrors every stored log to other VictoriaLogs instances (see
+[operations](operations.md#forwarding-logs-to-another-instance)). Omit the
+section to forward nothing.
+
+```yaml
+forwarding:
+  targets:
+    - name: dr-site               # unique; used in metrics and the System page
+      url: http://vl-dr:9428      # remote VictoriaLogs base URL
+      enabled: true
+      sources: [syslog-udp]       # only these sources; omit for all
+      min_severity: warning       # this severity or more severe; omit for all
+      compression: gzip           # none | gzip | zstd
+      write_timeout: 30s
+      stream_fields: [source, hostname, app_name]
+      basic_username: ""          # with basic_password_file, or bearer_token_file
+      queue:
+        max_messages: 200000      # copies buffered while the remote is slow
+        max_bytes: 128MiB
+      batch:
+        max_rows: 10000
+        max_bytes: 8MiB
+        max_wait: 1s
+      retry:
+        initial_backoff: 250ms
+        max_backoff: 30s
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `name` | — | Required, unique. Appears in `syslogc_forward_*` metrics and the System page. |
+| `url` | — | Required. Base URL of the remote VictoriaLogs. |
+| `enabled` | `true` | Set `false` to keep the definition without forwarding. |
+| `sources` | all | Forward only logs from these source names. |
+| `min_severity` | all | Forward only this severity or more severe (`emergency`…`debug`). |
+| `queue.max_messages`, `queue.max_bytes` | `200000`, `128MiB` | Per-target buffer. When it fills, forwarded copies are dropped and counted; local storage is never affected. |
+| `batch.*`, `retry.*` | as shown | Batching and retry for the remote writes. |
+| `compression` | `gzip` | Remote writes usually cross a network. |
+
 ### `retention`
 
 | Key | Default | Description |

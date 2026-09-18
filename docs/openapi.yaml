@@ -1461,12 +1461,27 @@ components:
         received_per_second: {type: number}
         stored_per_second: {type: number}
 
+    ForwardTargetStatus:
+      type: object
+      required: [name, healthy, queued_messages]
+      properties:
+        name: {type: string}
+        healthy: {type: boolean, description: False while writes to the remote are failing}
+        queued_messages: {type: integer, description: Copies waiting to be sent}
+        last_success_at: {type: string, format: date-time}
+        min_severity: {type: string, description: Only this severity or more severe is forwarded}
+        sources: {type: array, items: {type: string}, description: Only these sources are forwarded}
+
     SystemIngestion:
       type: object
       required: [node, sources, queue]
       properties:
         node: {type: string}
         sources: {type: array, items: {$ref: "#/components/schemas/SourceCounters"}}
+        forwarding:
+          type: array
+          description: Configured forward targets; absent when none are configured.
+          items: {$ref: "#/components/schemas/ForwardTargetStatus"}
         queue:
           type: object
           properties:
