@@ -28,6 +28,7 @@ import {
   metricUnit,
   seriesChartData,
 } from '@/features/analytics/analytics-query'
+import { forwardFilterLabels, secondsSince } from '@/features/system/forwarding'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
 import { decodeBase64Url, encodeBase64Url } from './base64url'
@@ -218,6 +219,29 @@ describe('axis counts', () => {
     expect(formatAxisCount(3500)).toBe('3,500')
     expect(formatAxisCount(14000)).toBe('14K')
     expect(formatAxisCount(10500)).toBe('10.5K')
+  })
+})
+
+describe('forwarding', () => {
+  it('summarises the filters a target applies', () => {
+    expect(forwardFilterLabels({})).toEqual(['all logs'])
+    expect(forwardFilterLabels({ min_severity: 'warning' })).toEqual(['warning and above'])
+    expect(forwardFilterLabels({ sources: ['syslog-udp'] })).toEqual(['source: syslog-udp'])
+    expect(forwardFilterLabels({ sources: ['syslog-udp', 'http-json'] })).toEqual(['sources: syslog-udp, http-json'])
+    expect(forwardFilterLabels({ min_severity: 'error', sources: ['syslog-tcp'] })).toEqual([
+      'error and above',
+      'source: syslog-tcp',
+    ])
+    expect(forwardFilterLabels({ sources: [] })).toEqual(['all logs'])
+  })
+
+  it('ages the last successful write', () => {
+    const now = Date.parse('2026-09-18T03:12:04Z')
+    expect(secondsSince('2026-09-18T03:11:04Z', now)).toBe(60)
+    expect(secondsSince(undefined, now)).toBeNull()
+    expect(secondsSince('not a date', now)).toBeNull()
+    // A stamp ahead of the browser clock reads as "just now", never as a negative age.
+    expect(secondsSince('2026-09-18T03:12:09Z', now)).toBe(0)
   })
 })
 

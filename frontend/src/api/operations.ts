@@ -164,6 +164,22 @@ export interface SystemConfig {
   yaml: string
 }
 
+/**
+ * One forward target from `GET /system/ingestion`, mirroring stored logs to another
+ * VictoriaLogs instance. The response omits `forwarding` entirely when none are
+ * configured, so `SystemIngestion.forwarding` stays optional.
+ */
+export interface ForwardTarget {
+  name: string
+  healthy: boolean
+  queued_messages: number
+  /** Absent until the first successful write to the target. */
+  last_success_at?: string
+  /** Filters; absent means the target receives everything. */
+  min_severity?: NonNullable<S['LogRow']['severity']>
+  sources?: string[]
+}
+
 // ---- analytics -------------------------------------------------------------
 
 export type AnalyticsMetricType = 'count' | 'count_distinct'

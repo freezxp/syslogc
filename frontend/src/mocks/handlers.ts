@@ -1050,6 +1050,22 @@ export const handlers = [
       storage_healthy: true,
       e2e_latency_p50_seconds: 0.42,
       e2e_latency_p99_seconds: 1.37,
+      forwarding: [
+        {
+          name: 'dr-site',
+          healthy: true,
+          queued_messages: 0,
+          last_success_at: new Date(Date.now() - 4_000).toISOString(),
+        },
+        {
+          name: 'siem-archive',
+          healthy: false,
+          queued_messages: 48_120,
+          last_success_at: new Date(NOW - 19 * 60_000).toISOString(),
+          min_severity: 'warning',
+          sources: ['syslog-udp'],
+        },
+      ],
     })
   }),
   http.get(

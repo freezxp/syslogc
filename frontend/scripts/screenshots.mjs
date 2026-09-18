@@ -98,6 +98,7 @@ try {
 
   await page.goto(`${base}/system?tab=ingestion`)
   await page.getByText('Ingest queue').waitFor()
+  await page.getByText('Forwarding').waitFor()
   await shot('system-ingestion')
 
   await page.goto(`${base}/searches`)
