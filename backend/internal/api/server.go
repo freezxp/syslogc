@@ -20,6 +20,7 @@ import (
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
+	"github.com/freezxp/syslogc/backend/internal/forwarding"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/listener"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
@@ -52,7 +53,9 @@ type APIDeps struct {
 	// Config is the effective configuration, served with secrets redacted.
 	Config config.Config
 	// Queue returns ingest queue occupancy; nil without the ingest role.
-	Queue        func() QueueInfo
+	Queue func() QueueInfo
+	// Forwarders returns forward target statuses; nil when none are configured.
+	Forwarders   func() []forwarding.Status
 	CookieSecure bool
 	AuditAll     bool
 	// WebUI is the built frontend; nil or empty disables UI serving.

@@ -12,16 +12,17 @@ import (
 
 // Config is the root configuration.
 type Config struct {
-	Node      NodeConfig      `koanf:"node"`
-	Server    ServerConfig    `koanf:"server"`
-	Log       LogConfig       `koanf:"log"`
-	Storage   StorageConfig   `koanf:"storage"`
-	Ingestion IngestionConfig `koanf:"ingestion"`
-	Retention RetentionConfig `koanf:"retention"`
-	Shutdown  ShutdownConfig  `koanf:"shutdown"`
-	Metadata  MetadataConfig  `koanf:"metadata"`
-	Auth      AuthConfig      `koanf:"auth"`
-	Query     QueryConfig     `koanf:"query"`
+	Node       NodeConfig       `koanf:"node"`
+	Server     ServerConfig     `koanf:"server"`
+	Log        LogConfig        `koanf:"log"`
+	Storage    StorageConfig    `koanf:"storage"`
+	Ingestion  IngestionConfig  `koanf:"ingestion"`
+	Forwarding ForwardingConfig `koanf:"forwarding"`
+	Retention  RetentionConfig  `koanf:"retention"`
+	Shutdown   ShutdownConfig   `koanf:"shutdown"`
+	Metadata   MetadataConfig   `koanf:"metadata"`
+	Auth       AuthConfig       `koanf:"auth"`
+	Query      QueryConfig      `koanf:"query"`
 }
 
 type MetadataConfig struct {
@@ -242,6 +243,45 @@ type TLSConfig struct {
 	MinVersion   string `koanf:"min_version" json:"min_version,omitempty"` // "1.2" | "1.3"
 	ClientAuth   string `koanf:"client_auth" json:"client_auth,omitempty"` // none | request | require_and_verify
 	ClientCAFile string `koanf:"client_ca_file" json:"client_ca_file,omitempty"`
+}
+
+// ForwardingConfig mirrors stored logs to other instances.
+type ForwardingConfig struct {
+	Targets []ForwardTarget `koanf:"targets"`
+}
+
+// ForwardTarget is one remote instance that receives a copy of stored logs.
+type ForwardTarget struct {
+	Name    string `koanf:"name"`
+	Enabled *bool  `koanf:"enabled"`
+	// URL is the base URL of the remote VictoriaLogs instance.
+	URL string `koanf:"url"`
+	// Tenant selects which tenant's logs are forwarded; empty forwards all.
+	Tenant string `koanf:"tenant"`
+	// Sources restricts forwarding to these source names; empty forwards all.
+	Sources []string `koanf:"sources"`
+	// MinSeverity forwards only this severity or more severe (e.g. "warning").
+	MinSeverity string `koanf:"min_severity"`
+
+	StreamFields []string `koanf:"stream_fields"`
+	Compression  string   `koanf:"compression"`
+	WriteTimeout Duration `koanf:"write_timeout"`
+
+	BasicUsername     string `koanf:"basic_username"`
+	BasicPasswordFile string `koanf:"basic_password_file"`
+	BearerTokenFile   string `koanf:"bearer_token_file"`
+
+	Queue ForwardQueueConfig `koanf:"queue"`
+	Batch BatchConfig        `koanf:"batch"`
+	Retry RetryConfig        `koanf:"retry"`
+}
+
+// IsEnabled reports whether the target is enabled (default true).
+func (t ForwardTarget) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
+
+type ForwardQueueConfig struct {
+	MaxMessages int      `koanf:"max_messages"`
+	MaxBytes    ByteSize `koanf:"max_bytes"`
 }
 
 type RetentionConfig struct {

@@ -261,3 +261,45 @@ func TestYAMLRoundTrip(t *testing.T) {
 		t.Errorf("round trip changed configuration:\n%s", out)
 	}
 }
+
+func TestForwardingDefaultsAndValidation(t *testing.T) {
+	yaml := `
+metadata:
+  postgres:
+    dsn: postgres://u:p@localhost/db
+forwarding:
+  targets:
+    - name: dr
+      url: http://remote:9428
+      min_severity: warning
+      sources: [syslog-udp]
+`
+	cfg, err := Load(LoadOptions{File: writeYAML(t, yaml), Environ: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Forwarding.Targets) != 1 {
+		t.Fatalf("targets = %+v", cfg.Forwarding.Targets)
+	}
+	tgt := cfg.Forwarding.Targets[0]
+	if !tgt.IsEnabled() {
+		t.Error("target should default to enabled")
+	}
+	if tgt.Compression != "gzip" || tgt.Queue.MaxMessages == 0 || tgt.Batch.MaxRows == 0 ||
+		tgt.Retry.MaxBackoff == 0 || len(tgt.StreamFields) == 0 || tgt.WriteTimeout == 0 {
+		t.Errorf("defaults not applied: %+v", tgt)
+	}
+
+	for _, tc := range []struct{ name, yaml, want string }{
+		{"missing name", "forwarding:\n  targets:\n    - url: http://r:9428\n", "name is required"},
+		{"bad url", "forwarding:\n  targets:\n    - {name: a, url: ftp://r}\n", "http(s) URL"},
+		{"unknown severity", "forwarding:\n  targets:\n    - {name: a, url: 'http://r:9428', min_severity: loud}\n", "unknown severity"},
+		{"duplicate name", "forwarding:\n  targets:\n    - {name: a, url: 'http://r:9428'}\n    - {name: a, url: 'http://s:9428'}\n", "duplicate target name"},
+		{"bad compression", "forwarding:\n  targets:\n    - {name: a, url: 'http://r:9428', compression: lzma}\n", "compression"},
+	} {
+		_, err := Load(LoadOptions{File: writeYAML(t, "metadata:\n  postgres:\n    dsn: postgres://u:p@localhost/db\n"+tc.yaml), Environ: []string{}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want it to mention %q", tc.name, err, tc.want)
+		}
+	}
+}

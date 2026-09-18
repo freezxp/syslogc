@@ -108,3 +108,37 @@ func applySourceDefaults(s *Source) {
 		s.TLS.ClientAuth = "none"
 	}
 }
+
+// Per-target forwarding defaults applied to zero values after loading.
+func applyForwardDefaults(t *ForwardTarget) {
+	if t.Compression == "" {
+		t.Compression = "gzip" // remote writes usually cross a network
+	}
+	if t.WriteTimeout == 0 {
+		t.WriteTimeout = Duration(30 * time.Second)
+	}
+	if t.Queue.MaxMessages == 0 {
+		t.Queue.MaxMessages = 200_000
+	}
+	if t.Queue.MaxBytes == 0 {
+		t.Queue.MaxBytes = 128 << 20
+	}
+	if t.Batch.MaxRows == 0 {
+		t.Batch.MaxRows = 10_000
+	}
+	if t.Batch.MaxBytes == 0 {
+		t.Batch.MaxBytes = 8 << 20
+	}
+	if t.Batch.MaxWait == 0 {
+		t.Batch.MaxWait = Duration(time.Second)
+	}
+	if t.Retry.InitialBackoff == 0 {
+		t.Retry.InitialBackoff = Duration(250 * time.Millisecond)
+	}
+	if t.Retry.MaxBackoff == 0 {
+		t.Retry.MaxBackoff = Duration(30 * time.Second)
+	}
+	if len(t.StreamFields) == 0 {
+		t.StreamFields = []string{"source", "hostname", "app_name"}
+	}
+}

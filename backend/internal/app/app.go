@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -19,9 +20,11 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/api/webui"
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
+	"github.com/freezxp/syslogc/backend/internal/forwarding"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
+	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metadata/postgres"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
@@ -52,6 +55,9 @@ type App struct {
 	pipeline   *pipeline.Pipeline
 	supervisor *supervisor.Supervisor
 	server     *api.Server
+	forwarders forwarding.Fanout
+	// closers hold remote clients owned by forwarders.
+	closers []io.Closer
 
 	saturatedSince atomic.Int64
 	retention      atomic.Pointer[retentionStatus]
@@ -125,6 +131,9 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 	}
 
 	if cfg.Node.HasRole(config.RoleIngest) {
+		if err := a.wireForwarding(); err != nil {
+			return nil, err
+		}
 		a.wireIngest()
 		checks = append(checks,
 			api.ReadinessCheck{Name: "sources", Check: func(context.Context) error {
@@ -170,6 +179,60 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 	return a, nil
 }
 
+// wireForwarding builds one forwarder per configured target. Targets are
+// separate storage clients: a slow or broken remote cannot affect the local
+// write path, only its own bounded queue.
+func (a *App) wireForwarding() error {
+	for _, t := range a.cfg.Forwarding.Targets {
+		if !t.IsEnabled() {
+			a.log.Info("forward target disabled", "target", t.Name)
+			continue
+		}
+		remote, err := victorialogs.New(victorialogs.Config{
+			InsertURL:         t.URL,
+			SelectURL:         t.URL,
+			StreamFields:      t.StreamFields,
+			WriteTimeout:      t.WriteTimeout.D(),
+			QueryTimeout:      t.WriteTimeout.D(),
+			Compression:       t.Compression,
+			BasicUsername:     t.BasicUsername,
+			BasicPasswordFile: t.BasicPasswordFile,
+			BearerTokenFile:   t.BearerTokenFile,
+			MaxConnsPerHost:   8,
+		})
+		if err != nil {
+			return fmt.Errorf("forwarding target %s: %w", t.Name, err)
+		}
+		var minSeverity *logentry.Severity
+		if t.MinSeverity != "" {
+			sev, ok := normalization.ParseSeverity(t.MinSeverity)
+			if !ok {
+				return fmt.Errorf("forwarding target %s: unknown severity %q", t.Name, t.MinSeverity)
+			}
+			minSeverity = &sev
+		}
+		a.forwarders = append(a.forwarders, forwarding.New(forwarding.Options{
+			Name:             t.Name,
+			Writer:           remote.Writer(),
+			QueueMaxMessages: t.Queue.MaxMessages,
+			QueueMaxBytes:    int64(t.Queue.MaxBytes),
+			BatchMaxRows:     t.Batch.MaxRows,
+			BatchMaxBytes:    t.Batch.MaxBytes.Int(),
+			BatchMaxWait:     t.Batch.MaxWait.D(),
+			InitialBackoff:   t.Retry.InitialBackoff.D(),
+			MaxBackoff:       t.Retry.MaxBackoff.D(),
+			Sources:          t.Sources,
+			MinSeverity:      minSeverity,
+			Metrics:          a.metrics,
+			Log:              a.log.With("component", "forwarding"),
+		}))
+		a.closers = append(a.closers, remote)
+		a.log.Info("forward target configured", "target", t.Name, "url", t.URL,
+			"sources", t.Sources, "min_severity", t.MinSeverity)
+	}
+	return nil
+}
+
 func (a *App) wireIngest() {
 	cfg := a.cfg
 	in := cfg.Ingestion
@@ -199,6 +262,7 @@ func (a *App) wireIngest() {
 			MaxFieldValueBytes: in.Limits.MaxFieldValueBytes.Int(),
 			MaxFieldNameBytes:  in.Limits.MaxFieldNameBytes,
 		},
+		Tee: a.forwarders,
 	}, a.backend.Writer(), a.backend.Name(), a.metrics, a.log.With("component", "pipeline"))
 	a.supervisor = supervisor.New(a.pipeline, a.metrics, a.log.With("component", "ingestion"))
 }
@@ -252,6 +316,9 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 		CookieSecure: cfg.Auth.CookieSecure,
 		AuditAll:     cfg.Query.AuditAll,
 		WebUI:        webui.FS(),
+	}
+	if len(a.forwarders) > 0 {
+		deps.Forwarders = a.forwarders.Statuses
 	}
 	if a.supervisor != nil {
 		deps.Sources = a.supervisor.Statuses
@@ -316,6 +383,7 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	if a.pipeline != nil {
+		a.forwarders.Start()
 		a.pipeline.Start()
 		a.supervisor.Start(a.cfg.Ingestion.Sources)
 	}
@@ -373,6 +441,8 @@ func (a *App) shutdown() {
 			a.log.Warn("pipeline did not drain before shutdown timeout; remaining logs counted as dropped", "error", err)
 		}
 	}
+	// Forwarders drain after the pipeline, so they see its final batches.
+	a.forwarders.Stop(ctx)
 	httpCtx, httpCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer httpCancel()
 	if err := a.server.Shutdown(httpCtx); err != nil {
@@ -386,6 +456,9 @@ func (a *App) shutdown() {
 }
 
 func (a *App) closeResources() {
+	for _, c := range a.closers {
+		_ = c.Close()
+	}
 	_ = a.backend.Close()
 	if a.store != nil {
 		a.store.Close()

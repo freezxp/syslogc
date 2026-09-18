@@ -92,6 +92,9 @@ func (p *Pipeline) countDropped(b *batch, lo, hi int, reason dropReason) {
 
 func (p *Pipeline) recordStored(b *batch, lo, hi int) {
 	p.setHealthy(true)
+	if p.cfg.Tee != nil {
+		p.cfg.Tee.Forward(b.entries.Tenant, b.entries.Entries[lo:hi])
+	}
 	oldest := b.entries.Entries[lo].ReceivedAt
 	bytes := 0
 	for i := lo; i < hi; i++ {
