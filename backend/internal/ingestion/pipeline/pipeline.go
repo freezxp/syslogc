@@ -63,6 +63,15 @@ type Config struct {
 	InitialBackoff time.Duration
 	MaxBackoff     time.Duration
 	Normalization  normalization.Options
+	// Tee receives the entries of every batch that reached storage, for
+	// mirroring them elsewhere. It must not block.
+	Tee Tee
+}
+
+// Tee mirrors stored entries. The slice is only valid for the call: the
+// entries belong to a pooled batch that is reused immediately afterwards.
+type Tee interface {
+	Forward(tenant string, entries []logentry.Entry)
 }
 
 // Pipeline is the ingestion pipeline. Create with New, then Start.

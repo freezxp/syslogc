@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -102,6 +103,38 @@ func (c *Config) Validate() error {
 	}
 	if in.Limits.MaxFields <= 0 || in.Limits.MaxFieldValueBytes <= 0 || in.Limits.MaxFieldNameBytes <= 0 {
 		add("ingestion.limits: all limits must be positive")
+	}
+
+	targetNames := map[string]bool{}
+	for i, t := range c.Forwarding.Targets {
+		p := fmt.Sprintf("forwarding.targets[%d]", i)
+		if t.Name != "" {
+			p = fmt.Sprintf("forwarding.targets[%s]", t.Name)
+		}
+		switch {
+		case t.Name == "":
+			add("%s: name is required", p)
+		case targetNames[t.Name]:
+			add("%s: duplicate target name", p)
+		}
+		targetNames[t.Name] = true
+		if err := validateURL(t.URL); err != nil {
+			add("%s.url: %v", p, err)
+		}
+		if t.MinSeverity != "" && !validSeverity(t.MinSeverity) {
+			add("%s.min_severity: unknown severity %q", p, t.MinSeverity)
+		}
+		switch t.Compression {
+		case "", "none", "gzip", "zstd":
+		default:
+			add("%s.compression: must be none, gzip or zstd", p)
+		}
+		if t.Queue.MaxMessages < 1 {
+			add("%s.queue.max_messages: must be positive", p)
+		}
+		if t.Batch.MaxRows < 1 {
+			add("%s.batch.max_rows: must be positive", p)
+		}
 	}
 
 	pg := c.Metadata.Postgres
@@ -322,4 +355,21 @@ func transport(s Source) string {
 		return "udp"
 	}
 	return "tcp"
+}
+
+// validateURL accepts an http(s) URL with a host.
+func validateURL(u string) error {
+	pu, err := url.Parse(u)
+	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+		return fmt.Errorf("must be an http(s) URL, got %q", u)
+	}
+	return nil
+}
+
+// severityNames mirrors logentry's canonical names; config stays free of
+// dependencies on the log model.
+var severityNames = []string{"emergency", "alert", "critical", "error", "warning", "notice", "info", "debug"}
+
+func validSeverity(name string) bool {
+	return slices.Contains(severityNames, strings.ToLower(name))
 }

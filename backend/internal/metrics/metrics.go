@@ -59,6 +59,9 @@ type Metrics struct {
 	StorageWriteDuration *prometheus.HistogramVec
 	StorageWriteErrors   *prometheus.CounterVec
 	StorageWriteRetries  *prometheus.CounterVec
+	ForwardSent          *prometheus.CounterVec
+	ForwardDropped       *prometheus.CounterVec
+	ForwardErrors        *prometheus.CounterVec
 	StorageHealthy       *prometheus.GaugeVec
 	StorageReachable     *prometheus.GaugeVec
 
@@ -114,6 +117,12 @@ func New(version, commit string) *Metrics {
 			"Failed storage writes by error class.", "backend", "class"),
 		StorageWriteRetries: f.counterVec("storage_write_retries_total",
 			"Storage write retries.", "backend"),
+		ForwardSent: f.counterVec("forward_messages_total",
+			"Messages written to a forward target.", "target"),
+		ForwardDropped: f.counterVec("forward_messages_dropped_total",
+			"Messages not forwarded, by reason.", "target", "reason"),
+		ForwardErrors: f.counterVec("forward_write_errors_total",
+			"Failed writes to a forward target, by error class.", "target", "class"),
 		StorageHealthy: f.gaugeVec("storage_healthy",
 			"1 if the most recent storage write succeeded. Stays 1 while a write is still in flight.", "backend"),
 		StorageReachable: f.gaugeVec("storage_reachable",
@@ -222,4 +231,46 @@ func (f factory) histogramVec(name, help string, buckets []float64, labels ...st
 	v := prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: namespace, Name: name, Help: help, Buckets: buckets}, labels)
 	f.reg.MustRegister(v)
 	return v
+}
+
+// ForwardMetrics are one forward target's counters and gauges. Gauges are
+// registered as functions so the forwarder owns their values.
+type ForwardMetrics struct {
+	m      *Metrics
+	target string
+	Sent   prometheus.Counter
+}
+
+// Forward returns the metrics for one forward target.
+func (m *Metrics) Forward(target string) *ForwardMetrics {
+	return &ForwardMetrics{m: m, target: target, Sent: m.ForwardSent.WithLabelValues(target)}
+}
+
+func (f *ForwardMetrics) Dropped(reason string) prometheus.Counter {
+	return f.m.ForwardDropped.WithLabelValues(f.target, reason)
+}
+
+func (f *ForwardMetrics) Errors(class string) prometheus.Counter {
+	return f.m.ForwardErrors.WithLabelValues(f.target, class)
+}
+
+// QueueMessages registers a gauge reporting queued messages.
+func (f *ForwardMetrics) QueueMessages(value func() float64) {
+	f.register("forward_queue_messages", "Messages waiting to be forwarded.", value)
+}
+
+// Healthy registers a gauge that is 1 while the last write succeeded.
+func (f *ForwardMetrics) Healthy(value func() float64) {
+	f.register("forward_healthy", "1 if the most recent write to the forward target succeeded.", value)
+}
+
+// LastSuccess registers a gauge holding the last successful write time.
+func (f *ForwardMetrics) LastSuccess(value func() float64) {
+	f.register("forward_last_success_timestamp_seconds", "Unix time of the last successful forward write.", value)
+}
+
+func (f *ForwardMetrics) register(name, help string, value func() float64) {
+	f.m.Registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Namespace: namespace, Name: name, Help: help, ConstLabels: prometheus.Labels{"target": f.target},
+	}, value))
 }

@@ -1,4 +1,5 @@
 import type { components } from './schema'
+import type { ForwardTarget } from './operations'
 
 type S = components['schemas']
 
@@ -42,7 +43,8 @@ export type SavedSearch = S['SavedSearch']
 export type SavedSearchInput = S['SavedSearchInput']
 export type ApiKey = S['ApiKey']
 export type SystemHealth = S['SystemHealth']
-export type SystemIngestion = S['SystemIngestion']
+/** `forwarding` is not in the generated schema yet; see the note in ./operations.ts. */
+export type SystemIngestion = S['SystemIngestion'] & { forwarding?: ForwardTarget[] | null }
 export type SystemStorage = S['SystemStorage']
 export type SourceStatus = S['SourceStatus']
 export type SourceCounters = S['SourceCounters']
@@ -57,6 +59,7 @@ export type {
   BreakdownRequest,
   BreakdownResponse,
   BreakdownRow,
+  ForwardTarget,
   ManagedSource,
   ManagedSourceStatus,
   RetentionDrift,

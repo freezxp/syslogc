@@ -122,6 +122,9 @@ func Load(opts LoadOptions) (*Config, error) {
 	for i := range cfg.Ingestion.Sources {
 		applySourceDefaults(&cfg.Ingestion.Sources[i])
 	}
+	for i := range cfg.Forwarding.Targets {
+		applyForwardDefaults(&cfg.Forwarding.Targets[i])
+	}
 	if cfg.Node.ID == "" {
 		cfg.Node.ID, _ = os.Hostname()
 	}

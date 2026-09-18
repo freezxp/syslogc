@@ -1050,6 +1050,28 @@ export const handlers = [
       storage_healthy: true,
       e2e_latency_p50_seconds: 0.42,
       e2e_latency_p99_seconds: 1.37,
+      forwarding: [
+        {
+          name: 'dr-site',
+          healthy: true,
+          queued_messages: 0,
+          sent_messages: Math.round(1_530_004_120 + t * 4100),
+          // A healthy target that dropped copies during an earlier outage.
+          dropped_messages: 96,
+          last_success_at: new Date(Date.now() - 4_000).toISOString(),
+        },
+        {
+          name: 'siem-archive',
+          healthy: false,
+          queued_messages: 48_120,
+          sent_messages: 88_412_003,
+          dropped_messages: 1_204_880,
+          last_success_at: new Date(NOW - 19 * 60_000).toISOString(),
+          last_error: 'storage write unavailable: dial tcp 10.0.0.9:9428: connect: connection refused',
+          min_severity: 'warning',
+          sources: ['syslog-udp'],
+        },
+      ],
     })
   }),
   http.get(

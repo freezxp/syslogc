@@ -8,6 +8,8 @@ COMMIT   ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 LDFLAGS  := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 VL_IMAGE := victoriametrics/victoria-logs:v1.52.0
 VL_TEST_CONTAINER := syslogc-test-victorialogs
+VL_FORWARD_CONTAINER := syslogc-test-victorialogs-forward
+TEST_VICTORIALOGS_FORWARD_URL ?= http://127.0.0.1:19429
 PG_IMAGE := postgres:17.6-trixie
 PG_TEST_CONTAINER := syslogc-test-postgres
 TEST_POSTGRES_DSN ?= postgres://syslogc:test@127.0.0.1:15432/syslogc?sslmode=disable
@@ -82,13 +84,21 @@ pg-up: ## Start a throwaway PostgreSQL for tests (port 15432)
 pg-down: ## Stop the test PostgreSQL
 	-docker stop $(PG_TEST_CONTAINER) >/dev/null 2>&1
 
+.PHONY: vl-forward-up
+vl-forward-up: ## Start a second VictoriaLogs for forwarding tests (port 19429)
+	@docker inspect $(VL_FORWARD_CONTAINER) >/dev/null 2>&1 || \
+	  docker run -d --rm --name $(VL_FORWARD_CONTAINER) -p 127.0.0.1:19429:9428 $(VL_IMAGE) -retentionPeriod=30d >/dev/null
+	@for i in $$(seq 1 30); do curl -fsS $(TEST_VICTORIALOGS_FORWARD_URL)/health >/dev/null 2>&1 && exit 0; sleep 1; done; \
+	  echo "forward VictoriaLogs did not become healthy" >&2; exit 1
+
 .PHONY: vl-down
-vl-down: ## Stop the integration-test VictoriaLogs
+vl-down: ## Stop the integration-test VictoriaLogs instances
 	-docker stop $(VL_TEST_CONTAINER) >/dev/null 2>&1
+	-docker stop $(VL_FORWARD_CONTAINER) >/dev/null 2>&1
 
 .PHONY: integration
-integration: vl-up pg-up ## Integration tests against real VictoriaLogs and PostgreSQL
-	cd $(BACKEND) && TEST_VICTORIALOGS_URL=$(TEST_VICTORIALOGS_URL) TEST_POSTGRES_DSN="$(TEST_POSTGRES_DSN)" go test -tags integration -race -count=1 ./tests/integration/
+integration: vl-up vl-forward-up pg-up ## Integration tests against real VictoriaLogs and PostgreSQL
+	cd $(BACKEND) && TEST_VICTORIALOGS_URL=$(TEST_VICTORIALOGS_URL) TEST_VICTORIALOGS_FORWARD_URL=$(TEST_VICTORIALOGS_FORWARD_URL) TEST_POSTGRES_DSN="$(TEST_POSTGRES_DSN)" go test -tags integration -race -count=1 ./tests/integration/
 
 .PHONY: docker
 docker: ## Build the syslogc and loggen images

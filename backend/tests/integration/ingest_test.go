@@ -40,8 +40,14 @@ func vlURL(t *testing.T) string {
 
 func newBackend(t *testing.T, compression string) *victorialogs.Backend {
 	t.Helper()
+	return newBackendURL(t, vlURL(t), compression)
+}
+
+// newBackendURL opens a backend against a specific instance.
+func newBackendURL(t *testing.T, url, compression string) *victorialogs.Backend {
+	t.Helper()
 	b, err := victorialogs.New(victorialogs.Config{
-		InsertURL: vlURL(t), SelectURL: vlURL(t),
+		InsertURL: url, SelectURL: url,
 		StreamFields: []string{"source", "hostname", "app_name"},
 		WriteTimeout: 10 * time.Second, QueryTimeout: 30 * time.Second, Compression: compression,
 	})

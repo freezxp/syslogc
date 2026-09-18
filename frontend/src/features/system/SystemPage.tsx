@@ -1,9 +1,9 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { AlertTriangle, CheckCircle2 } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 
 import { useSystemHealth, useSystemIngestion, useSystemStorage } from '@/api/hooks'
-import type { SourceCounters } from '@/api/types'
+import type { ForwardTarget, SourceCounters } from '@/api/types'
 import { ErrorPanel, Panel, Skeleton, StatusDot } from '@/components/data/common'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/overlay'
 import {
@@ -16,6 +16,8 @@ import {
   formatTimestamp,
 } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
+
+import { forwardFilterLabels, secondsSince, truncateError } from './forwarding'
 
 export function SystemPage() {
   const { tab } = useSearch({ from: '/app/system' })
@@ -130,6 +132,95 @@ function HealthTab() {
   )
 }
 
+/** `now` is the time the counters were fetched, so ages do not drift between polls. */
+function ForwardingPanel({ targets, now }: { targets: ForwardTarget[]; now: number }) {
+  const tz = useTimezone()
+  return (
+    <Panel title="Forwarding" bodyClassName="p-0 overflow-x-auto">
+      <table className="w-full text-base">
+        <thead className="bg-surface-2 text-left text-xs font-semibold tracking-wide text-muted uppercase">
+          <tr>
+            <th className="px-3 py-2">Target</th>
+            <th className="px-3 py-2">State</th>
+            <th className="px-3 py-2 text-right">Sent</th>
+            <th className="px-3 py-2 text-right">Dropped</th>
+            <th className="px-3 py-2 text-right">Queued</th>
+            <th className="px-3 py-2">Last success</th>
+            <th className="px-3 py-2">Forwards</th>
+          </tr>
+        </thead>
+        <tbody>
+          {targets.map((t) => {
+            const age = secondsSince(t.last_success_at, now)
+            return (
+              <Fragment key={t.name}>
+                <tr className="border-t border-border">
+                  <td className="px-3 py-2 font-medium">{t.name}</td>
+                  <td className="px-3 py-2">
+                    <span className="flex items-center gap-1.5">
+                      <StatusDot status={t.healthy ? 'ok' : 'fail'} /> {t.healthy ? 'healthy' : 'unhealthy'}
+                    </span>
+                  </td>
+                  <td className="mono px-3 py-2 text-right">{formatExact(t.sent_messages)}</td>
+                  {/* Dropped copies are gone for good, so they stay a signal on a healthy target too. */}
+                  <td className="mono px-3 py-2 text-right">
+                    <span className={t.dropped_messages ? 'text-warning' : undefined}>
+                      {formatExact(t.dropped_messages)}
+                    </span>
+                  </td>
+                  <td className="mono px-3 py-2 text-right">
+                    <span className={!t.healthy && t.queued_messages > 0 ? 'text-warning' : undefined}>
+                      {formatExact(t.queued_messages)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    {age === null ? (
+                      <span className="text-subtle">never</span>
+                    ) : (
+                      <>
+                        <div className="whitespace-nowrap">{formatDuration(age)} ago</div>
+                        <div className="mono text-sm whitespace-nowrap text-muted">
+                          {formatTimestamp(t.last_success_at, tz, 'yyyy-MM-dd HH:mm')}
+                        </div>
+                      </>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="flex flex-wrap gap-1">
+                      {forwardFilterLabels(t).map((label) => (
+                        <span key={label} className="rounded bg-surface-3 px-1 text-xs text-muted">
+                          {label}
+                        </span>
+                      ))}
+                    </span>
+                  </td>
+                </tr>
+                {/* Its own row so the reason can run full width instead of stretching a column. */}
+                {!t.healthy && (
+                  <tr>
+                    <td colSpan={7} className="px-3 pb-2 text-sm">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-danger" title={t.last_error}>
+                          {truncateError(t.last_error) || 'Writes to this target are failing.'}
+                        </span>
+                        {/* The reason matters most; the consequence only shows where the row has room for it. */}
+                        <span className="hidden shrink-0 text-muted xl:inline">
+                          · Copies are buffered and dropped once the queue fills; logs stored on this node are
+                          unaffected.
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
+    </Panel>
+  )
+}
+
 function droppedTotal(s: SourceCounters): number {
   return Object.values(s.dropped ?? {}).reduce((n, v) => n + v, 0)
 }
@@ -142,6 +233,7 @@ function IngestionTab() {
   const rate = d.sources.reduce((n, s) => n + (s.received_per_second ?? 0), 0)
   const stored = d.sources.reduce((n, s) => n + (s.stored_per_second ?? 0), 0)
   const fill = d.queue.capacity_bytes ? (d.queue.bytes ?? 0) / d.queue.capacity_bytes : 0
+  const forwarding = d.forwarding ?? []
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -239,6 +331,7 @@ function IngestionTab() {
           </tbody>
         </table>
       </Panel>
+      {forwarding.length > 0 && <ForwardingPanel targets={forwarding} now={q.dataUpdatedAt} />}
     </div>
   )
 }

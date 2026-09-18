@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
+	"github.com/freezxp/syslogc/backend/internal/forwarding"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 )
@@ -279,6 +280,7 @@ func (s *Server) handleSystemIngestion(w http.ResponseWriter, _ *http.Request, _
 		}
 	}
 	body := map[string]any{"node": s.opts.NodeID, "sources": sources, "storage_healthy": snap.StorageHealthy,
+		"forwarding":              s.forwardingStatus(),
 		"e2e_latency_p50_seconds": finite(snap.E2EP50), "e2e_latency_p99_seconds": finite(snap.E2EP99)}
 	if s.opts.API.Queue != nil {
 		body["queue"] = s.opts.API.Queue()
@@ -351,6 +353,14 @@ func (s *Server) handleSystemRetention(w http.ResponseWriter, r *http.Request, _
 	}
 	writeJSON(w, http.StatusOK, body)
 	return nil
+}
+
+// forwardingStatus lists the forward targets, or nil when none exist.
+func (s *Server) forwardingStatus() []forwarding.Status {
+	if s.opts.API.Forwarders == nil {
+		return nil
+	}
+	return s.opts.API.Forwarders()
 }
 
 // ---- web UI -------------------------------------------------------------------

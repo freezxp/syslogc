@@ -456,27 +456,49 @@ func TestAnalyticsAgainstVictoriaLogs(t *testing.T) {
 		t.Errorf("series total = %v, want 60", total)
 	}
 	// A window that starts inside a bucket keeps that partial bucket, so the
-	// points still account for every matching log.
+	// points still account for every matching log. The window is anchored to
+	// the data, not to "now", so the assertion cannot drift with timing.
+	partialID := runID()
+	var pnd bytes.Buffer
+	for i := range 6 {
+		ts := base.Add(30 * time.Second)
+		if i >= 3 {
+			ts = base.Add(90 * time.Second)
+		}
+		fmt.Fprintf(&pnd, `{"timestamp":%q,"message":"partial %s","host":"p-1","level":"info"}`+"\n",
+			ts.Format(time.RFC3339), partialID)
+	}
+	resp, body = ingest.do(t, "POST", "/api/v1/ingest", &pnd, map[string]string{
+		"Authorization": "Bearer " + key.Secret, "Content-Type": "application/x-ndjson"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("ingest partial-bucket rows: %d %s", resp.StatusCode, body)
+	}
+	waitSearch(t, c, partialID, 6)
+
 	resp, body = c.post(t, "/api/v1/analytics/series", map[string]any{
-		"time_range": map[string]string{"from": time.Now().UTC().Add(-91 * time.Second).Format(time.RFC3339Nano), "to": "now+1m"},
-		"filter":     sel["filter"], "group_by": "hostname", "buckets": 4})
+		// Starts 15s into the bucket that holds the first three rows.
+		"time_range": map[string]string{
+			"from": base.Add(15 * time.Second).Format(time.RFC3339Nano),
+			"to":   base.Add(3 * time.Minute).Format(time.RFC3339Nano),
+		},
+		"filter": map[string]any{"op": "text", "value": partialID}, "group_by": "hostname", "buckets": 4})
 	var partial struct {
-		Groups []struct {
+		Timestamps []string `json:"timestamps"`
+		Groups     []struct {
 			Total  float64   `json:"total"`
 			Points []float64 `json:"points"`
 		} `json:"groups"`
 	}
-	if err := json.Unmarshal(body, &partial); err != nil || resp.StatusCode != http.StatusOK || len(partial.Groups) == 0 {
+	if err := json.Unmarshal(body, &partial); err != nil || resp.StatusCode != http.StatusOK || len(partial.Groups) != 1 {
 		t.Fatalf("partial-bucket series: %d %s", resp.StatusCode, body)
 	}
-	for _, g := range partial.Groups {
-		sum := 0.0
-		for _, p := range g.Points {
-			sum += p
-		}
-		if sum != g.Total {
-			t.Errorf("points sum to %v but the total is %v: data hidden in the leading bucket", sum, g.Total)
-		}
+	g := partial.Groups[0]
+	sum := 0.0
+	for _, p := range g.Points {
+		sum += p
+	}
+	if g.Total != 6 || sum != 6 {
+		t.Errorf("total %v and points summing to %v, want 6 and 6: data hidden in the leading bucket\n%s", g.Total, sum, body)
 	}
 
 	// A distinct-count series reports the distinct count over the whole
