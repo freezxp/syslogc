@@ -17,7 +17,7 @@ import {
 } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
-import { forwardFilterLabels, secondsSince } from './forwarding'
+import { forwardFilterLabels, secondsSince, truncateError } from './forwarding'
 
 export function SystemPage() {
   const { tab } = useSearch({ from: '/app/system' })
@@ -142,6 +142,8 @@ function ForwardingPanel({ targets, now }: { targets: ForwardTarget[]; now: numb
           <tr>
             <th className="px-3 py-2">Target</th>
             <th className="px-3 py-2">State</th>
+            <th className="px-3 py-2 text-right">Sent</th>
+            <th className="px-3 py-2 text-right">Dropped</th>
             <th className="px-3 py-2 text-right">Queued</th>
             <th className="px-3 py-2">Last success</th>
             <th className="px-3 py-2">Forwards</th>
@@ -157,6 +159,13 @@ function ForwardingPanel({ targets, now }: { targets: ForwardTarget[]; now: numb
                   <td className="px-3 py-2">
                     <span className="flex items-center gap-1.5">
                       <StatusDot status={t.healthy ? 'ok' : 'fail'} /> {t.healthy ? 'healthy' : 'unhealthy'}
+                    </span>
+                  </td>
+                  <td className="mono px-3 py-2 text-right">{formatExact(t.sent_messages)}</td>
+                  {/* Dropped copies are gone for good, so they stay a signal on a healthy target too. */}
+                  <td className="mono px-3 py-2 text-right">
+                    <span className={t.dropped_messages ? 'text-warning' : undefined}>
+                      {formatExact(t.dropped_messages)}
                     </span>
                   </td>
                   <td className="mono px-3 py-2 text-right">
@@ -186,11 +195,20 @@ function ForwardingPanel({ targets, now }: { targets: ForwardTarget[]; now: numb
                     </span>
                   </td>
                 </tr>
-                {/* Its own row so the sentence can run full width instead of stretching a column. */}
+                {/* Its own row so the reason can run full width instead of stretching a column. */}
                 {!t.healthy && (
                   <tr>
-                    <td colSpan={5} className="px-3 pb-2 text-sm text-danger">
-                      Copies are buffered and dropped once the queue fills; logs stored on this node are unaffected.
+                    <td colSpan={7} className="px-3 pb-2 text-sm">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-danger" title={t.last_error}>
+                          {truncateError(t.last_error) || 'Writes to this target are failing.'}
+                        </span>
+                        {/* The reason matters most; the consequence only shows where the row has room for it. */}
+                        <span className="hidden shrink-0 text-muted xl:inline">
+                          · Copies are buffered and dropped once the queue fills; logs stored on this node are
+                          unaffected.
+                        </span>
+                      </div>
                     </td>
                   </tr>
                 )}

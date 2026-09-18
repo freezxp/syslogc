@@ -28,7 +28,7 @@ import {
   metricUnit,
   seriesChartData,
 } from '@/features/analytics/analytics-query'
-import { forwardFilterLabels, secondsSince } from '@/features/system/forwarding'
+import { forwardFilterLabels, secondsSince, truncateError } from '@/features/system/forwarding'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
 import { decodeBase64Url, encodeBase64Url } from './base64url'
@@ -233,6 +233,16 @@ describe('forwarding', () => {
       'source: syslog-tcp',
     ])
     expect(forwardFilterLabels({ sources: [] })).toEqual(['all logs'])
+  })
+
+  it('keeps a long error to one line', () => {
+    const err = 'storage write unavailable: dial tcp 10.0.0.9:9428: connect: connection refused'
+    expect(truncateError(err)).toBe(err)
+    expect(truncateError(undefined)).toBe('')
+    expect(truncateError('  spaced  ')).toBe('spaced')
+    expect(truncateError('abcdefghij', 5)).toBe('abcd…')
+    expect(truncateError('abcd efghij', 6)).toBe('abcd…')
+    expect(truncateError('abcde', 5)).toBe('abcde')
   })
 
   it('ages the last successful write', () => {

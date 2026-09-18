@@ -173,8 +173,14 @@ export interface ForwardTarget {
   name: string
   healthy: boolean
   queued_messages: number
+  /** Copies written since the node started. */
+  sent_messages: number
+  /** Copies that will never be sent: queue full, rejected, or lost at shutdown. */
+  dropped_messages: number
   /** Absent until the first successful write to the target. */
   last_success_at?: string
+  /** Only set while unhealthy; the server clears it on recovery. */
+  last_error?: string
   /** Filters; absent means the target receives everything. */
   min_severity?: NonNullable<S['LogRow']['severity']>
   sources?: string[]

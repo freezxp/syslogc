@@ -15,6 +15,16 @@ export function forwardFilterLabels(t: Filters): string[] {
   return labels.length ? labels : ['all logs']
 }
 
+/**
+ * Backend errors carry a dialled address and a wrapped cause, so cap the row to
+ * one readable line; the caller keeps the full text in a `title`. A table cell
+ * sizes to its content, so CSS truncation alone would widen the whole table.
+ */
+export function truncateError(text: string | undefined, max = 110): string {
+  const t = text?.trim() ?? ''
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`
+}
+
 /** Seconds since `iso`, or null when the target has never written successfully. */
 export function secondsSince(iso: string | undefined | null, nowMs: number): number | null {
   if (!iso) return null
