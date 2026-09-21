@@ -1,0 +1,31 @@
+# Forwarding overlay: mirrors every stored log to a second VictoriaLogs.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.forwarding.yml up -d
+#
+# Point `url` in deploy/compose/syslogc-forwarding.yaml at a remote instance
+# instead to mirror off this host; the local `victorialogs-dr` service here is
+# only for trying the feature out.
+services:
+  syslogc:
+    volumes:
+      - ./deploy/compose/syslogc-forwarding.yaml:/etc/syslogc/syslogc.yaml:ro
+      - secrets:/secrets:ro
+    depends_on:
+      victorialogs-dr:
+        condition: service_started
+
+  victorialogs-dr:
+    image: victoriametrics/victoria-logs:v1.52.0
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/vlogs
+      - -httpListenAddr=:9428
+      - -retentionPeriod=${SYSLOGC_RETENTION:-30d}
+      - -retention.maxDiskUsagePercent=85
+    volumes:
+      - vlogs-dr-data:/vlogs
+    # For debugging the mirror, publish it on localhost:
+    # ports: ["127.0.0.1:9429:9428"]
+
+volumes:
+  vlogs-dr-data: {}

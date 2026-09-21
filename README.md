@@ -14,19 +14,29 @@ over standard protocols, normalized structured logs, and fast search on top of
 
 Requirements: Docker with Compose v2.
 
+Requirements: Ubuntu 22.04 or newer. `deploy.sh` installs Docker if it is
+missing, tunes the kernel for syslog bursts, starts the stack and prints the
+administrator password.
+
 ```bash
+sudo apt-get install -y git
 git clone https://github.com/freezxp/syslogc.git
 cd syslogc
-docker compose up -d
-
-# initial administrator password (printed once; you must change it at first login)
-docker compose logs syslogc | grep -A3 "initial administrator"
+./deploy.sh                 # add --pull to run the published image instead of building
 
 # send a message exactly like a device would
 logger --server 127.0.0.1 --udp --port 514 "Test syslog message"
 ```
 
-Open `http://<host>:8080`, sign in as `admin`, and search for `Test`.
+Open the URL it prints, sign in as `admin`, and search for `Test`. Re-running
+`./deploy.sh` is safe; `./deploy.sh --status` and `--stop` do what they say.
+
+Useful flags: `--domain logs.example.com` (behind a reverse proxy),
+`--retention 90d`, `--monitoring` (Prometheus and Grafana), `--forward URL`
+(mirror logs to another instance), `--port` and `--bind`.
+
+Prefer to drive Compose yourself? `docker compose up -d` still works; see
+[installation](docs/installation.md).
 
 Operational endpoints: `/health`, `/ready` (component and source status),
 `/metrics` (Prometheus). The UI is plain HTTP in the Compose stack — put a TLS
