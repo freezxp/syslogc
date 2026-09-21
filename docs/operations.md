@@ -84,6 +84,14 @@ forwarding:
       sources: [firewalls]      # optional: only this source
 ```
 
+To try it on one host, `docker-compose.forwarding.yml` runs a second
+VictoriaLogs and mirrors into it:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.forwarding.yml up -d
+# or: ./deploy.sh --forward http://victorialogs-dr:9428
+```
+
 How it behaves:
 
 - A copy is sent **after** the log is stored locally, so the remote receives

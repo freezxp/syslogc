@@ -3,10 +3,40 @@
 The web UI and API require login. Serve them over HTTPS (a TLS-terminating
 reverse proxy) before exposing them beyond a trusted network.
 
-## Docker Compose (single node)
+## One command (Ubuntu)
 
-Requirements: Docker Engine 24+ with Compose v2, ~2 GB RAM, disk sized for
-your log volume and retention.
+Requirements: Ubuntu 22.04 or newer, ~2 GB RAM, and disk sized for your log
+volume and retention. Everything else is installed for you.
+
+```bash
+sudo apt-get install -y git
+git clone https://github.com/freezxp/syslogc.git
+cd syslogc
+./deploy.sh
+```
+
+`deploy.sh` checks the system, installs Docker and Compose when missing,
+raises the kernel's UDP receive buffers (bursty syslog is dropped by the
+208 KiB default, see [performance](performance.md)), writes `.env`, opens the
+syslog and UI ports in `ufw` when it is active, starts the stack and waits
+for `/ready`, then prints the URL and the one-time administrator password.
+
+It never overwrites settings already in `.env`, so re-running it is safe.
+
+| Flag | |
+|---|---|
+| `--pull` | Run the published image instead of building locally |
+| `--domain NAME` | Public hostname of a reverse proxy (sets the allowed browser origins) |
+| `--proxy-ip ADDR` | Trust this proxy's `X-Forwarded-For`, so client IPs are real |
+| `--port`, `--bind` | Where the web UI is published (default `0.0.0.0:8080`) |
+| `--retention 90d` | How long logs are kept (sets both Syslogc and VictoriaLogs) |
+| `--monitoring` | Also run Prometheus and Grafana |
+| `--forward URL` | Mirror stored logs to another VictoriaLogs instance |
+| `--status`, `--stop` | What is running; stop it (data is kept) |
+
+## Docker Compose by hand
+
+Requirements: Docker Engine 24+ with Compose v2.
 
 ```bash
 git clone https://github.com/freezxp/syslogc.git

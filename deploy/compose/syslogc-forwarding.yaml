@@ -1,0 +1,83 @@
+# Compose configuration with log forwarding enabled.
+# Used by docker-compose.forwarding.yml; identical to syslogc.yaml plus
+# the forwarding section at the end.
+node:
+  roles: [all]
+
+server:
+  http:
+    address: ":8080"
+
+log:
+  level: info
+  format: json
+
+storage:
+  type: victorialogs
+  victorialogs:
+    insert_url: http://victorialogs:9428
+    select_url: http://victorialogs:9428
+    stream_fields: [source, hostname, app_name]
+    compression: none
+
+ingestion:
+  queue:
+    max_messages: 500000
+    max_bytes: 256MiB
+  batch:
+    max_rows: 10000
+    max_bytes: 8MiB
+    max_wait: 500ms
+  writers: 4
+  sources:
+    - name: syslog-udp
+      type: syslog
+      protocol: udp
+      address: ":5514"          # published as host port 514/udp
+      format: auto
+      timezone: UTC
+      udp:
+        # The kernel caps this at net.core.rmem_max (208 KiB by default);
+        # raise that sysctl to give bursts somewhere to land.
+        read_buffer_bytes: 32MiB
+
+    - name: syslog-tcp
+      type: syslog
+      protocol: tcp
+      address: ":5514"          # published as host port 514/tcp
+      format: auto
+      framing: auto
+      max_connections: 2000
+
+    - name: http-json
+      type: http_json           # POST /api/v1/ingest with an API key
+
+    - name: syslog-tls
+      type: syslog
+      protocol: tls
+      address: ":6514"
+      enabled: false            # provide certificates, then enable
+      tls:
+        cert_file: /etc/syslogc/tls/server.crt
+        key_file: /etc/syslogc/tls/server.key
+
+retention:
+  period: 30d                   # keep equal to VictoriaLogs -retentionPeriod
+
+metadata:
+  postgres:
+    dsn_file: /secrets/postgres_dsn
+
+auth:
+  secret_key_file: /secrets/secret_key
+  cookie_secure: false          # compose default is plain HTTP; see docker-compose.yml
+  bootstrap_admin:
+    username: admin             # generated password is printed once in the logs
+
+forwarding:
+  targets:
+    - name: dr
+      url: http://victorialogs-dr:9428
+      # Mirror everything. Narrow it with `sources` or `min_severity` when the
+      # remote should only see part of the traffic.
+      compression: gzip
