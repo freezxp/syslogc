@@ -118,6 +118,7 @@ never check roles.
 | `config:view` | manage configuration | | ✓ | ✓ |
 | `config:manage` | manage configuration | | | ✓ |
 | `retention:manage` | manage retention | | | ✓ |
+| `analytics:manage` | edit the DNS service catalog | | ✓ | ✓ |
 | `users:manage` | manage users | | | ✓ |
 | `apikeys:own` | — | | ✓ | ✓ |
 | `apikeys:manage` | — | | | ✓ |

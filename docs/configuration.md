@@ -277,6 +277,32 @@ Migrations run automatically at startup under an advisory lock.
 Per-role query limits (range, rows, timeout, concurrency) are fixed in this
 release; see [security](security.md#query-limits).
 
+### `analytics.metrics`
+
+Where measurements derived from the logs are stored. They outlive log
+retention, so trends stay readable after the logs behind them are gone.
+
+| Key | Default | Description |
+|---|---|---|
+| `url` | *(set by Compose)* | VictoriaMetrics base URL. Empty turns every rollup off. |
+| `timeout` | `30s` | Bounds one read or write. |
+| `basic_username` | — | Set together with `basic_password_file` if the instance needs authentication. |
+| `basic_password_file` | — | File holding the password; the file is read once at startup. |
+
+### `analytics.service_trends`
+
+Counts how many distinct clients queried each service in the catalog (see
+[operations](operations.md#service-trends)).
+
+| Key | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Needs `analytics.metrics.url` and a metadata database; off without either. |
+| `interval` | `5m` | The finest window recorded, and how often the rollup runs. Must divide an hour evenly. Hourly and daily windows are recorded as well, each counted over its own window because distinct counts do not add up. |
+| `backfill` | `7d` | How much history to fill in when a resolution has nothing recorded yet. `0` records forward only. |
+| `domain_field` | `dns.qname` | Field holding the queried name. |
+| `client_field` | `dns.client_ip` | Field holding the client address that is counted. |
+| `sources` | `[]` | Restricts the rollup to these sources; empty reads all of them. |
+
 ## Secrets for Docker Compose
 
 `syslogc init-secrets --dir /secrets [--owner uid:gid]` writes

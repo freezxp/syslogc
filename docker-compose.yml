@@ -28,6 +28,8 @@ services:
         condition: service_healthy
       victorialogs:
         condition: service_started
+      victoriametrics:
+        condition: service_started
     ports:
       # The UI and API require login. Put a TLS reverse proxy in front before
       # exposing this beyond a trusted network, then set
@@ -45,6 +47,8 @@ services:
       SYSLOGC_SERVER_HTTP_ALLOWED_ORIGINS: ${SYSLOGC_ALLOWED_ORIGINS:-}
       # Proxy addresses allowed to set X-Forwarded-For, comma-separated IPs/CIDRs
       SYSLOGC_SERVER_HTTP_TRUSTED_PROXIES: ${SYSLOGC_TRUSTED_PROXIES:-}
+      # Where rolled-up measurements are stored; empty disables the rollups.
+      SYSLOGC_ANALYTICS_METRICS_URL: ${SYSLOGC_METRICS_URL-http://victoriametrics:8428}
     volumes:
       - ./deploy/compose/syslogc.yaml:/etc/syslogc/syslogc.yaml:ro
       - secrets:/secrets:ro
@@ -100,7 +104,24 @@ services:
     # The image is distroless (no shell), so no container healthcheck is
     # defined; Syslogc retries writes and reports storage in /ready.
 
+  # Derived measurements rolled up from the logs — how many distinct clients
+  # queried a service in a window, and similar counts that are expensive to
+  # recompute and should outlive log retention. Tiny compared to the logs,
+  # so it keeps its own, much longer retention.
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.108.1
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/vmdata
+      - -httpListenAddr=:8428
+      - -retentionPeriod=${SYSLOGC_METRICS_RETENTION:-24}
+    volumes:
+      - vmetrics-data:/vmdata
+    # Internal only. For debugging, publish on localhost:
+    # ports: ["127.0.0.1:8428:8428"]
+
 volumes:
   vlogs-data: {}
+  vmetrics-data: {}
   postgres-data: {}
   secrets: {}

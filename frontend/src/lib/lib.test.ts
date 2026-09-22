@@ -33,6 +33,27 @@ import {
   seriesChartData,
 } from '@/features/analytics/analytics-query'
 import {
+  catalogProblemErrors,
+  catalogToForm,
+  formToServices,
+  hasCatalogErrors,
+  parseDomains,
+  validateCatalog,
+  type ServiceForm,
+} from '@/features/analytics/service-catalog'
+import {
+  decodeServiceTrends,
+  encodeServiceTrends,
+  peakSentence,
+  rangeTooLong,
+  serviceFilterLabel,
+  trendChartData,
+  trendMetricIsAdditive,
+  trendPointCount,
+  trendsRangePatch,
+  windowHelp,
+} from '@/features/analytics/service-trends'
+import {
   PERIOD_REQUIRED,
   PERIOD_TOO_LONG,
   PERIOD_TOO_SHORT,
@@ -691,6 +712,230 @@ describe('analytics query', () => {
     expect(coverageLabel(10, 143)).toBe('showing 10 of 143 values')
     expect(coverageLabel(3, 3)).toBe('3 values')
     expect(coverageLabel(1, 1)).toBe('1 value')
+  })
+})
+
+describe('service trends', () => {
+  const base = { win: undefined, count: undefined, svc: undefined }
+
+  it('defaults to hourly unique clients over every service', () => {
+    expect(decodeServiceTrends(base)).toEqual({ window: '1h', metric: 'unique_clients', services: [] })
+    // A window the rollup never recorded cannot be answered, so it is ignored.
+    expect(decodeServiceTrends({ ...base, win: '17m' }).window).toBe('1h')
+    expect(decodeServiceTrends({ ...base, win: '1d' }).window).toBe('1d')
+    expect(decodeServiceTrends({ ...base, count: 'queries' }).metric).toBe('queries')
+    expect(decodeServiceTrends({ ...base, count: 'nonsense' }).metric).toBe('unique_clients')
+  })
+
+  it('reads a service filter, ignoring blanks and repeats', () => {
+    expect(decodeServiceTrends({ ...base, svc: ' tiktok , ,youtube,tiktok ' }).services).toEqual(['tiktok', 'youtube'])
+  })
+
+  it('round-trips through the URL, dropping defaults', () => {
+    const q = { window: '5m' as const, metric: 'queries' as const, services: ['tiktok', 'youtube'] }
+    const encoded = encodeServiceTrends(q)
+    expect(encoded).toEqual({ win: '5m', count: 'queries', svc: 'tiktok,youtube' })
+    expect(decodeServiceTrends(encoded)).toEqual(q)
+    expect(encodeServiceTrends({ window: '1h', metric: 'unique_clients', services: [] })).toEqual({
+      win: undefined,
+      count: undefined,
+      svc: undefined,
+    })
+  })
+
+  it('widens the explorer default to a day, but leaves a chosen range alone', () => {
+    expect(trendsRangePatch({ from: 'now-1h', to: 'now' })).toEqual({ from: 'now-24h', to: 'now' })
+    expect(trendsRangePatch({ from: 'now-7d', to: 'now' })).toEqual({})
+  })
+
+  it('refuses a range with more windows than the server will answer', () => {
+    const day = { start: new Date('2026-09-21T00:00:00Z'), end: new Date('2026-09-22T00:00:00Z') }
+    expect(trendPointCount(day, '1h')).toBe(24)
+    expect(rangeTooLong(day, '5m')).toBeNull()
+    const week = { start: new Date('2026-09-15T00:00:00Z'), end: new Date('2026-09-22T00:00:00Z') }
+    expect(trendPointCount(week, '5m')).toBe(2016)
+    expect(rangeTooLong(week, '5m')).toMatch(/2,016 5 minutes windows/)
+    expect(rangeTooLong(week, '1h')).toBeNull()
+  })
+
+  it('spells the peak out, down to the hour it happened in', () => {
+    const peak = { service: 'tiktok', label: 'TikTok', value: 1240, at: '2026-09-22T21:00:00Z' }
+    expect(peakSentence(peak, '1h', 'unique_clients', 'UTC')).toBe(
+      'Most unique clients: TikTok, 1,240 clients at 21:00 on 22 Sep',
+    )
+    expect(peakSentence(peak, '1h', 'queries', 'UTC')).toBe(
+      'Most DNS queries: TikTok, 1,240 queries at 21:00 on 22 Sep',
+    )
+    // A daily window has no meaningful time of day.
+    expect(peakSentence(peak, '1d', 'unique_clients', 'UTC')).toBe(
+      'Most unique clients: TikTok, 1,240 clients on 22 Sep',
+    )
+    expect(peakSentence({ ...peak, label: '' }, '1h', 'unique_clients', 'UTC')).toMatch(/: tiktok,/)
+  })
+
+  it('says that unique counts cannot be added up, and that queries can', () => {
+    expect(windowHelp('unique_clients')).toMatch(/cannot be added up/)
+    expect(windowHelp('queries')).not.toMatch(/cannot be added up/)
+    expect(trendMetricIsAdditive('unique_clients')).toBe(false)
+    expect(trendMetricIsAdditive('queries')).toBe(true)
+  })
+
+  it('merges independently recorded series onto one timeline', () => {
+    const at = (h: number) => `2026-09-22T0${h}:00:00Z`
+    const { rows, series, hidden } = trendChartData({
+      resolved_range: { start: at(0), end: at(3) },
+      window: '1h',
+      step_seconds: 3600,
+      metric: 'unique_clients',
+      series: [
+        {
+          service: 'tiktok',
+          label: 'TikTok',
+          peak: 7,
+          peak_at: at(1),
+          points: [
+            { at: at(0), value: 5 },
+            { at: at(1), value: 7 },
+          ],
+        },
+        // Recorded from later on: it has no point for the first window, and a
+        // window nobody measured is not a zero.
+        {
+          service: 'youtube',
+          label: 'YouTube',
+          peak: 9,
+          peak_at: at(2),
+          points: [
+            { at: at(1), value: 2 },
+            { at: at(2), value: 9 },
+          ],
+        },
+      ],
+    })
+    expect(series).toEqual([
+      { key: 's0', label: 'TikTok', service: 'tiktok', peak: 7 },
+      { key: 's1', label: 'YouTube', service: 'youtube', peak: 9 },
+    ])
+    expect(rows).toEqual([
+      { t: Date.parse(at(0)), s0: 5 },
+      { t: Date.parse(at(1)), s0: 7, s1: 2 },
+      { t: Date.parse(at(2)), s1: 9 },
+    ])
+    expect(hidden).toBe(0)
+    expect(trendChartData(undefined)).toEqual({ rows: [], series: [], hidden: 0 })
+  })
+
+  it('counts the series a crowded chart leaves out', () => {
+    const series = ['a', 'b', 'c'].map((service) => ({
+      service,
+      peak: 1,
+      points: [{ at: '2026-09-22T00:00:00Z', value: 1 }],
+    }))
+    const chart = trendChartData(
+      {
+        resolved_range: { start: '2026-09-22T00:00:00Z', end: '2026-09-22T01:00:00Z' },
+        window: '1h',
+        step_seconds: 3600,
+        metric: 'unique_clients',
+        series,
+      },
+      2,
+    )
+    expect(chart.series).toHaveLength(2)
+    expect(chart.hidden).toBe(1)
+    // A series without a catalog label still has to be named after something.
+    expect(chart.series[0]?.label).toBe('a')
+  })
+
+  it('names the service filter after what it shows', () => {
+    const labelOf = (name: string) => (name === 'tiktok' ? 'TikTok' : undefined)
+    expect(serviceFilterLabel([], labelOf)).toBe('All services')
+    expect(serviceFilterLabel(['tiktok'], labelOf)).toBe('TikTok')
+    expect(serviceFilterLabel(['reddit'], labelOf)).toBe('reddit')
+    expect(serviceFilterLabel(['tiktok', 'youtube'], labelOf)).toBe('2 services')
+  })
+})
+
+describe('service catalog', () => {
+  const service = (patch: Partial<Omit<ServiceForm, 'key'>> = {}) => ({
+    key: 'k',
+    name: 'tiktok',
+    label: 'TikTok',
+    domains: 'tiktok.com',
+    enabled: true,
+    ...patch,
+  })
+
+  it('reads domains one per line or comma separated, without repeats', () => {
+    expect(parseDomains(' TikTok.com \n tiktokcdn.com, tiktok.com \n\n')).toEqual(['tiktok.com', 'tiktokcdn.com'])
+    expect(parseDomains('   ')).toEqual([])
+  })
+
+  it('round-trips a stored catalog through the form', () => {
+    const stored = [{ name: 'tiktok', label: 'TikTok', domains: ['tiktok.com', 'tiktokcdn.com'], enabled: false }]
+    const form = catalogToForm(stored)
+    expect(form[0]).toMatchObject({ name: 'tiktok', domains: 'tiktok.com\ntiktokcdn.com', enabled: false })
+    expect(formToServices(form)).toEqual(stored)
+  })
+
+  it('accepts a catalog the server would accept', () => {
+    expect(hasCatalogErrors(validateCatalog([service(), service({ name: 'youtube', domains: 'youtube.com' })]))).toBe(
+      false,
+    )
+  })
+
+  it('reports every problem at once, on the row that caused it', () => {
+    const errors = validateCatalog([
+      service({ name: 'Tik Tok' }),
+      service({ name: 'youtube', domains: '' }),
+      service({ name: 'netflix', domains: 'netflix.com\n*.nflxvideo.net\nlocalhost' }),
+      service({ name: 'tiktok' }),
+      service({ name: 'tiktok' }),
+    ])
+    expect(errors.rows[0]).toMatch(/lower-case letters/)
+    expect(errors.rows[1]).toBe('Add at least one domain.')
+    expect(errors.rows[2]).toMatch(/without spaces or wildcards/)
+    expect(errors.rows[2]).toMatch(/such as tiktok.com/)
+    expect(errors.rows[3]).toBeUndefined()
+    expect(errors.rows[4]).toBe('Another service already uses this name.')
+  })
+
+  it('refuses more services or domains than the server stores', () => {
+    const many = Array.from({ length: 33 }, (_, i) => service({ name: `s${i}` }))
+    expect(validateCatalog(many).general[0]).toMatch(/At most 32 services/)
+    const domains = Array.from({ length: 33 }, (_, i) => `d${i}.example.com`).join('\n')
+    expect(validateCatalog([service({ domains })]).rows[0]).toMatch(/At most 32 domains/)
+  })
+
+  it('places the server’s complaints on the rows they name', () => {
+    const sent = [
+      { name: '', label: '', domains: [], enabled: true },
+      { name: 'tiktok', label: '', domains: ['x'], enabled: true },
+    ]
+    const errors = catalogProblemErrors(
+      {
+        type: 'about:blank',
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        errors: [
+          {
+            pointer: '/services',
+            message:
+              'service 1: name: is required\nservice "tiktok": domain "x": must be a domain name, such as tiktok.com\nthe catalog could not be stored',
+          },
+        ],
+      },
+      'Saving failed.',
+      sent,
+    )
+    expect(errors.rows[0]).toBe('name: is required')
+    expect(errors.rows[1]).toBe('domain "x": must be a domain name, such as tiktok.com')
+    expect(errors.general).toEqual(['the catalog could not be stored'])
+  })
+
+  it('falls back to the message it was given when nothing matches a row', () => {
+    expect(catalogProblemErrors(undefined, 'Saving failed.').general).toEqual(['Saving failed.'])
   })
 })
 

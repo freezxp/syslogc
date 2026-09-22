@@ -27,6 +27,10 @@ export type ExplorerSearch = z.infer<typeof explorerSearchSchema>
  * Analytics state: the explorer's query params (`from,to,tz,q,native,mode`) plus
  * the aggregation. `top` stays a string like every other param; the codec in
  * `features/analytics/analytics-query.ts` turns it into a request.
+ *
+ * `view` picks between the ad-hoc explorer and the recorded service trends;
+ * `win`, `count`, `svc` and `catalog` belong to the latter and are decoded by
+ * `features/analytics/service-trends.ts`.
  */
 export const analyticsSearchSchema = z.object({
   from: str('now-1h'),
@@ -39,6 +43,11 @@ export const analyticsSearchSchema = z.object({
   metric: z._default(z.catch(z.enum(['count', 'unique']), 'count'), 'count'),
   mfield: optStr(),
   top: optStr(),
+  view: z._default(z.catch(z.enum(['explore', 'trends']), 'explore'), 'explore'),
+  win: optStr(),
+  count: optStr(),
+  svc: optStr(),
+  catalog: optStr(),
 })
 
 export type AnalyticsSearch = z.infer<typeof analyticsSearchSchema>

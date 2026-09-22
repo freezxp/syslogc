@@ -322,6 +322,86 @@ export interface SeriesResponse {
   stats: { duration_ms: number }
 }
 
+// ---- DNS service trends ----------------------------------------------------
+
+/**
+ * The resolutions the rollup records. A chart may only ask for one of them:
+ * distinct counts cannot be re-bucketed after the fact, so a window that was
+ * never recorded has no data.
+ */
+export type TrendWindow = '5m' | '1h' | '1d'
+
+export type TrendMetric = 'unique_clients' | 'queries'
+
+/** One named group of domains, e.g. TikTok is tiktok.com plus a few more. */
+export interface TrendService {
+  /** Becomes a metric label, so it is a slug: lower-case letters, digits, - and _. */
+  name: string
+  label: string
+  domains: string[]
+  /** False keeps a service in the catalog without counting it. */
+  enabled: boolean
+}
+
+export interface ServiceCatalog {
+  services: TrendService[]
+  windows: TrendWindow[]
+  /** False when no metrics store is configured: nothing is being counted. */
+  recording?: boolean
+  /** Non-empty when the stored catalog cannot be read; the editor shows it. */
+  problem?: string
+  /** Only on the PUT reply, e.g. "from the next rollup". */
+  applies?: string
+}
+
+export interface ServiceCatalogInput {
+  services: TrendService[]
+}
+
+export interface ServiceTrendRequest {
+  time_range: S['TimeRange']
+  window: TrendWindow
+  /** Omitted or empty asks for every recorded service. */
+  services?: string[]
+  metric?: TrendMetric
+}
+
+export interface ServiceTrendPoint {
+  at: string
+  value: number
+}
+
+export interface ServiceTrendSeries {
+  service: string
+  /** The catalog's display name; absent for a service no longer in the catalog. */
+  label?: string
+  points: ServiceTrendPoint[]
+  /** The largest point, which is the answer the view is built around. */
+  peak: number
+  /** Absent while `peak` is 0: nothing was ever counted. */
+  peak_at?: string
+}
+
+/** Busiest point of the busiest service; omitted when there is no data at all. */
+export interface ServiceTrendPeak {
+  service: string
+  label?: string
+  value: number
+  at: string
+}
+
+export interface ServiceTrendResponse {
+  resolved_range: S['ResolvedRange']
+  window: TrendWindow
+  step_seconds: number
+  metric: TrendMetric
+  /** Busiest first, so the legend reads in the order that matters. */
+  series: ServiceTrendSeries[]
+  peak?: ServiceTrendPeak
+  /** Only when nothing was recorded: why that most likely is, in plain words. */
+  hint?: string
+}
+
 // ---- path definitions ------------------------------------------------------
 //
 // The shape openapi-fetch expects: `parameters`, `requestBody` and `responses`
@@ -375,6 +455,13 @@ export interface OperationsPaths {
   }
   '/api/v1/analytics/series': {
     post: Write<SeriesResponse, SeriesRequest>
+  }
+  '/api/v1/analytics/service-trends': {
+    post: Write<ServiceTrendResponse, ServiceTrendRequest>
+  }
+  '/api/v1/analytics/services': {
+    get: Read<ServiceCatalog>
+    put: Write<ServiceCatalog, ServiceCatalogInput>
   }
   '/api/v1/sources': {
     get: Read<{ sources: ManagedSource[] }>

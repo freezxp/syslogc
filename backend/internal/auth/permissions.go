@@ -24,6 +24,7 @@ const (
 	PermConfigView      Permission = "config:view"
 	PermConfigManage    Permission = "config:manage"
 	PermRetentionManage Permission = "retention:manage"
+	PermAnalyticsManage Permission = "analytics:manage"
 	PermUsersManage     Permission = "users:manage"
 	PermAPIKeysOwn      Permission = "apikeys:own"
 	PermAPIKeysManage   Permission = "apikeys:manage"
@@ -44,6 +45,7 @@ var viewerPermissions = []Permission{
 
 var operatorPermissions = append(append([]Permission{}, viewerPermissions...),
 	PermLogsQueryNative, PermLogsExport, PermSourcesManage, PermConfigView, PermAPIKeysOwn,
+	PermAnalyticsManage,
 )
 
 var adminPermissions = append(append([]Permission{}, operatorPermissions...),

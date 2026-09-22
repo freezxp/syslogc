@@ -73,6 +73,8 @@ type LogQuerier interface {
 	// Aggregate groups matching rows by a field, by time, or both, and
 	// returns one metric value per group.
 	Aggregate(ctx context.Context, q AggregateQuery) ([]AggRow, error)
+	// CategoryCounts counts distinct values per category in one pass.
+	CategoryCounts(ctx context.Context, q CategoryQuery) ([]CategoryRow, error)
 	// FieldNames lists field names present in the selection. Counts may be approximate.
 	FieldNames(ctx context.Context, sel Selection) ([]FieldInfo, error)
 	// Tail streams rows ingested after the call until ctx is done.
@@ -111,6 +113,50 @@ type AggRow struct {
 	// Group is the GroupBy value, empty when grouping everything.
 	Group string
 	Value float64
+}
+
+// MaxCategories bounds how many categories one CategoryQuery may count,
+// because each adds two aggregations to the same pass.
+const MaxCategories = 32
+
+// CategoryQuery counts, per category and time bucket, how many distinct
+// values of DistinctField matched the category.
+//
+// Categories are counted in one pass over the selection. Each is counted
+// independently: a client that matches two categories counts once in each,
+// and the categories together need not cover the selection. Distinct counts
+// are never additive — the count for an hour is not the sum of its minutes —
+// so each resolution a caller wants must be queried at that resolution.
+type CategoryQuery struct {
+	Selection
+	// Categories are the buckets to count into; at most MaxCategories.
+	Categories []Category
+	// DistinctField is the field whose distinct values are counted.
+	DistinctField string
+	// Step buckets by time when non-zero; otherwise the whole range is one
+	// bucket.
+	Step time.Duration
+}
+
+// Category is one named bucket of a CategoryQuery.
+type Category struct {
+	// Name identifies the category in the results.
+	Name string
+	// Filter selects the messages that belong to it. A nil filter matches
+	// everything in the selection.
+	Filter *filter.Expr
+}
+
+// CategoryRow is one category's counts in one time bucket.
+type CategoryRow struct {
+	// Time is the bucket start, zero when the query had no Step.
+	Time time.Time
+	// Category is the category name.
+	Category string
+	// Distinct is how many distinct values of DistinctField matched.
+	Distinct float64
+	// Messages is how many messages matched.
+	Messages float64
 }
 
 // Admin exposes operational information about the backend.

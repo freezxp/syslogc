@@ -26,6 +26,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
+	"github.com/freezxp/syslogc/backend/internal/metricstore"
 	"github.com/freezxp/syslogc/backend/internal/query"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 )
@@ -38,11 +39,19 @@ type ReadinessCheck struct {
 }
 
 // APIDeps are the dependencies of the REST API (api role).
+// ServiceTrendReader reads recorded series out of the metrics store.
+type ServiceTrendReader interface {
+	QueryRange(ctx context.Context, q metricstore.RangeQuery) ([]metricstore.Series, error)
+}
+
 type APIDeps struct {
 	Auth    *auth.Service
 	Store   metadata.Store
 	Query   *query.Service
 	Storage storage.Backend
+	// ServiceTrends reads recorded trend series; nil when no metrics store
+	// is configured, which makes the trend endpoints report that.
+	ServiceTrends ServiceTrendReader
 	// Retention returns the current retention status (for /system/storage).
 	Retention func() any
 	// Sources returns source statuses; nil without the ingest role.

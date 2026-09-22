@@ -20,6 +20,7 @@ BIND="0.0.0.0"
 PORT="8080"
 RETENTION="30d"
 RETENTION_SET=false
+METRICS_RETENTION="24"
 DOMAIN=""
 PROXY_IP=""
 MONITORING=false
@@ -42,6 +43,9 @@ Options:
   --bind ADDR          Address to publish the web UI on (default 0.0.0.0).
   --port PORT          Host port for the web UI (default 8080).
   --retention PERIOD   How long logs are kept, e.g. 90d (default 30d).
+  --metrics-retention MONTHS
+                       How long derived counts, such as service trends, are
+                       kept (default 24 months).
   --monitoring         Also run Prometheus and Grafana.
   --forward URL        Mirror stored logs to another VictoriaLogs instance.
   --pull               Use the published image instead of building locally.
@@ -63,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --bind) BIND="${2:?--bind needs an address}"; shift 2 ;;
     --port) PORT="${2:?--port needs a port}"; shift 2 ;;
     --retention) RETENTION="${2:?--retention needs a period}"; RETENTION_SET=true; shift 2 ;;
+    --metrics-retention) METRICS_RETENTION="${2:?--metrics-retention needs a number of months}"; shift 2 ;;
     --monitoring) MONITORING=true; shift ;;
     --forward) FORWARD_URL="${2:?--forward needs a URL}"; shift 2 ;;
     --pull) PULL=true; shift ;;
@@ -281,6 +286,9 @@ fi
 set_env SYSLOGC_HTTP_BIND "$BIND"
 set_env SYSLOGC_HTTP_PORT "$PORT"
 set_env SYSLOGC_RETENTION "$RETENTION"
+# Derived counts (service trends) are tiny next to the logs, so they are kept
+# far longer — in months, which is how VictoriaMetrics reads a bare number.
+set_env SYSLOGC_METRICS_RETENTION "$METRICS_RETENTION"
 set_env SYSLOGC_AUTH_COOKIE_SECURE false
 set_env SYSLOGC_NODE_ID "$(hostname -s)"
 [[ -n "$DOMAIN" ]] && set_env SYSLOGC_ALLOWED_ORIGINS "https://${DOMAIN},http://${DOMAIN}"

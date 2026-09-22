@@ -2,7 +2,7 @@ import { KeyRound, Plus, Trash2 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
 import { useApiKeys, useCreateApiKey, useRevokeApiKey } from '@/api/hooks'
-import type { Permission } from '@/api/types'
+import type { ApiKeyScope } from '@/api/types'
 import { CopyButton, EmptyState, ErrorPanel, Skeleton } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
 import { Input, Label } from '@/components/ui/input'
@@ -10,7 +10,7 @@ import { Dialog, DialogContent } from '@/components/ui/overlay'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
-const SCOPES: { value: Permission; label: string }[] = [
+const SCOPES: { value: ApiKeyScope; label: string }[] = [
   { value: 'logs:ingest', label: 'Ingest logs (POST /api/v1/ingest)' },
   { value: 'logs:search', label: 'Search logs' },
   { value: 'logs:tail', label: 'Live tail' },
@@ -24,7 +24,7 @@ export function ApiKeysPage() {
   const tz = useTimezone()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
-  const [scopes, setScopes] = useState<Permission[]>(['logs:ingest'])
+  const [scopes, setScopes] = useState<ApiKeyScope[]>(['logs:ingest'])
   const [expires, setExpires] = useState('')
   const [secret, setSecret] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)

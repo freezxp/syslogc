@@ -81,6 +81,9 @@ func (s *Server) routes() []route {
 
 	add("POST /api/v1/analytics/breakdown", permitted, auth.PermLogsSearch, s.handleBreakdown)
 	add("POST /api/v1/analytics/series", permitted, auth.PermLogsSearch, s.handleSeries)
+	add("POST /api/v1/analytics/service-trends", permitted, auth.PermLogsSearch, s.handleServiceTrends)
+	add("GET /api/v1/analytics/services", permitted, auth.PermLogsSearch, s.handleServiceCatalog)
+	add("PUT /api/v1/analytics/services", permitted, auth.PermAnalyticsManage, s.handleSetServiceCatalog)
 
 	add("POST /api/v1/dashboard/overview", permitted, auth.PermDashboardView, s.handleOverview)
 	add("POST /api/v1/dashboard/volume", permitted, auth.PermDashboardView, s.handleVolume)
@@ -101,6 +104,7 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/sources", permitted, auth.PermSourcesManage, s.handleCreateSource)
 	add("POST /api/v1/sources/adopt", permitted, auth.PermSourcesManage, s.handleAdoptSource)
 	add("POST /api/v1/sources/test-extract", permitted, auth.PermSourcesManage, s.handleTestExtract)
+	add("GET /api/v1/sources/extract-presets", permitted, auth.PermSourcesRead, s.handleExtractPresets)
 	add("GET /api/v1/sources/{id}", permitted, auth.PermSourcesRead, s.handleGetSource)
 	add("PUT /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleUpdateSource)
 	add("DELETE /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleDeleteSource)

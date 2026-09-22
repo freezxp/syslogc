@@ -380,3 +380,10 @@ func (s *Server) handleAdoptSource(w http.ResponseWriter, r *http.Request, p *au
 	writeJSON(w, http.StatusCreated, body)
 	return nil
 }
+
+// handleExtractPresets lists the built-in extract rules, so a common log
+// format can be turned into fields without writing a regular expression.
+func (s *Server) handleExtractPresets(w http.ResponseWriter, _ *http.Request, _ *auth.Principal) error {
+	writeJSON(w, http.StatusOK, map[string]any{"presets": extract.Presets()})
+	return nil
+}

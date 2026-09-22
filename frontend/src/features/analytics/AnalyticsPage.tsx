@@ -1,5 +1,5 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { ExternalLink, Link2, Share2, ZoomOut } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
@@ -7,27 +7,20 @@ import { useBreakdown, useSeries } from '@/api/hooks'
 import type { AnalyticsMetric, FilterExpr } from '@/api/types'
 import { GroupedSeriesChart } from '@/components/charts'
 import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
-import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Tooltip,
-} from '@/components/ui/overlay'
+import { Tooltip } from '@/components/ui/overlay'
 import { QueryBar, type QueryError } from '@/features/explorer/QueryBar'
-import { TimePicker } from '@/features/time-range/TimePicker'
-import { copyText } from '@/lib/clipboard'
 import { seriesColor } from '@/lib/chart-colors'
 import { cn } from '@/lib/cn'
 import { addValueFilter } from '@/lib/filter-actions'
 import { formatCount, formatExact, formatPercent } from '@/lib/format'
 import { useHotkeys } from '@/lib/hotkeys'
 import { useTimezone } from '@/lib/preferences'
-import { resolveRange, TimeRangeError, zoomOut } from '@/lib/time-range'
+import { resolveRange, TimeRangeError } from '@/lib/time-range'
 import { buildSelection, decodeQuery, encodeFilter, withoutPipes, type AnalyticsSearch } from '@/lib/url-state'
 
+import { AnalyticsHeader } from './AnalyticsHeader'
+import { ServiceTrendsView } from './ServiceTrendsView'
 import {
   coverageLabel,
   computeDeltas,
@@ -50,13 +43,19 @@ import {
 import { FieldPicker } from './FieldPicker'
 
 export function AnalyticsPage() {
+  const { view } = useSearch({ from: '/app/analytics' })
+  // Two views over the same time range: ad-hoc aggregation over the logs, and
+  // the service trends recorded window by window.
+  return view === 'trends' ? <ServiceTrendsView /> : <ExploreView />
+}
+
+function ExploreView() {
   const search = useSearch({ from: '/app/analytics' })
   const navigate = useNavigate({ from: '/analytics' })
   const displayTz = useTimezone()
   const tz = search.tz ?? displayTz
 
   const [runId, setRunId] = useState(0)
-  const [timeOpen, setTimeOpen] = useState(false)
   const queryInputRef = useRef<HTMLInputElement>(null)
 
   const setSearch = useCallback(
@@ -103,7 +102,6 @@ export function AnalyticsPage() {
 
   useHotkeys({
     '/': () => queryInputRef.current?.focus(),
-    t: () => setTimeOpen(true),
     'mod+Enter': run,
   })
 
@@ -151,58 +149,7 @@ export function AnalyticsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-        <h1 className="mr-1 text-lg font-semibold">Analytics</h1>
-        <TimePicker
-          from={search.from}
-          to={search.to}
-          displayTz={tz}
-          open={timeOpen}
-          onOpenChange={setTimeOpen}
-          onChange={(r) => setSearch({ from: r.from, to: r.to, tz: r.tz && r.tz !== displayTz ? r.tz : undefined })}
-        />
-        <Tooltip content="Zoom out">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Zoom out"
-            onClick={() => {
-              try {
-                setSearch(zoomOut(search.from, search.to, new Date(), tz))
-              } catch {
-                // invalid range: ignore
-              }
-            }}
-          >
-            <ZoomOut />
-          </Button>
-        </Tooltip>
-        <div className="flex-1" />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" aria-label="Share">
-              <Share2 /> Share
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            <DropdownMenuItem onSelect={() => void copyText(window.location.href)}>
-              <Link2 /> Copy link
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                const url = new URL(window.location.href)
-                if (range.value) {
-                  url.searchParams.set('from', range.value.start.toISOString())
-                  url.searchParams.set('to', range.value.end.toISOString())
-                }
-                void copyText(url.toString())
-              }}
-            >
-              <Link2 /> Copy link with absolute time
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+      <AnalyticsHeader range={range.value} />
 
       <QueryBar
         filter={filter}
