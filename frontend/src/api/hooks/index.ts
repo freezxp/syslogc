@@ -25,6 +25,8 @@ import type {
   IngestionRateResponse,
   ManagedSource,
   NativeQuery,
+  RetentionUpdate,
+  RetentionUpdateInput,
   SavedSearch,
   SavedSearchInput,
   SearchResponse,
@@ -423,11 +425,33 @@ export function useSystemStorage() {
   })
 }
 
+const retentionKey = ['system', 'retention'] as const
+
 export function useSystemRetention() {
   return useQuery({
-    queryKey: ['system', 'retention'],
+    queryKey: retentionKey,
     queryFn: ({ signal }) => unwrap(client.GET('/api/v1/system/retention', { signal })) as Promise<SystemRetention>,
     refetchInterval: 30_000,
+  })
+}
+
+/**
+ * Stores the period the storage backend should start with next time. Nothing is
+ * deleted or kept differently until the stack restarts, so the reply is merged
+ * into the cached GET (which still reports the period in force) rather than
+ * replacing it.
+ */
+export function useUpdateRetention() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: RetentionUpdateInput) =>
+      unwrap(client.PUT('/api/v1/system/retention', { body })) as Promise<RetentionUpdate>,
+    onSuccess: (res) => {
+      qc.setQueryData(retentionKey, (prev: SystemRetention | undefined) =>
+        prev ? { ...prev, desired: res.desired, restart_required: res.restart_required } : prev,
+      )
+      qc.invalidateQueries({ queryKey: retentionKey })
+    },
   })
 }
 

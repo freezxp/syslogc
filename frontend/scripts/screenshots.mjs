@@ -144,8 +144,15 @@ try {
   await shot('audit')
 
   await page.goto(`${base}/settings`)
-  await page.getByText('Changing retention').waitFor()
+  await page.getByText('Retention period').waitFor()
   await shot('settings-retention')
+
+  // Saving stores the period but changes nothing until the stack is restarted, so
+  // capture the state the operator is left in.
+  await page.getByLabel('Keep logs for').fill('90d')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await page.getByText('Restart pending').waitFor()
+  await shot('settings-retention-pending')
 
   await page.goto(`${base}/settings?tab=config`)
   await page.getByText('victorialogs:').waitFor()

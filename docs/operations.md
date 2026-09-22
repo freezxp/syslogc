@@ -135,14 +135,31 @@ ingest rate: give it faster storage, or narrow what you forward with
 
 ## Retention
 
-Syslogc never deletes data itself: VictoriaLogs enforces retention. Keep the
-two settings equal — `retention.period` in Syslogc and `-retentionPeriod` in
-VictoriaLogs. In the Compose stack one variable sets both:
+Syslogc never deletes data itself: VictoriaLogs enforces retention, and it
+reads its setting when it starts. A change therefore takes effect on the next
+restart, not immediately.
+
+Set it either way — both end up in the same place:
 
 ```bash
-echo "SYSLOGC_RETENTION=90d" >> .env
-docker compose up -d
+./deploy.sh --retention 90d          # from the shell
 ```
+
+or on **Settings & Retention** in the web UI (administrators only), then on
+the server:
+
+```bash
+./deploy.sh                          # applies what the UI stored
+```
+
+Until the restart, the page shows the period in force next to the pending
+one, and `/api/v1/system/retention` reports `configured`, `desired` and
+`restart_required`.
+
+Precedence, highest first: the `--retention` flag (which also updates the
+stored setting), then the setting stored by the UI, then `SYSLOGC_RETENTION`
+in `.env`. Editing `retention.period` in the Compose configuration file has
+no effect there, because the environment variable overrides it.
 
 `/ready`, the **Settings** page and `/api/v1/system/retention` report drift
 between the two. VictoriaLogs also deletes the oldest data when the disk

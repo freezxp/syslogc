@@ -18,8 +18,10 @@ import (
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
+	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/forwarding"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
+	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 )
 
@@ -332,15 +334,25 @@ func (s *Server) handleSystemConfig(w http.ResponseWriter, r *http.Request, _ *a
 	return nil
 }
 
-// handleSystemRetention reports the configured and backend retention plus
-// how to change them. Syslogc never deletes data itself.
+// handleSystemRetention reports the effective and desired retention plus how
+// to apply a change. Syslogc never deletes data itself: the storage backend
+// enforces retention, and it only reads its setting at startup.
 func (s *Server) handleSystemRetention(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
 	body := map[string]any{
-		"configured": s.opts.API.Config.Retention.Period.String(),
-		"backend":    s.opts.API.Storage.Name(),
-		"instructions": "Retention is enforced by the storage backend. Set the same period in both places: " +
-			"VictoriaLogs -retentionPeriod (SYSLOGC_RETENTION in the Compose stack) and retention.period " +
-			"in the Syslogc configuration, then restart both.",
+		"configured":   s.opts.API.Config.Retention.Period.String(),
+		"backend":      s.opts.API.Storage.Name(),
+		"editable":     s.opts.API.Store != nil,
+		"instructions": retentionInstructions,
+	}
+	if s.opts.API.Store != nil {
+		desired, err := retentionSetting(r.Context(), s.opts.API.Store)
+		if err != nil {
+			return err
+		}
+		if desired != "" {
+			body["desired"] = desired
+			body["restart_required"] = desired != s.opts.API.Config.Retention.Period.String()
+		}
 	}
 	if s.opts.API.Retention != nil {
 		body["status"] = s.opts.API.Retention()
@@ -361,6 +373,73 @@ func (s *Server) forwardingStatus() []forwarding.Status {
 		return nil
 	}
 	return s.opts.API.Forwarders()
+}
+
+// retentionInstructions explains why a change needs a restart. Both the read
+// and the write endpoint return it, so the UI never shows two versions.
+const retentionInstructions = "Retention is enforced by the storage backend, which reads its setting at " +
+	"startup. After changing it here, run ./deploy.sh on the server to restart the stack with the new period."
+
+// retentionSetting returns the stored desired retention, or "" when unset.
+func retentionSetting(ctx context.Context, store metadata.Store) (string, error) {
+	setting, err := store.Setting(ctx, metadata.SettingRetention)
+	if errors.Is(err, metadata.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var v struct {
+		Period string `json:"period"`
+	}
+	if err := json.Unmarshal(setting.Value, &v); err != nil {
+		return "", err
+	}
+	return v.Period, nil
+}
+
+// handleSetRetention stores the desired retention. It does not take effect
+// until the stack restarts, because the storage backend reads its retention
+// setting at startup; the response says so.
+func (s *Server) handleSetRetention(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
+	if s.opts.API.Store == nil {
+		return errStatus(http.StatusNotFound, "not_configured", "retention can only be changed with a metadata database")
+	}
+	var req struct {
+		Period string `json:"period"`
+	}
+	if err := decodeJSON(w, r, &req, true); err != nil {
+		return err
+	}
+	var period config.Duration
+	text := strings.TrimSpace(req.Period)
+	if text == "" {
+		return badRequest("validation_failed", "/period", "period is required, as a duration such as 30d or 720h")
+	}
+	if err := period.UnmarshalText([]byte(text)); err != nil {
+		return badRequest("validation_failed", "/period", "period must be a duration such as 30d or 720h")
+	}
+	switch {
+	case period < config.Duration(24*time.Hour):
+		return badRequest("validation_failed", "/period", "retention must be at least 1d")
+	case period > config.Duration(3650*24*time.Hour):
+		return badRequest("validation_failed", "/period", "retention must be at most 3650d")
+	}
+	value, err := json.Marshal(map[string]string{"period": period.String()})
+	if err != nil {
+		return err
+	}
+	setting := &metadata.Setting{Key: metadata.SettingRetention, Value: value, UpdatedBy: &p.UserID}
+	if err := s.opts.API.Store.SetSetting(r.Context(), setting); err != nil {
+		return err
+	}
+	current := s.opts.API.Config.Retention.Period.String()
+	s.audit(r, p, "retention.update", "success", map[string]any{"period": period.String(), "previous": current})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"desired": period.String(), "configured": current, "restart_required": period.String() != current,
+		"instructions": retentionInstructions,
+	})
+	return nil
 }
 
 // ---- web UI -------------------------------------------------------------------

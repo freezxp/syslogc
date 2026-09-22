@@ -67,6 +67,8 @@ export type {
   ManagedSource,
   ManagedSourceStatus,
   RetentionDrift,
+  RetentionUpdate,
+  RetentionUpdateInput,
   SeriesGroup,
   SeriesRequest,
   SeriesResponse,

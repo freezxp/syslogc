@@ -117,6 +117,7 @@ func (s *Server) routes() []route {
 	add("GET /api/v1/system/storage", permitted, auth.PermSystemView, s.handleSystemStorage)
 	add("GET /api/v1/system/config", permitted, auth.PermConfigView, s.handleSystemConfig)
 	add("GET /api/v1/system/retention", permitted, auth.PermSystemView, s.handleSystemRetention)
+	add("PUT /api/v1/system/retention", permitted, auth.PermRetentionManage, s.handleSetRetention)
 
 	// Fallback: JSON 404 for unknown API paths, otherwise the web UI.
 	rs = append(rs, route{pattern: "/", access: public, handler: s.handleFallback, raw: true})

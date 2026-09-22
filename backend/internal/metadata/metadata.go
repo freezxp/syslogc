@@ -111,6 +111,18 @@ type Source struct {
 	Version   int
 }
 
+// Setting is one stored deployment setting. Values are JSON so a setting can
+// grow fields without a migration.
+type Setting struct {
+	Key       string
+	Value     json.RawMessage
+	UpdatedBy *uuid.UUID
+	UpdatedAt time.Time
+}
+
+// SettingRetention is the key holding the desired retention period.
+const SettingRetention = "retention"
+
 // ListAuditEvents filters the audit log. Times are exclusive of Before and
 // inclusive of Since; an empty filter field matches everything.
 type ListAuditEvents struct {
@@ -186,6 +198,9 @@ type Store interface {
 	ListSources(ctx context.Context, tenant string) ([]Source, error)
 	UpdateSource(ctx context.Context, s *Source) error
 	DeleteSource(ctx context.Context, tenant string, id uuid.UUID) error
+
+	Setting(ctx context.Context, key string) (*Setting, error)
+	SetSetting(ctx context.Context, s *Setting) error
 
 	InsertAuditEvent(ctx context.Context, e *AuditEvent) error
 	ListAuditEvents(ctx context.Context, f ListAuditEvents) ([]AuditEvent, error)

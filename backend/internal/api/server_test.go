@@ -1256,3 +1256,58 @@ func TestTestExtract(t *testing.T) {
 		t.Errorf("viewer testing patterns: %d", resp.StatusCode)
 	}
 }
+
+func TestSetRetention(t *testing.T) {
+	e := newEnv(t)
+	admin, ops, viewer := e.login("admin"), e.login("ops"), e.login("viewer")
+
+	// Nothing is stored yet, so only the configured value is reported.
+	resp, body := viewer.do("GET", "/api/v1/system/retention", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"configured":"30d"`) ||
+		strings.Contains(string(body), `"desired"`) {
+		t.Fatalf("initial retention: %d %s", resp.StatusCode, body)
+	}
+
+	// Changing it is an administrator's job.
+	for _, c := range []*client{viewer, ops} {
+		if resp, _ := c.do("PUT", "/api/v1/system/retention", map[string]string{"period": "90d"}, nil); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("non-admin changing retention: %d", resp.StatusCode)
+		}
+	}
+
+	resp, body = admin.do("PUT", "/api/v1/system/retention", map[string]string{"period": "90d"}, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"desired":"90d"`) ||
+		!strings.Contains(string(body), `"restart_required":true`) {
+		t.Fatalf("set retention: %d %s", resp.StatusCode, body)
+	}
+
+	// The stored value is reported next to the value in force.
+	resp, body = viewer.do("GET", "/api/v1/system/retention", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"desired":"90d"`) ||
+		!strings.Contains(string(body), `"configured":"30d"`) || !strings.Contains(string(body), `"restart_required":true`) {
+		t.Errorf("after setting: %d %s", resp.StatusCode, body)
+	}
+
+	// Setting it back to what is running clears the restart notice.
+	if resp, body := admin.do("PUT", "/api/v1/system/retention", map[string]string{"period": "30d"}, nil); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), `"restart_required":false`) {
+		t.Errorf("set back: %d %s", resp.StatusCode, body)
+	}
+
+	for _, tc := range []struct{ name, period, want string }{
+		{"too short", "12h", "at least 1d"},
+		{"too long", "4000d", "at most 3650d"},
+		{"nonsense", "soon", "duration"},
+		{"empty", "", "duration"},
+	} {
+		if resp, body := admin.do("PUT", "/api/v1/system/retention", map[string]string{"period": tc.period}, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+			!strings.Contains(string(body), tc.want) {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+
+	// The change is audited.
+	if _, body := admin.do("GET", "/api/v1/audit?action=retention.update", nil, nil); !strings.Contains(string(body), `"period":"90d"`) {
+		t.Errorf("retention change not audited: %s", body)
+	}
+}

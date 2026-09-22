@@ -17,6 +17,7 @@ import type {
   LogRow,
   ManagedSource,
   Problem,
+  RetentionUpdateInput,
   SourceInput,
   SavedSearch,
   SavedSearchInput,
@@ -29,6 +30,7 @@ import type {
   UserCreateInput,
   UserUpdateInput,
 } from '@/api/types'
+import { normalizePeriod, samePeriod, validatePeriod } from '@/features/settings/retention'
 import { CORE_FIELDS, getField } from '@/lib/fields'
 import { formatFilter } from '@/lib/filter-text'
 import { resolveRange } from '@/lib/time-range'
@@ -41,6 +43,7 @@ let logs: LogRow[] = generateLogs(2500, NOW, 7 * 24 * 3600_000)
 export function resetMockData(rows?: LogRow[]): void {
   logs = rows ?? generateLogs(2500, Date.now(), 7 * 24 * 3600_000)
   loggedIn = true
+  retentionDesired = null
 }
 
 /** Appends rows (used by the mock live tail so searches see them too). */
@@ -548,6 +551,25 @@ function nativeError(text: string | undefined): Response | null {
     )
   }
   return null
+}
+
+/** What the storage backend was started with; only a restart of the stack changes it. */
+const RETENTION_IN_FORCE = '30d'
+
+const RETENTION_INSTRUCTIONS =
+  'Retention is enforced by the storage backend, which reads its setting at startup. ' +
+  'After changing it here, run ./deploy.sh on the server to restart the stack with the new period.'
+
+/** Null until an administrator saves one, so mock mode starts in the pristine state. */
+let retentionDesired: string | null = null
+
+function retentionState() {
+  if (retentionDesired === null) return { configured: RETENTION_IN_FORCE }
+  return {
+    configured: RETENTION_IN_FORCE,
+    desired: retentionDesired,
+    restart_required: !samePeriod(retentionDesired, RETENTION_IN_FORCE),
+  }
 }
 
 const api = (path: string) => `*/api/v1${path}`
@@ -1114,13 +1136,11 @@ export const handlers = [
     () =>
       requireAuth() ??
       HttpResponse.json({
-        configured: '30d',
+        ...retentionState(),
         backend: 'victorialogs',
-        instructions:
-          'Retention is enforced by the storage backend. Set the same period in both places: ' +
-          'VictoriaLogs -retentionPeriod (SYSLOGC_RETENTION in the Compose stack) and retention.period ' +
-          'in the Syslogc configuration, then restart both.',
-        status: { configured: '30d', backend: '45d', status: 'drift' },
+        editable: true,
+        instructions: RETENTION_INSTRUCTIONS,
+        status: { configured: RETENTION_IN_FORCE, backend: '45d', status: 'drift' },
         usage: {
           compressed_bytes: 38_400_000_000,
           uncompressed_bytes: 412_000_000_000,
@@ -1129,6 +1149,18 @@ export const handlers = [
         },
       }),
   ),
+  http.put(api('/system/retention'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const { period } = (await request.json()) as RetentionUpdateInput
+    const invalid = validatePeriod(period ?? '')
+    if (invalid) return validationProblem('/period', invalid)
+    retentionDesired = normalizePeriod(period)
+    return HttpResponse.json({
+      ...retentionState(),
+      instructions: 'Run ./deploy.sh on the server to restart the stack with the new period.',
+    })
+  }),
   http.get(
     api('/system/config'),
     () =>

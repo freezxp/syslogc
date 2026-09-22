@@ -186,11 +186,34 @@ export interface RetentionDrift {
 }
 
 export interface SystemRetention {
+  /** The period the storage backend was started with: what is actually in force. */
   configured: string
   backend: string
   instructions: string
+  /**
+   * The stored period, which only takes effect when the stack is restarted. Absent
+   * until one has been saved, and still present (equal to `configured`) afterwards,
+   * so it does not by itself mean a change is pending — read `restart_required`.
+   */
+  desired?: string
+  restart_required?: boolean
+  /** False on deployments without a metadata database: there is nowhere to store it. */
+  editable?: boolean
   status?: RetentionDrift
   usage?: S['StorageUsage']
+}
+
+/** Body of `PUT /system/retention`: a duration in Go syntax, or whole days ("90d"). */
+export interface RetentionUpdateInput {
+  period: string
+}
+
+/** Reply to `PUT /system/retention`; narrower than the GET, and freshly normalised. */
+export interface RetentionUpdate {
+  desired: string
+  configured: string
+  restart_required: boolean
+  instructions: string
 }
 
 export interface SystemConfig {
@@ -374,6 +397,7 @@ export interface OperationsPaths {
   }
   '/api/v1/system/retention': {
     get: Read<SystemRetention>
+    put: Write<RetentionUpdate, RetentionUpdateInput>
   }
   '/api/v1/system/config': {
     get: Read<SystemConfig>
