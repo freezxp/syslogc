@@ -32,6 +32,18 @@ import {
   metricUnit,
   seriesChartData,
 } from '@/features/analytics/analytics-query'
+import {
+  PERIOD_REQUIRED,
+  PERIOD_TOO_LONG,
+  PERIOD_TOO_SHORT,
+  PERIOD_UNPARSEABLE,
+  normalizePeriod,
+  parsePeriodMs,
+  periodProblemMessage,
+  restartPending,
+  samePeriod,
+  validatePeriod,
+} from '@/features/settings/retention'
 import { forwardFilterLabels, secondsSince, truncateError } from '@/features/system/forwarding'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
@@ -679,5 +691,74 @@ describe('analytics query', () => {
     expect(coverageLabel(10, 143)).toBe('showing 10 of 143 values')
     expect(coverageLabel(3, 3)).toBe('3 values')
     expect(coverageLabel(1, 1)).toBe('1 value')
+  })
+})
+
+describe('retention period', () => {
+  it('accepts whole days and Go durations, in any case', () => {
+    expect(parsePeriodMs('30d')).toBe(30 * 86_400_000)
+    expect(parsePeriodMs('720h')).toBe(30 * 86_400_000)
+    expect(parsePeriodMs(' 90D ')).toBe(90 * 86_400_000)
+    expect(parsePeriodMs('1d12h')).toBe(36 * 3_600_000)
+    expect(parsePeriodMs('1.5h')).toBe(5_400_000)
+  })
+
+  it('rejects what the server would reject', () => {
+    // A bare number, a year and an empty string are all things the API refuses.
+    expect(parsePeriodMs('30')).toBeNull()
+    expect(parsePeriodMs('1y')).toBeNull()
+    expect(parsePeriodMs('')).toBeNull()
+    expect(parsePeriodMs('-30d')).toBeNull()
+    expect(parsePeriodMs('30 d')).toBeNull()
+  })
+
+  it('validates with the server’s own wording', () => {
+    expect(validatePeriod('90d')).toBeNull()
+    expect(validatePeriod('720h')).toBeNull()
+    expect(validatePeriod('1d')).toBeNull()
+    expect(validatePeriod('3650d')).toBeNull()
+    expect(validatePeriod('   ')).toBe(PERIOD_REQUIRED)
+    expect(validatePeriod('soon')).toBe(PERIOD_UNPARSEABLE)
+    expect(validatePeriod('12h')).toBe(PERIOD_TOO_SHORT)
+    expect(validatePeriod('3651d')).toBe(PERIOD_TOO_LONG)
+  })
+
+  it('normalises whole-day durations the way the server stores them', () => {
+    expect(normalizePeriod('720h')).toBe('30d')
+    expect(normalizePeriod(' 90D ')).toBe('90d')
+    expect(normalizePeriod('36h')).toBe('36h')
+    expect(normalizePeriod('nonsense ')).toBe('nonsense')
+    expect(samePeriod('720h', '30d')).toBe(true)
+    expect(samePeriod('30d', '90d')).toBe(false)
+    expect(samePeriod('junk', 'junk')).toBe(true)
+    expect(samePeriod(undefined, '30d')).toBe(false)
+  })
+
+  it('takes the restart flag as the authority on a pending change', () => {
+    expect(restartPending({ configured: '30d' })).toBe(false)
+    expect(restartPending({ configured: '30d', desired: '90d', restart_required: true })).toBe(true)
+    // The stored period stays in the response after it takes effect.
+    expect(restartPending({ configured: '90d', desired: '90d', restart_required: false })).toBe(false)
+    // Only if the server did not say do we compare, and 720h is not a change from 30d.
+    expect(restartPending({ configured: '30d', desired: '90d' })).toBe(true)
+    expect(restartPending({ configured: '30d', desired: '720h' })).toBe(false)
+  })
+
+  it('pulls the message for the period field out of a problem', () => {
+    const problem: Problem = {
+      type: 'about:blank',
+      title: 'Validation failed',
+      status: 422,
+      code: 'validation_failed',
+      detail: 'retention must be at least 1d',
+      errors: [
+        { pointer: '/other', message: 'ignored' },
+        { pointer: '/period', message: 'retention must be at least 1d' },
+      ],
+    }
+    expect(periodProblemMessage(problem, 'fallback')).toBe('retention must be at least 1d')
+    expect(periodProblemMessage({ ...problem, errors: [] }, 'fallback')).toBe('retention must be at least 1d')
+    expect(periodProblemMessage({ ...problem, errors: [], detail: undefined }, 'fallback')).toBe('fallback')
+    expect(periodProblemMessage(undefined, 'fallback')).toBe('fallback')
   })
 })

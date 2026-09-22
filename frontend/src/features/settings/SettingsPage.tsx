@@ -1,15 +1,30 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2, HelpCircle, KeyRound } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { AlertTriangle, CheckCircle2, HelpCircle, KeyRound, RotateCw } from 'lucide-react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 
-import { useSession, useSystemConfig, useSystemRetention } from '@/api/hooks'
+import { ApiError } from '@/api/client'
+import { useSession, useSystemConfig, useSystemRetention, useUpdateRetention } from '@/api/hooks'
 import type { SystemRetention } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { CopyButton, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
-import { buttonVariants } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Input, Label } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/overlay'
+import { cn } from '@/lib/cn'
 import { formatBytes, formatPercent, formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
+
+import {
+  RETENTION_PRESETS,
+  normalizePeriod,
+  periodProblemMessage,
+  restartPending,
+  samePeriod,
+  validatePeriod,
+} from './retention'
+
+/** The one command that puts a stored retention period into force. */
+const APPLY_COMMAND = './deploy.sh'
 
 export function SettingsPage() {
   const { tab } = useSearch({ from: '/app/settings' })
@@ -49,13 +64,19 @@ const DRIFT = {
 
 function RetentionTab() {
   const q = useSystemRetention()
+  const can = useCan()
   if (q.isError) return <ErrorPanel error={q.error} onRetry={() => q.refetch()} />
   if (!q.data) return <Skeleton className="h-64" />
   const r = q.data
   const drift = DRIFT[r.status?.status ?? 'unknown']
+  const pending = restartPending(r)
+  // The form is offered only where there is somewhere to store the period; without
+  // a metadata database the server has no way to remember it.
+  const editable = r.editable === true && can('retention:manage')
 
   return (
     <div className="space-y-3">
+      {pending && <PendingRestart desired={r.desired!} configured={r.configured} />}
       {r.status?.status === 'drift' && (
         <div
           role="alert"
@@ -72,7 +93,17 @@ function RetentionTab() {
         </div>
       )}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Configured retention" value={r.configured} />
+        <Stat
+          label="Retention in force"
+          value={r.configured}
+          sub={
+            pending ? (
+              <span className="font-medium text-accent">{r.desired} once restarted</span>
+            ) : (
+              r.desired && 'stored and in force'
+            )
+          }
+        />
         <Stat label="Backend retention" value={r.status?.backend ?? '—'} sub={r.backend} />
         <Stat
           label="Drift"
@@ -86,10 +117,125 @@ function RetentionTab() {
         <StorageStat usage={r.usage} />
       </div>
       <StorageBar usage={r.usage} />
-      <Panel title="Changing retention">
-        <p className="text-base whitespace-pre-line text-muted">{r.instructions}</p>
-      </Panel>
+      {editable ? (
+        <RetentionForm retention={r} />
+      ) : (
+        <Panel title="Changing retention">
+          <p className="text-base whitespace-pre-line text-muted">{r.instructions}</p>
+        </Panel>
+      )}
     </div>
+  )
+}
+
+/**
+ * The stored period only reaches the storage backend when it restarts, so say what
+ * is in force, what is waiting, and the command that closes the gap — calmly: until
+ * it runs, nothing has changed and no logs are at risk.
+ */
+function PendingRestart({ desired, configured }: { desired: string; configured: string }) {
+  return (
+    <div role="status" className="flex items-start gap-2 rounded-md border border-accent/40 bg-accent/10 p-3">
+      <RotateCw className="mt-0.5 size-4 shrink-0 text-accent" />
+      <div className="min-w-0">
+        <div className="font-medium">
+          Restart pending: <span className="mono">{desired}</span> is saved but not yet in force
+        </div>
+        <div className="text-sm text-muted">
+          Logs are still kept for {configured} — the period the storage backend started with. To apply the new period,
+          run this on the server:
+        </div>
+        <div className="mt-2 flex w-fit max-w-full items-center gap-1 rounded-md border border-border bg-surface-2 py-0.5 pr-0.5 pl-2">
+          <code className="mono truncate text-sm">{APPLY_COMMAND}</code>
+          <CopyButton text={APPLY_COMMAND} label="Copy command" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RetentionForm({ retention }: { retention: SystemRetention }) {
+  const update = useUpdateRetention()
+  // Seeded once: a background refetch must not overwrite what is being typed.
+  const [period, setPeriod] = useState(retention.desired ?? retention.configured)
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState<string | null>(null)
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    setSaved(null)
+    const invalid = validatePeriod(period)
+    if (invalid) return setError(invalid)
+    setError(null)
+    // Send the normalised spelling so the field, the tiles and the stored value
+    // agree straight away (the server rewrites 720h to 30d anyway).
+    update.mutate(
+      { period: normalizePeriod(period) },
+      {
+        onSuccess: (res) => {
+          setPeriod(res.desired)
+          setSaved(res.restart_required ? null : `Saved. ${res.desired} is already in force.`)
+        },
+        onError: (err) =>
+          setError(err instanceof ApiError ? periodProblemMessage(err.problem, err.message) : err.message),
+      },
+    )
+  }
+
+  return (
+    <Panel title="Retention period">
+      <form onSubmit={onSubmit} className="flex flex-wrap items-end gap-2">
+        <div>
+          <Label htmlFor="retention-period">Keep logs for</Label>
+          <Input
+            id="retention-period"
+            className={cn('mono w-36', error && 'border-danger')}
+            value={period}
+            onChange={(e) => {
+              setPeriod(e.target.value)
+              setError(null)
+              setSaved(null)
+            }}
+            aria-invalid={!!error}
+            aria-describedby="retention-period-hint"
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
+        <Button type="submit" variant="primary" disabled={update.isPending}>
+          {update.isPending ? 'Saving…' : 'Save'}
+        </Button>
+        <div className="flex items-center gap-1 pb-0.5">
+          {RETENTION_PRESETS.map((p) => (
+            <Button
+              key={p.value}
+              size="sm"
+              variant={samePeriod(p.value, period) ? 'outline' : 'ghost'}
+              aria-pressed={samePeriod(p.value, period)}
+              onClick={() => {
+                setPeriod(p.value)
+                setError(null)
+                setSaved(null)
+              }}
+            >
+              {p.label}
+            </Button>
+          ))}
+        </div>
+      </form>
+      <div id="retention-period-hint" className="mt-1.5 text-sm" role={error ? 'alert' : undefined}>
+        {error ? (
+          <span className="text-danger">{error}</span>
+        ) : saved ? (
+          <span className="text-success">{saved}</span>
+        ) : (
+          <span className="text-muted">Whole days or a Go duration: 30d, 90d, 720h. Between 1d and 3650d.</span>
+        )}
+      </div>
+      <p className="mt-3 border-t border-border pt-3 text-sm whitespace-pre-line text-muted">
+        {retention.instructions}
+      </p>
+    </Panel>
   )
 }
 
