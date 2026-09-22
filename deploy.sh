@@ -4,6 +4,7 @@
 #   ./deploy.sh                      # install prerequisites and start the stack
 #   ./deploy.sh --domain logs.example.com --monitoring
 #   ./deploy.sh --pull               # run the published image instead of building
+#   ./deploy.sh --upgrade            # pull new commits, rebuild and restart
 #   ./deploy.sh --status             # what is running, and where
 #   ./deploy.sh --stop               # stop the stack (data is kept)
 #
@@ -26,6 +27,7 @@ PULL=false
 ACTION="deploy"
 ASSUME_YES=false
 OPEN_FIREWALL=true
+BACKUP=true
 
 usage() {
   sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -44,6 +46,9 @@ Options:
   --pull               Use the published image instead of building locally.
   --no-firewall        Do not open syslog and UI ports in ufw.
   --yes                Do not ask for confirmation.
+  --upgrade            Fetch new commits, back up metadata, rebuild and
+                       restart. Refuses to run with uncommitted changes.
+  --no-backup          Skip the metadata backup an upgrade takes first.
   --status             Show what is running and exit.
   --stop               Stop the stack (data is kept) and exit.
   --help               This text.
@@ -62,6 +67,8 @@ while [[ $# -gt 0 ]]; do
     --pull) PULL=true; shift ;;
     --no-firewall) OPEN_FIREWALL=false; shift ;;
     --yes|-y) ASSUME_YES=true; shift ;;
+    --upgrade) ACTION="upgrade"; shift ;;
+    --no-backup) BACKUP=false; shift ;;
     --status) ACTION="status"; shift ;;
     --stop) ACTION="stop"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -114,6 +121,33 @@ case "$ACTION" in
       warn "not ready yet"
     fi
     exit 0
+    ;;
+  upgrade)
+    command -v docker >/dev/null || die "Docker is not installed; run ./deploy.sh first"
+    command -v git >/dev/null || die "git is required to upgrade"
+    git rev-parse --git-dir >/dev/null 2>&1 || die "not a git checkout; upgrade by replacing the files yourself"
+    step "Upgrading"
+    if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+      git status --short --untracked-files=no
+      die "there are uncommitted changes; commit or stash them, then upgrade"
+    fi
+    before="$(git rev-parse --short HEAD)"
+    git fetch --quiet || die "could not reach the git remote"
+    git merge --ff-only --quiet "@{u}" || die "the local branch has diverged from its remote; resolve that first"
+    after="$(git rev-parse --short HEAD)"
+    if [[ "$before" == "$after" ]]; then
+      ok "already at $after; nothing to upgrade"
+      exit 0
+    fi
+    ok "$before → $after"
+    git --no-pager log --oneline --no-decorate "$before..$after" | head -10 | sed 's/^/      /'
+
+    # Migrations run at startup, so take the cheap backup first.
+    if [[ "$BACKUP" == true && -x deploy/backup/backup.sh ]]; then
+      step "Backing up metadata"
+      COMPOSE="$SUDO docker compose" DOCKER="$SUDO docker" deploy/backup/backup.sh ./backups |
+        sed -n 's/^\[backup\] wrote /    ✓ /p'
+    fi
     ;;
   stop)
     command -v docker >/dev/null || die "Docker is not installed"
@@ -214,14 +248,18 @@ set_env SYSLOGC_NODE_ID "$(hostname -s)"
 ok "$(grep -c '^[A-Z]' .env) settings in .env"
 
 if [[ -n "$FORWARD_URL" ]]; then
+  # The edited copy is untracked, so `git pull` during an upgrade is not
+  # blocked by a locally modified file.
   python3 - "$FORWARD_URL" <<'PY'
 import re, sys
 url = sys.argv[1]
-path = "deploy/compose/syslogc-forwarding.yaml"
-text = open(path).read()
+src, dst = "deploy/compose/syslogc-forwarding.yaml", "deploy/compose/syslogc-forwarding.local.yaml"
+text = open(src).read()
 text = re.sub(r"(\n\s+url:\s*)\S+", r"\g<1>" + url, text, count=1)
-open(path, "w").write(text)
+open(dst, "w").write(text)
 PY
+  sed -i '/^SYSLOGC_FORWARD_CONFIG=/d' .env
+  printf 'SYSLOGC_FORWARD_CONFIG=%s\n' "./deploy/compose/syslogc-forwarding.local.yaml" >> .env
   touch .forwarding-enabled
   ok "forwarding a copy of every stored log to $FORWARD_URL"
 fi
