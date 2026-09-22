@@ -100,11 +100,14 @@ type AuditEvent struct {
 // Source is a database-managed ingestion source. Config is the YAML source
 // object as JSON, so the ingestion layer stays unaware of the metadata store.
 type Source struct {
-	ID        uuid.UUID
-	Tenant    string
-	Name      string
-	Config    json.RawMessage
-	Enabled   bool
+	ID      uuid.UUID
+	Tenant  string
+	Name    string
+	Config  json.RawMessage
+	Enabled bool
+	// Adopted marks a source copied from the configuration file, which it
+	// then replaces so it can be edited.
+	Adopted   bool
 	CreatedBy *uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time

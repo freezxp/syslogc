@@ -507,6 +507,19 @@ export function useCreateSource() {
   })
 }
 
+/** Copies a configuration-file source into the database so it can be edited. */
+export function useAdoptSource() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      unwrap(client.POST('/api/v1/sources/adopt', { body: { name } })) as Promise<ManagedSource>,
+    onSuccess: (s) => {
+      qc.setQueryData([...sourcesKey, 'item', s.id], s)
+      settleSources(qc)
+    },
+  })
+}
+
 export function useUpdateSource() {
   const qc = useQueryClient()
   return useMutation({

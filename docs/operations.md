@@ -21,7 +21,9 @@ five seconds, without restarting the node, on every node of the deployment:
 
 - A source whose address did not change is stopped and rebound.
 - A source that moves to a new address binds the new one first, so it is
-  never unreachable.
+  never unreachable. If the new address cannot be bound, the old listener is
+  kept rather than leaving the source dead, and the next reconcile tries
+  again.
 - Sources that did not change are never touched, so their traffic is
   unaffected while another source starts or stops.
 
@@ -38,6 +40,20 @@ Validation is the same as for the configuration file, so a rejected source
 tells you exactly which field is wrong. A source that cannot bind its address
 is reported with state `error` and its error message on the Sources page and
 in `/api/v1/system/health`; the other sources keep running.
+
+### Moving a configuration-file source into the UI
+
+A file source is read-only in the UI, but **Manage in the UI** on its page
+copies it into the database and takes over from there: the copy keeps the same
+name, settings and — because the listener is already bound where the copy asks
+for it — the same socket, so no message is missed. The entry in the
+configuration file stays where it is and is ignored while the copy exists,
+which means deleting the copy hands control straight back to the file. Adopted
+sources are marked *database (adopted)* in the Origin column, and the adoption
+is recorded in the audit log as `sources.adopt`.
+
+Leave the file entry in place: it is the fallback if the database is ever
+restored from an older backup.
 
 Deleting a source stops its listener. Logs already stored keep their
 `source` field, so searches over past data still work.

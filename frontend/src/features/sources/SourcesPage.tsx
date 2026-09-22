@@ -114,6 +114,10 @@ function SourceRow({ source, tz }: { source: ManagedSource; tz: string }) {
               <FileLock2 className="size-3" /> config file
             </span>
           </Tooltip>
+        ) : source.adopted ? (
+          <Tooltip content="Copied out of the configuration file and edited here. Deleting it hands control back to the file.">
+            <span className="text-sm">database (adopted)</span>
+          </Tooltip>
         ) : (
           <span className="text-sm">database</span>
         )}

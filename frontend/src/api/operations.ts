@@ -88,9 +88,16 @@ export interface ManagedSource {
   enabled: boolean
   origin: SourceOrigin
   status?: ManagedSourceStatus
+  /** True when this copy replaces a source of the same name in the configuration file. */
+  adopted?: boolean
   created_at?: string
   updated_at?: string
   version?: number
+}
+
+/** Copies a configuration-file source into the database so it can be edited here. */
+export interface AdoptSourceInput {
+  name: string
 }
 
 export interface SourceInput {
@@ -372,6 +379,9 @@ export interface OperationsPaths {
   '/api/v1/sources': {
     get: Read<{ sources: ManagedSource[] }>
     post: Write<ManagedSource, SourceInput, NoParams, 201>
+  }
+  '/api/v1/sources/adopt': {
+    post: Write<ManagedSource, AdoptSourceInput, NoParams, 201>
   }
   '/api/v1/sources/test-extract': {
     post: Write<ExtractTestResponse, ExtractTestRequest>

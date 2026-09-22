@@ -63,6 +63,7 @@ export type {
   ExtractTestRequest,
   ExtractTestResponse,
   ExtractTestResult,
+  AdoptSourceInput,
   ForwardTarget,
   ManagedSource,
   ManagedSourceStatus,

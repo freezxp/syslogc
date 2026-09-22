@@ -99,6 +99,7 @@ func (s *Server) routes() []route {
 
 	add("GET /api/v1/sources", permitted, auth.PermSourcesRead, s.handleListSources)
 	add("POST /api/v1/sources", permitted, auth.PermSourcesManage, s.handleCreateSource)
+	add("POST /api/v1/sources/adopt", permitted, auth.PermSourcesManage, s.handleAdoptSource)
 	add("POST /api/v1/sources/test-extract", permitted, auth.PermSourcesManage, s.handleTestExtract)
 	add("GET /api/v1/sources/{id}", permitted, auth.PermSourcesRead, s.handleGetSource)
 	add("PUT /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleUpdateSource)

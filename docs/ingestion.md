@@ -66,7 +66,9 @@ automatic `GOMEMLIMIT` defaults are a Phase 6 item.
 
 A **source** is a configured receiver: protocol + address + parsing and policy
 settings. Sources come from YAML (read-only in the UI) or the database
-(managed in the UI). Names are unique and used as the `source` field and the
+(managed in the UI); a YAML source can be copied into the database from its
+page in the UI to become editable there, see
+[operations](operations.md#moving-a-configuration-file-source-into-the-ui). Names are unique and used as the `source` field and the
 `source` metric label.
 
 ```yaml

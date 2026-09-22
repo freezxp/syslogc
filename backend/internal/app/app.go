@@ -551,11 +551,26 @@ func (a *App) watchSources(ctx context.Context) {
 // ones. A managed source whose name or bind address clashes with a file
 // source is skipped: the file always wins.
 func (a *App) desiredSources(ctx context.Context) ([]supervisor.Desired, error) {
-	desired := supervisor.FileSources(a.cfg.Ingestion.Sources)
 	managed, err := a.store.ListSources(ctx, config.DefaultTenant)
 	if err != nil {
 		return nil, err
 	}
+	// An adopted source was copied from the configuration file on purpose, so
+	// it replaces that entry; every other name still lets the file win.
+	adopted := map[string]bool{}
+	for _, m := range managed {
+		if m.Adopted {
+			adopted[strings.ToLower(m.Name)] = true
+		}
+	}
+	var fileSources []config.Source
+	for _, sc := range a.cfg.Ingestion.Sources {
+		if adopted[strings.ToLower(sc.Name)] {
+			continue
+		}
+		fileSources = append(fileSources, sc)
+	}
+	desired := supervisor.FileSources(fileSources)
 	for _, m := range managed {
 		sc, err := sourceConfig(m)
 		if err != nil {
