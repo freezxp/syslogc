@@ -59,6 +59,7 @@ type Metrics struct {
 	StorageWriteDuration *prometheus.HistogramVec
 	StorageWriteErrors   *prometheus.CounterVec
 	StorageWriteRetries  *prometheus.CounterVec
+	extracted            *prometheus.CounterVec
 	ForwardSent          *prometheus.CounterVec
 	ForwardDropped       *prometheus.CounterVec
 	ForwardErrors        *prometheus.CounterVec
@@ -123,6 +124,8 @@ func New(version, commit string) *Metrics {
 			"Messages not forwarded, by reason.", "target", "reason"),
 		ForwardErrors: f.counterVec("forward_write_errors_total",
 			"Failed writes to a forward target, by error class.", "target", "class"),
+		extracted: f.counterVec("ingest_extract_total",
+			"Messages by extract rule; rule=\"no_match\" means no rule applied.", "source", "rule"),
 		StorageHealthy: f.gaugeVec("storage_healthy",
 			"1 if the most recent storage write succeeded. Stays 1 while a write is still in flight.", "backend"),
 		StorageReachable: f.gaugeVec("storage_reachable",
@@ -164,6 +167,8 @@ func (m *Metrics) Source(name string, protocol logentry.Protocol) *SourceMetrics
 		RejectedTLS:       m.connectionsRejected.WithLabelValues(name, RejectTLSHandshake),
 		RejectedDenied:    m.connectionsRejected.WithLabelValues(name, RejectDenied),
 		UDPKernelDrops:    m.udpKernelDrops.WithLabelValues(name),
+		ExtractMisses:     m.extracted.WithLabelValues(name, "no_match"),
+		extracted:         func(rule string) prometheus.Counter { return m.extracted.WithLabelValues(name, rule) },
 	}
 	for f := logentry.FormatUnknown; f <= logentry.FormatJSON; f++ {
 		sm.parsed[f] = m.parsed.WithLabelValues(name, f.String())
@@ -174,6 +179,10 @@ func (m *Metrics) Source(name string, protocol logentry.Protocol) *SourceMetrics
 
 // SourceMetrics are the per-source metric handles.
 type SourceMetrics struct {
+	// ExtractMisses counts messages no extract rule matched.
+	ExtractMisses prometheus.Counter
+	// extracted returns the counter for one matched rule.
+	extracted         func(rule string) prometheus.Counter
 	Received          prometheus.Counter
 	BytesReceived     prometheus.Counter
 	Stored            prometheus.Counter
@@ -274,3 +283,6 @@ func (f *ForwardMetrics) register(name, help string, value func() float64) {
 		Namespace: namespace, Name: name, Help: help, ConstLabels: prometheus.Labels{"target": f.target},
 	}, value))
 }
+
+// Extracted returns the counter for messages matched by one extract rule.
+func (s *SourceMetrics) Extracted(rule string) prometheus.Counter { return s.extracted(rule) }

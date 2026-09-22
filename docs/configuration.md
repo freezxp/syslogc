@@ -130,8 +130,48 @@ ingestion:
         client_ca_file: ""      # required with require_and_verify
 ```
 
+#### Extracting fields from the message
+
+Some senders put structured data in the message text. `extract` turns it into
+fields, which can then be filtered, grouped and charted like any other:
+
+```yaml
+      extract:
+        - name: dnsdist-query      # shown in metrics
+          contains: dnsdist        # cheap pre-filter; skip the pattern otherwise
+          prefix: "dns."           # prepended to every field name
+          regex: '^(?P<query_time>\S+) dnsdist (?P<event>\S+) \S+ (?P<client_ip>\S+) (?P<client_port>\d+) (?P<address_family>\S+) (?P<transport>\S+) (?P<query_bytes>\S+) (?P<qname>\S+) (?P<qtype>\S+) (?P<policy>\S+)$'
+```
+
+turns
+
+```text
+2026-09-22T05:30:00.978892101Z dnsdist CLIENT_QUERY - 2001:db8:1:2::5 7248 INET6 UDP 81b siplb-1.ane2-prd.connectrcs.com A -
+```
+
+into `dns.client_ip=2001:db8:1:2::5`, `dns.qname=siplb-1.ane2-prd.connectrcs.com`,
+`dns.qtype=A` and the rest, so "top clients" or "unique clients per name" is a
+group-by rather than a text search.
+
+- **Capture group names become field names**; a pattern with no named group is
+  rejected at startup, as is an invalid one, so a typo fails fast.
+- Patterns are **RE2** (Go's `regexp`): no backtracking, so a pattern cannot
+  blow up on hostile input. Extraction costs roughly 4 µs per matched message.
+- Rules are tried **in order and the first match wins**. Give each shape its
+  own rule, with `contains` so the others are skipped cheaply.
+- Empty captures produce no field. Extracted values go through the same field
+  limits and sanitisation as parsed ones.
+- `syslogc_ingest_extract_total{source,rule}` counts matches, with
+  `rule="no_match"` for messages nothing matched.
+- Extraction applies **as logs arrive**. Logs already stored keep the fields
+  they had.
+
 | Key | Default | Notes |
 |---|---|---|
+| `extract[].regex` | — | RE2 pattern with named capture groups (required). |
+| `extract[].contains` | — | Literal the message must contain before the pattern is tried. |
+| `extract[].prefix` | — | Prepended to every field name, e.g. `dns.`. |
+| `extract[].name` | `rule-N` | Identifies the rule in metrics. |
 | `max_message_bytes` | UDP `65535`, TCP/TLS `64KiB` | Longer messages are truncated and marked `truncated=true`. |
 | `raw_message` | `on_error` | `on_error` keeps the original input only when parsing failed or was partial. Use `always` for byte-exact forensic copies of every message — measured on synthetic data this roughly doubles compressed storage (≈82 vs ≈41 bytes/row). See [ADR-0013](decisions/0013-raw-message-policy.md). |
 | `allowed_cidrs` | empty (allow all) | Datagrams/connections from other addresses are dropped and counted (`reason="denied"`). |

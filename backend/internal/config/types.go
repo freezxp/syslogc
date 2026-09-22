@@ -224,12 +224,28 @@ type Source struct {
 	MaxConnections int      `koanf:"max_connections" json:"max_connections,omitempty"`
 	IdleTimeout    Duration `koanf:"idle_timeout" json:"idle_timeout,omitempty"`
 
+	// Extract pulls fields out of the message with regular expressions.
+	Extract []ExtractRule `koanf:"extract" json:"extract,omitempty"`
+
 	UDP UDPConfig `koanf:"udp" json:"udp,omitempty"`
 	TLS TLSConfig `koanf:"tls" json:"tls,omitempty"`
 }
 
 // IsEnabled reports whether the source is enabled (default true).
 func (s Source) IsEnabled() bool { return s.Enabled == nil || *s.Enabled }
+
+// ExtractRule turns part of a message into fields. The first rule that
+// matches wins; capture group names become field names.
+type ExtractRule struct {
+	Name string `koanf:"name" json:"name,omitempty"`
+	// Contains is a literal the message must hold before the pattern is
+	// tried; a cheap filter when a source carries several log shapes.
+	Contains string `koanf:"contains" json:"contains,omitempty"`
+	// Regex is an RE2 pattern with named capture groups.
+	Regex string `koanf:"regex" json:"regex"`
+	// Prefix is prepended to every field name the rule produces.
+	Prefix string `koanf:"prefix" json:"prefix,omitempty"`
+}
 
 type UDPConfig struct {
 	// Sockets is the number of SO_REUSEPORT sockets; 0 means GOMAXPROCS.

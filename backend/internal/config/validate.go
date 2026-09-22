@@ -9,7 +9,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
 	"time"
+
+	"github.com/freezxp/syslogc/backend/internal/extract"
 )
 
 // Validate checks the configuration and returns all problems found.
@@ -197,6 +200,18 @@ func (c *Config) Validate() error {
 func validateSource(p string, s Source) []error {
 	var errs []error
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(p+": "+format, args...)) }
+
+	// Patterns are compiled here so a bad one fails at startup, not on the
+	// first message that would have matched it.
+	if len(s.Extract) > 0 {
+		rules := make([]extract.Config, 0, len(s.Extract))
+		for _, r := range s.Extract {
+			rules = append(rules, extract.Config{Name: r.Name, Contains: r.Contains, Regex: r.Regex, Prefix: r.Prefix})
+		}
+		if _, err := extract.New(rules); err != nil {
+			add("%v", err)
+		}
+	}
 
 	if s.Name == "" {
 		add("name is required")
