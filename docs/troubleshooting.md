@@ -122,6 +122,36 @@ curl -s http://127.0.0.1:8080/api/v1/system/storage   # requires login
   need privileges the container does not have — bind 5514 and map the port
   outside.
 
+## DNS service trends show nothing
+
+Run the check; it tests each link in the chain and names the one that is
+broken:
+
+```bash
+./scripts/check-dns-trends.sh http://your-host:8080
+```
+
+The chain, in the order the check walks it:
+
+1. **A source extracts the fields.** The counts come from `dns.qname` and
+   `dns.client_ip`, which an extract rule pulls out of the message — a
+   deployment whose DNS logs arrive unparsed records nothing. Open the source
+   receiving them, add the **dnsdist / DNScollector queries** preset under
+   Extract rules, and save. A source defined in the configuration file has to
+   be copied into the database first with **Manage in the UI**.
+2. **Recent logs carry those fields.** Extraction happens as a log arrives,
+   so logs stored before the rule was added have no fields to count and
+   cannot be backfilled. Only traffic that arrives after the save counts.
+3. **The catalog has enabled services, and the rollup is running.**
+   `recording: false` means no metrics store: check the `victoriametrics`
+   container and `analytics.metrics.url`.
+4. **Counts exist.** A window is recorded once it has fully elapsed, so allow
+   one interval — five minutes by default — before expecting the first point.
+   Hourly points land on the hour, daily ones at midnight UTC.
+
+An empty chart in the UI carries the same diagnosis in a sentence, so the
+script is only needed when you want the whole chain at once.
+
 ## Useful commands
 
 ```bash
