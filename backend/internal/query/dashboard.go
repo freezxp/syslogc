@@ -333,6 +333,7 @@ func (s *Service) currentRate(ctx context.Context, now time.Time) (*IngestRate, 
 		last[sn.NodeID] = sn
 	}
 	rate := &IngestRate{}
+	measured := false
 	for node, f := range first {
 		l := last[node]
 		secs := l.Time.Sub(f.Time).Seconds()
@@ -342,6 +343,14 @@ func (s *Service) currentRate(ctx context.Context, now time.Time) (*IngestRate, 
 		rate.LogsPerSecond += float64(l.Received-f.Received) / secs
 		rate.BytesPerSecond += float64(l.BytesReceived-f.BytesReceived) / secs
 		rate.WindowSeconds = max(rate.WindowSeconds, int64(secs))
+		measured = true
+	}
+	if !measured {
+		// No node had two usable samples — the node has just started, or its
+		// counters were reset. Reporting zero would claim nothing is arriving,
+		// which is a different thing from not having measured yet; the field
+		// is omitted so callers can say so.
+		return nil, nil
 	}
 	return rate, nil
 }

@@ -253,3 +253,41 @@ func TestIngestionRateNodeRestart(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentRateIsAbsentUntilItHasBeenMeasured(t *testing.T) {
+	// A node that has just started has one sample, so nothing can be
+	// measured across it. Reporting zero would claim nothing is arriving.
+	one := statsSource{{NodeID: "a", Time: now.Add(-5 * time.Second), Received: 1000}}
+	svc := NewService(Options{NodeStats: one, Limits: DefaultLimits(time.Hour), Now: func() time.Time { return now }})
+	rate, err := svc.currentRate(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rate != nil {
+		t.Errorf("rate = %+v, want it absent until two samples exist", rate)
+	}
+
+	// Two samples of an idle node are a measurement: it really is zero.
+	idle := statsSource{
+		{NodeID: "a", Time: now.Add(-40 * time.Second), Received: 1000},
+		{NodeID: "a", Time: now.Add(-10 * time.Second), Received: 1000},
+	}
+	svc = NewService(Options{NodeStats: idle, Limits: DefaultLimits(time.Hour), Now: func() time.Time { return now }})
+	rate, err = svc.currentRate(context.Background(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rate == nil || rate.LogsPerSecond != 0 || rate.WindowSeconds != 30 {
+		t.Errorf("rate = %+v, want a measured zero over 30s", rate)
+	}
+
+	// Stale samples are not a measurement either: the node stopped reporting.
+	stale := statsSource{
+		{NodeID: "a", Time: now.Add(-10 * time.Minute), Received: 1000},
+		{NodeID: "a", Time: now.Add(-9 * time.Minute), Received: 2000},
+	}
+	svc = NewService(Options{NodeStats: stale, Limits: DefaultLimits(time.Hour), Now: func() time.Time { return now }})
+	if rate, err = svc.currentRate(context.Background(), now); err != nil || rate != nil {
+		t.Errorf("rate = %+v, err = %v, want it absent for stale statistics", rate, err)
+	}
+}

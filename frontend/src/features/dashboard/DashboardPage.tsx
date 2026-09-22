@@ -97,7 +97,15 @@ export function DashboardPage() {
           loading={overview.isLoading}
           error={overview.error}
           value={formatRate(overview.data?.ingest_rate?.logs_per_second)}
-          sub={overview.data?.ingest_rate ? `${formatBytes(overview.data.ingest_rate.bytes_per_second)}/s` : undefined}
+          // The rate is absent until two node samples exist to measure
+          // across, which is a different thing from a measured zero.
+          sub={
+            overview.data?.ingest_rate
+              ? `${formatBytes(overview.data.ingest_rate.bytes_per_second)}/s`
+              : overview.data
+                ? 'measuring…'
+                : undefined
+          }
           onClick={() => navigate({ to: '/system', search: { tab: 'ingestion' } })}
         />
         <Tile
