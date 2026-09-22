@@ -39,6 +39,7 @@ import {
 } from '@/components/ui/overlay'
 import { cn } from '@/lib/cn'
 import { formatRate } from '@/lib/format'
+import { useIsNarrow } from '@/lib/use-narrow'
 import { useHotkeys } from '@/lib/hotkeys'
 import { COMMON_TIMEZONES, setPrefs, usePrefs, useTimezone } from '@/lib/preferences'
 
@@ -86,6 +87,7 @@ export function AppShell() {
   const navigate = useNavigate()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  const narrow = useIsNarrow()
 
   useHotkeys({
     'mod+k': () => setPaletteOpen((o) => !o),
@@ -101,7 +103,9 @@ export function AppShell() {
 
   return (
     <div className="flex h-full min-h-0">
-      <Sidebar collapsed={collapsed} />
+      {/* A 208px sidebar eats half a phone screen, so it shows icons there
+          however it was left on a desktop. */}
+      <Sidebar collapsed={collapsed || narrow} />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenPalette={() => setPaletteOpen(true)} />
         <main className="min-h-0 flex-1 overflow-auto">
@@ -214,22 +218,32 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const can = useCan()
 
   return (
-    <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+    <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-surface px-2 sm:gap-2 sm:px-3">
       <button
         type="button"
         onClick={onOpenPalette}
-        className="flex h-7 w-72 max-w-[40vw] items-center gap-2 rounded-md border border-border-strong bg-bg px-2 text-sm text-subtle hover:border-accent"
+        className="flex h-7 w-9 items-center gap-2 rounded-md border border-border-strong bg-bg px-2 text-sm text-subtle hover:border-accent sm:w-72 sm:max-w-[40vw]"
+        aria-label="Search or jump to"
       >
-        <Search className="size-3.5" />
-        <span className="flex-1 text-left">Search or jump to…</span>
-        <Kbd>⌘K</Kbd>
+        <Search className="size-3.5 shrink-0" />
+        <span className="hidden flex-1 text-left sm:block">Search or jump to…</span>
+        <span className="hidden sm:block">
+          <Kbd>⌘K</Kbd>
+        </span>
       </button>
       <div className="flex-1" />
-      {can('system:view') && <IngestRateIndicator />}
+      {can('system:view') && (
+        <span className="hidden sm:flex">
+          <IngestRateIndicator />
+        </span>
+      )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm" aria-label="Display timezone">
-            <Globe /> <span className="mono text-sm">{prefs.timezone === 'browser' ? `${tz} (browser)` : tz}</span>
+            <Globe />{' '}
+            <span className="mono hidden text-sm sm:inline">
+              {prefs.timezone === 'browser' ? `${tz} (browser)` : tz}
+            </span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="max-h-80 overflow-auto">
@@ -257,7 +271,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm" aria-label="User menu">
-            <User /> {session?.user.username}
+            <User /> <span className="hidden sm:inline">{session?.user.username}</span>
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent>

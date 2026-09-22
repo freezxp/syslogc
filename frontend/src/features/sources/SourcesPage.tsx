@@ -35,7 +35,7 @@ export function SourcesPage() {
           </Link>
         )}
       </div>
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
+      <div className="overflow-x-auto rounded-md border border-border bg-surface">
         {q.isError ? (
           <ErrorPanel error={q.error} onRetry={() => q.refetch()} />
         ) : q.isLoading ? (

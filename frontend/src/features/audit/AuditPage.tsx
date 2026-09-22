@@ -146,7 +146,7 @@ export function AuditPage() {
         </p>
       )}
 
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
+      <div className="overflow-x-auto rounded-md border border-border bg-surface">
         {list.isError ? (
           <ErrorPanel error={list.error} onRetry={() => list.refetch()} />
         ) : list.isLoading ? (

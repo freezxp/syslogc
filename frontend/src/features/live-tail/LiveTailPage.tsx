@@ -115,7 +115,7 @@ export function LiveTailPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
+      <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-surface px-2 py-1 sm:px-3 sm:py-0">
         <h1 className="mr-1 text-lg font-semibold">Live tail</h1>
         <Tooltip content={status.detail}>
           <span

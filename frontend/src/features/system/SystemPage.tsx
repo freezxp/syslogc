@@ -78,7 +78,7 @@ function HealthTab() {
         <Stat label="Version" value={<span className="mono text-lg">{h.version}</span>} />
         <Stat label="Uptime" value={formatDuration(h.uptime_seconds)} />
       </div>
-      <Panel title="Components" bodyClassName="p-0">
+      <Panel title="Components" bodyClassName="p-0 overflow-x-auto">
         <table className="w-full text-base">
           <tbody>
             {h.components.map((c) => (
@@ -94,7 +94,7 @@ function HealthTab() {
           </tbody>
         </table>
       </Panel>
-      <Panel title="Sources" bodyClassName="p-0">
+      <Panel title="Sources" bodyClassName="p-0 overflow-x-auto">
         <table className="w-full text-base">
           <thead className="bg-surface-2 text-left text-xs font-semibold tracking-wide text-muted uppercase">
             <tr>

@@ -92,11 +92,13 @@ export function QueryBar({
   }
 
   return (
-    <div className="border-b border-border bg-surface px-3 py-2">
-      <div className="flex items-start gap-2">
+    <div className="border-b border-border bg-surface px-2 py-2 sm:px-3">
+      {/* The query and its buttons share a row on a desktop; on a phone the
+          query takes the row and the buttons wrap under it. */}
+      <div className="flex flex-wrap items-start gap-2">
         <div
           className={cn(
-            'flex min-h-8 min-w-0 flex-1 flex-wrap items-center gap-1 rounded-md border bg-bg px-1.5 py-1',
+            'flex min-h-8 w-full min-w-0 flex-wrap items-center gap-1 rounded-md border bg-bg px-1.5 py-1 sm:w-auto sm:flex-1',
             parseError || textError ? 'border-danger' : 'border-border-strong focus-within:border-accent',
           )}
           onClick={() => ref.current?.focus()}

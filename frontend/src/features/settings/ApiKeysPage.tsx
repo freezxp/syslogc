@@ -68,7 +68,7 @@ export function ApiKeysPage() {
           <Plus /> Create API key
         </Button>
       </div>
-      <div className="overflow-hidden rounded-md border border-border bg-surface">
+      <div className="overflow-x-auto rounded-md border border-border bg-surface">
         {keys.isError ? (
           <ErrorPanel error={keys.error} onRetry={() => keys.refetch()} />
         ) : keys.isLoading ? (

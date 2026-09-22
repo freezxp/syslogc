@@ -306,7 +306,7 @@ function ConfigTab() {
     <Panel
       title={`Effective configuration · ${q.data.node}`}
       actions={<CopyButton text={q.data.yaml} label="Copy configuration" />}
-      bodyClassName="p-0"
+      bodyClassName="p-0 overflow-x-auto"
     >
       <p className="border-b border-border px-3 py-2 text-sm text-muted">
         Read-only: this is what the node is running, including defaults. Secrets are redacted. Change it by editing the

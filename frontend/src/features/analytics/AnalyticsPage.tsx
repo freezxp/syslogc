@@ -304,7 +304,7 @@ function ExploreView() {
                   </span>
                 )
               }
-              bodyClassName="p-0"
+              bodyClassName="p-0 overflow-x-auto"
             >
               {breakdown.isError ? (
                 <ErrorPanel error={breakdown.error} onRetry={() => breakdown.refetch()} />

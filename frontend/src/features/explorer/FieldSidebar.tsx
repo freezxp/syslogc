@@ -61,7 +61,7 @@ export function FieldSidebar({
   }
 
   return (
-    <aside aria-label="Fields" className="flex w-64 shrink-0 flex-col border-r border-border bg-surface">
+    <aside aria-label="Fields" className="hidden w-64 shrink-0 flex-col border-r border-border bg-surface sm:flex">
       <div className="border-b border-border p-2">
         <div className="relative">
           <Search className="pointer-events-none absolute top-2 left-2 size-3 text-subtle" />
