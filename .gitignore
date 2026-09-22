@@ -14,3 +14,7 @@ backend/internal/api/webui/dist/*
 
 # Local Compose overrides
 .env
+
+# Deployment-specific overrides written by deploy.sh
+*.local.yaml
+.forwarding-enabled
