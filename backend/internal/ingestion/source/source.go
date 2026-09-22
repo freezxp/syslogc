@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/config"
+	"github.com/freezxp/syslogc/backend/internal/extract"
 	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 	"github.com/freezxp/syslogc/backend/internal/normalization"
@@ -29,7 +30,9 @@ type Settings struct {
 	AllowedCIDRs    []netip.Prefix
 	MaxMessageBytes int
 
-	Norm    normalization.Source
+	Norm normalization.Source
+	// Extract pulls fields out of the message; nil when none are configured.
+	Extract *extract.Extractor
 	Metrics *metrics.SourceMetrics
 }
 
@@ -99,6 +102,17 @@ func New(cfg config.Source, m *metrics.Metrics) (*Settings, error) {
 		RawPolicy:          raw,
 		HostnameFallbackIP: cfg.HostnameFallback == config.HostnameFallbackIP,
 		Labels:             normalization.LabelFields(cfg.Labels),
+	}
+	if len(cfg.Extract) > 0 {
+		rules := make([]extract.Config, 0, len(cfg.Extract))
+		for _, r := range cfg.Extract {
+			rules = append(rules, extract.Config{Name: r.Name, Contains: r.Contains, Regex: r.Regex, Prefix: r.Prefix})
+		}
+		ex, err := extract.New(rules)
+		if err != nil {
+			return nil, fmt.Errorf("source %s: %w", cfg.Name, err)
+		}
+		s.Extract = ex
 	}
 	s.Metrics = m.Source(cfg.Name, s.Protocol)
 	return s, nil

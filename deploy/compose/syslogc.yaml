@@ -37,6 +37,14 @@ ingestion:
       address: ":5514"          # published as host port 514/udp
       format: auto
       timezone: UTC
+      # Turn dnsdist query logs into fields so the client address and the
+      # queried name can be filtered and aggregated. Messages that do not
+      # contain "dnsdist" are not matched against the pattern at all.
+      extract:
+        - name: dnsdist-query
+          contains: dnsdist
+          prefix: "dns."
+          regex: '^(?P<query_time>\S+) dnsdist (?P<event>\S+) \S+ (?P<client_ip>\S+) (?P<client_port>\d+) (?P<address_family>\S+) (?P<transport>\S+) (?P<query_bytes>\S+) (?P<qname>\S+) (?P<qtype>\S+) (?P<policy>\S+)$'
       udp:
         # The kernel caps this at net.core.rmem_max (208 KiB by default);
         # raise that sysctl to give bursts somewhere to land.

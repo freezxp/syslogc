@@ -94,6 +94,16 @@ func (w *worker) process(msg *RawMessage) {
 		}
 	}
 
+	// Extraction runs before normalization so the fields it adds go through
+	// the same naming rules, limits and sanitisation as parsed ones.
+	if src.Extract != nil {
+		if rule := src.Extract.Apply(e); rule != "" {
+			src.Metrics.Extracted(rule).Inc()
+		} else {
+			src.Metrics.ExtractMisses.Inc()
+		}
+	}
+
 	p.norm.Apply(e, &src.Norm, &normalization.Meta{
 		Data:       msg.Data,
 		ReceivedAt: msg.ReceivedAt,

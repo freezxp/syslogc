@@ -433,3 +433,79 @@ func TestLoggerCompatibility(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractedFieldsAreQueryable covers extraction end to end: a field
+// pulled out of the message text can be filtered and grouped like any other.
+func TestExtractedFieldsAreQueryable(t *testing.T) {
+	id := runID()
+	a := startApp(t, func(cfg *config.Config) {
+		for i := range cfg.Ingestion.Sources {
+			if cfg.Ingestion.Sources[i].Name == "it-udp" {
+				cfg.Ingestion.Sources[i].Extract = []config.ExtractRule{{
+					Name: "dnsdist-query", Contains: "dnsdist", Prefix: "dns.",
+					Regex: `^\S+ dnsdist (?P<event>\S+) \S+ (?P<client_ip>\S+) (?P<client_port>\d+) ` +
+						`(?P<address_family>\S+) (?P<transport>\S+) (?P<query_bytes>\S+) (?P<qname>\S+) (?P<qtype>\S+) (?P<policy>\S+)$`,
+				}}
+			}
+		}
+	})
+
+	conn, err := net.Dial("udp", a.Supervisor().Addr("it-udp").String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// The run is marked by hostname: the pattern is anchored, so nothing may
+	// follow the dnsdist line in the message.
+	host := "dnsdist-" + id
+	for i, line := range []string{
+		"2026-09-22T05:30:00.978892101Z dnsdist CLIENT_QUERY - 2001:db8:1:2::5 7248 INET6 UDP 81b siplb-1.example.com A -",
+		"2026-09-22T05:30:01.000000000Z dnsdist CLIENT_QUERY - 10.20.30.40 51515 INET UDP 64b api.example.com AAAA -",
+		"2026-09-22T05:30:02.000000000Z dnsdist CLIENT_QUERY - 10.20.30.40 51516 INET TCP 64b api.example.com A blocked",
+	} {
+		sendUDP(t, a, conn, fmt.Sprintf("<30>1 - %s dnsdist %d - - %s", host, i, line))
+	}
+	// A line no rule matches must still be stored, without extracted fields.
+	sendUDP(t, a, conn, fmt.Sprintf("<30>1 - %s app - - - plain message", host))
+
+	// Wait on the search path itself: a row can be counted a moment before
+	// it is returned by a search.
+	search(t, newBackend(t, "none"), `"hostname":=`+strconv.Quote(host), 4)
+
+	c := login(t, a)
+	run := map[string]any{"op": "eq", "field": "hostname", "value": host}
+
+	// Filter on an extracted field.
+	resp, body := c.post(t, "/api/v1/logs/search", map[string]any{
+		"time_range": map[string]string{"from": "now-15m", "to": "now+1m"},
+		"filter": map[string]any{"op": "and", "args": []any{run,
+			map[string]any{"op": "eq", "field": "dns.qname", "value": "api.example.com"}}},
+	})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":2`) {
+		t.Fatalf("filter on an extracted field: %d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), `"dns.client_ip":"10.20.30.40"`) {
+		t.Errorf("extracted fields missing from the row: %s", body)
+	}
+
+	// The unmatched line is stored without extracted fields.
+	resp, body = c.post(t, "/api/v1/logs/search", map[string]any{
+		"time_range": map[string]string{"from": "now-15m", "to": "now+1m"},
+		"filter": map[string]any{"op": "and", "args": []any{run,
+			map[string]any{"op": "not_exists", "field": "dns.qname"}}},
+	})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"returned":1`) ||
+		!strings.Contains(string(body), "plain message") {
+		t.Errorf("unmatched line: %d %s", resp.StatusCode, body)
+	}
+
+	// Group by one.
+	resp, body = c.post(t, "/api/v1/analytics/breakdown", map[string]any{
+		"time_range": map[string]string{"from": "now-15m", "to": "now+1m"},
+		"filter":     run, "group_by": "dns.client_ip", "limit": 5,
+	})
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"value":"10.20.30.40","metric":2`) ||
+		!strings.Contains(string(body), `"distinct_groups":2`) {
+		t.Errorf("breakdown by an extracted field: %d %s", resp.StatusCode, body)
+	}
+}

@@ -303,3 +303,31 @@ forwarding:
 		}
 	}
 }
+
+func TestExtractRulesAreValidatedAtStartup(t *testing.T) {
+	base := "metadata:\n  postgres:\n    dsn: postgres://u:p@localhost/db\n"
+	source := func(extract string) string {
+		return base + "ingestion:\n  sources:\n    - name: s\n      protocol: udp\n      address: \":5514\"\n" + extract
+	}
+	cfg, err := Load(LoadOptions{File: writeYAML(t, source(
+		"      extract:\n        - name: dnsdist\n          contains: dnsdist\n          prefix: \"dns.\"\n"+
+			"          regex: '^(?P<ts>\\S+) dnsdist (?P<event>\\S+)'\n")), Environ: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := cfg.Ingestion.Sources[0].Extract
+	if len(rules) != 1 || rules[0].Prefix != "dns." || rules[0].Contains != "dnsdist" {
+		t.Fatalf("rules = %+v", rules)
+	}
+
+	for _, tc := range []struct{ name, extract, want string }{
+		{"no named groups", "      extract:\n        - regex: 'dnsdist (\\S+)'\n", "no named capture groups"},
+		{"invalid pattern", "      extract:\n        - regex: '(?P<a>'\n", "error parsing regexp"},
+		{"reserved name", "      extract:\n        - regex: '(?P<_msg>\\S+)'\n", "reserved"},
+	} {
+		_, err := Load(LoadOptions{File: writeYAML(t, source(tc.extract)), Environ: []string{}})
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error = %v, want it to mention %q", tc.name, err, tc.want)
+		}
+	}
+}
