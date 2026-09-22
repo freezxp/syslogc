@@ -1653,3 +1653,23 @@ func TestServiceTrendsExplainsAnEmptyChart(t *testing.T) {
 		t.Errorf("an empty chart was not explained: %s", body)
 	}
 }
+
+func TestServiceTrendsReadsEachWindowOnItsOwn(t *testing.T) {
+	e := newEnv(t)
+	viewer := e.login("viewer")
+	if resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "1h"}, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("trends: %d %s", resp.StatusCode, body)
+	}
+	q := e.trends.queries[len(e.trends.queries)-1]
+	// Without this, a window nobody recorded is drawn as a repeat of the
+	// previous one, inventing clients that were never counted.
+	if !strings.HasPrefix(q.Query, `last_over_time(`) || !strings.HasSuffix(q.Query, `[1h])`) {
+		t.Errorf("query = %q, want each point read from its own window", q.Query)
+	}
+	// The grid has to line up with the recorded windows, or a peak is
+	// reported minutes away from the window it happened in.
+	if !q.Start.Equal(q.Start.Truncate(time.Hour)) || !q.End.Equal(q.End.Truncate(time.Hour)) {
+		t.Errorf("range %s → %s is not aligned to the window", q.Start, q.End)
+	}
+}

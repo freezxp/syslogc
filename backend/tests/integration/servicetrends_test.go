@@ -98,9 +98,13 @@ func TestServiceTrendsRollup(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	// Service names carry the run id: recorded series are keyed by service
+	// and window, so two runs of this test would otherwise write different
+	// values to the same series at the same timestamps.
+	tiktok, youtube := "tiktok-"+run, "youtube-"+run
 	catalog := servicetrends.Catalog{Services: []servicetrends.Service{
-		{Name: "tiktok", Label: "TikTok", Enabled: true, Domains: []string{"tiktok.com", "tiktokv.com"}},
-		{Name: "youtube", Label: "YouTube", Enabled: true, Domains: []string{"youtube.com", "youtubei.googleapis.com"}},
+		{Name: tiktok, Label: "TikTok", Enabled: true, Domains: []string{"tiktok.com", "tiktokv.com"}},
+		{Name: youtube, Label: "YouTube", Enabled: true, Domains: []string{"youtube.com", "youtubei.googleapis.com"}},
 	}}
 	state := servicetrends.State{}
 	recorder, err := servicetrends.NewRecorder(servicetrends.Options{
@@ -130,14 +134,19 @@ func TestServiceTrendsRollup(t *testing.T) {
 
 	// Read the recorded 5m series back out of VictoriaMetrics.
 	want := map[string]map[time.Time]float64{
-		"tiktok":  {first: 3, second: 7},
-		"youtube": {first: 2, second: 2},
+		tiktok:  {first: 3, second: 7},
+		youtube: {first: 2, second: 2},
 	}
-	deadline = time.Now().Add(30 * time.Second)
+	// A written sample takes a moment to become queryable, and the grid must
+	// start on a window boundary or the points come back shifted.
+	deadline = time.Now().Add(90 * time.Second)
 	for {
 		series, err := client.QueryRange(ctx, metricstore.RangeQuery{
-			Query: fmt.Sprintf(`%s{window="5m"}`, servicetrends.MetricUniqueClients),
+			Query: fmt.Sprintf(`last_over_time(%s{window="5m"}[5m])`, servicetrends.MetricUniqueClients),
 			Start: first.Add(-5 * time.Minute), End: now, Step: 5 * time.Minute,
+			// These windows have already passed, so a cached answer from
+			// before the rollup wrote them would never expire during the test.
+			NoCache: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -156,6 +165,13 @@ func TestServiceTrendsRollup(t *testing.T) {
 			}
 		}
 		if matchesWanted(want, got) {
+			// Reading one window at a time leaves gaps rather than carrying
+			// a value forward: nothing is recorded after the second window.
+			for service := range want {
+				if _, ok := got[service][now]; ok {
+					t.Errorf("%s has a value at %s, where nothing was recorded", service, now.Format(time.RFC3339))
+				}
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -174,7 +190,7 @@ func TestServiceTrendsRollup(t *testing.T) {
 			Filter: &filter.Expr{Op: filter.Eq, Field: "source", Value: run},
 		},
 		Categories: []storage.Category{
-			{Name: "tiktok", Filter: catalog.Services[0].Filter("dns.qname")},
+			{Name: tiktok, Filter: catalog.Services[0].Filter("dns.qname")},
 		},
 		DistinctField: "dns.client_ip",
 	})

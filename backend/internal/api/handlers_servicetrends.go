@@ -124,8 +124,16 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 	if err != nil {
 		return err
 	}
+	// The grid must line up with the recorded windows. VictoriaMetrics
+	// places points every step from the start of the range, so an unaligned
+	// start reports a peak at 13:06 for a window that begins at 13:05.
+	start := rng.Start.Truncate(step)
+	end := rng.End.Truncate(step)
+	if !end.Before(rng.End) && end.Equal(start) {
+		end = start.Add(step)
+	}
 	series, err := reader.QueryRange(r.Context(), metricstore.RangeQuery{
-		Query: promQL, Start: rng.Start, End: rng.End, Step: step,
+		Query: promQL, Start: start, End: end, Step: step,
 	})
 	if err != nil {
 		return fmt.Errorf("reading the metrics store: %w", err)
@@ -200,9 +208,8 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 // trendQuery builds the PromQL for a recorded metric. Every part of it comes
 // from this package or from a validated service name, never from free text.
 func trendQuery(metric, window string, services []string) (string, error) {
-	selector := fmt.Sprintf("%s{window=%q}", metric, window)
 	if len(services) == 0 {
-		return selector, nil
+		return lastOverWindow(fmt.Sprintf("%s{window=%q}", metric, window), window), nil
 	}
 	if len(services) > servicetrends.MaxServices {
 		return "", badRequest("validation_failed", "/services", "at most %d services can be asked for at once",
@@ -215,7 +222,17 @@ func trendQuery(metric, window string, services []string) (string, error) {
 		}
 		names = append(names, name)
 	}
-	return fmt.Sprintf("%s{window=%q,service=~%q}", metric, window, strings.Join(names, "|")), nil
+	return lastOverWindow(fmt.Sprintf("%s{window=%q,service=~%q}", metric, window, strings.Join(names, "|")), window), nil
+}
+
+// lastOverWindow reads each point from its own window only.
+//
+// A plain selector carries the previous value forward to later grid points,
+// so a window nobody recorded would be drawn as a repeat of the one before
+// it — inventing clients that were never counted. Looking back exactly one
+// window leaves a gap instead.
+func lastOverWindow(selector, window string) string {
+	return fmt.Sprintf("last_over_time(%s[%s])", selector, window)
 }
 
 func trendWindowNames() []string {

@@ -177,6 +177,11 @@ type RangeQuery struct {
 	Start time.Time
 	End   time.Time
 	Step  time.Duration
+	// NoCache bypasses the server's result cache. VictoriaMetrics caches
+	// answers for windows that have already passed, so a reader that just
+	// wrote samples for such a window — a rollup filling in history, or a
+	// test — can otherwise be served the answer from before the write.
+	NoCache bool
 }
 
 // QueryRange evaluates a PromQL query over a time range.
@@ -195,6 +200,9 @@ func (c *Client) QueryRange(ctx context.Context, q RangeQuery) ([]Series, error)
 		"start": {strconv.FormatInt(q.Start.Unix(), 10)},
 		"end":   {strconv.FormatInt(q.End.Unix(), 10)},
 		"step":  {strconv.FormatInt(int64(q.Step.Seconds()), 10)},
+	}
+	if q.NoCache {
+		form.Set("nocache", "1")
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
