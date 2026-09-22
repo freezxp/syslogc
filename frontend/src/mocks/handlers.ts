@@ -8,6 +8,7 @@ import type {
   AuditEvent,
   BreakdownRequest,
   ExportRequest,
+  ExtractTestRequest,
   FacetsRequest,
   FieldInfo,
   FieldValuesRequest,
@@ -382,6 +383,23 @@ let managedSources: ManagedSource[] = [
       framing: 'octet_counting',
       max_connections: 500,
       idle_timeout: '5m',
+      extract: [
+        {
+          name: 'dnsdist-query',
+          contains: 'dnsdist',
+          prefix: 'dns.',
+          regex:
+            '^(?P<query_time>\\S+) dnsdist (?P<event>\\S+) \\S+ (?P<client_ip>\\S+) (?P<client_port>\\d+) ' +
+            '(?P<address_family>\\S+) (?P<transport>\\S+) (?P<query_bytes>\\S+) (?P<qname>\\S+) (?P<qtype>\\S+) (?P<policy>\\S+)$',
+        },
+        {
+          name: 'ssh-auth-failure',
+          contains: 'Failed password',
+          prefix: 'ssh.',
+          regex:
+            'Failed password for (?:invalid user )?(?P<user>\\S+) from (?P<client_ip>\\S+) port (?P<client_port>\\d+)',
+        },
+      ],
     },
     enabled: true,
     origin: 'database',
@@ -1125,6 +1143,10 @@ export const handlers = [
     api('/sources'),
     () => requireAuth() ?? HttpResponse.json({ sources: [...FILE_SOURCES, ...managedSources] }),
   ),
+  http.post(api('/sources/test-extract'), async ({ request }) => {
+    const body = (await request.json()) as ExtractTestRequest
+    return requireAuth() ?? testExtract(body)
+  }),
   http.get(api('/sources/:id'), ({ params }) => {
     const s = managedSources.find((x) => x.id === params.id)
     return s ? HttpResponse.json(s) : problem(404, 'not_found', 'Not found', 'no such source')
@@ -1303,6 +1325,56 @@ function analyticsValidationError(
   if (limit !== undefined && limit > 50) return validationProblem('/limit', 'limit must be at most 50')
   if (buckets !== undefined && buckets > 1000) return validationProblem('/buckets', 'buckets must be at most 1000')
   return null
+}
+
+/**
+ * Dry run of extract rules. The server compiles RE2; the browser only has
+ * JavaScript regexes, so patterns are translated (`(?P<x>` is spelled `(?<x>`
+ * here) and the handful of RE2-only constructs are simply not exercised by the
+ * mock data.
+ */
+function testExtract(body: ExtractTestRequest): Response {
+  const rules = body.rules ?? []
+  const samples = body.samples ?? []
+  if (rules.length === 0) return validationProblem('/rules', 'at least one rule is required')
+  if (samples.length === 0 || samples.length > 10)
+    return validationProblem('/samples', 'between 1 and 10 samples are required')
+
+  const compiled: { name: string; contains: string; prefix: string; re: RegExp }[] = []
+  for (const [i, rule] of rules.entries()) {
+    const name = rule.name || `rule-${i + 1}`
+    const source = rule.regex.replaceAll('(?P<', '(?<')
+    let re: RegExp
+    try {
+      re = new RegExp(source)
+    } catch (err) {
+      return validationProblem('/rules', `extract ${name}: error parsing regexp: ${String(err)}`)
+    }
+    if (!/\(\?<[A-Za-z]/.test(source))
+      return validationProblem(
+        '/rules',
+        `extract ${name}: the pattern has no named capture groups, so it produces no fields`,
+      )
+    compiled.push({ name, contains: rule.contains ?? '', prefix: rule.prefix ?? '', re })
+  }
+
+  const results = samples.map((sample) => {
+    for (const rule of compiled) {
+      if (rule.contains && !sample.includes(rule.contains)) continue
+      const m = rule.re.exec(sample)
+      if (!m?.groups) continue
+      const fields: Record<string, string> = {}
+      const order: string[] = []
+      for (const [key, value] of Object.entries(m.groups)) {
+        if (!value) continue
+        fields[rule.prefix + key] = value
+        order.push(rule.prefix + key)
+      }
+      return { sample, rule: rule.name, fields, order }
+    }
+    return { sample, rule: '' }
+  })
+  return HttpResponse.json({ results })
 }
 
 /** Mirrors the few server-side checks the source editor surfaces inline. */
