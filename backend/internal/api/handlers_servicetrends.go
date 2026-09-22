@@ -84,6 +84,9 @@ type serviceTrendRequest struct {
 	Services []string `json:"services,omitempty"`
 	// Metric is unique_clients (the default) or queries.
 	Metric string `json:"metric,omitempty"`
+	// Scope is "all" (the default), counting every domain a service owns,
+	// or "main", counting only the domains it is reached at.
+	Scope string `json:"scope,omitempty"`
 }
 
 // handleServiceTrends reads recorded trend series out of the metrics store.
@@ -110,6 +113,15 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 	default:
 		return badRequest("validation_failed", "/metric", "metric must be unique_clients or queries")
 	}
+	scope := servicetrends.ScopeAll
+	switch req.Scope {
+	case "", servicetrends.ScopeAll:
+	case servicetrends.ScopeMain:
+		scope = servicetrends.ScopeMain
+	default:
+		return badRequest("validation_failed", "/scope", "scope must be %s or %s",
+			servicetrends.ScopeAll, servicetrends.ScopeMain)
+	}
 	rng, _, err := query.Resolve(req.TimeRange, time.Now())
 	if err != nil {
 		return badRequest("validation_failed", "/time_range", "%v", err)
@@ -120,7 +132,7 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 			n, req.Window, maxTrendPoints)
 	}
 
-	promQL, err := trendQuery(metric, req.Window, req.Services)
+	promQL, err := trendQuery(metric, req.Window, scope, req.Services)
 	if err != nil {
 		return err
 	}
@@ -186,6 +198,7 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 		"window":         req.Window,
 		"step_seconds":   int(step.Seconds()),
 		"metric":         req.Metric,
+		"scope":          scope,
 		"series":         out,
 	}
 	if overall.Peak > 0 {
@@ -207,9 +220,10 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 
 // trendQuery builds the PromQL for a recorded metric. Every part of it comes
 // from this package or from a validated service name, never from free text.
-func trendQuery(metric, window string, services []string) (string, error) {
+func trendQuery(metric, window, scope string, services []string) (string, error) {
 	if len(services) == 0 {
-		return lastOverWindow(fmt.Sprintf("%s{window=%q}", metric, window), window), nil
+		return mergeScopes(lastOverWindow(
+			fmt.Sprintf("%s{window=%q,%s}", metric, window, scopeMatcher(scope)), window)), nil
 	}
 	if len(services) > servicetrends.MaxServices {
 		return "", badRequest("validation_failed", "/services", "at most %d services can be asked for at once",
@@ -222,7 +236,33 @@ func trendQuery(metric, window string, services []string) (string, error) {
 		}
 		names = append(names, name)
 	}
-	return lastOverWindow(fmt.Sprintf("%s{window=%q,service=~%q}", metric, window, strings.Join(names, "|")), window), nil
+	return mergeScopes(lastOverWindow(
+		fmt.Sprintf("%s{window=%q,%s,service=~%q}", metric, window, scopeMatcher(scope), strings.Join(names, "|")),
+		window)), nil
+}
+
+// scopeMatcher selects one scope's series.
+//
+// Counts recorded before scopes existed carry no scope label at all, and an
+// empty value in a regular-expression matcher also matches a missing label,
+// so the full scope keeps reading that history instead of appearing to start
+// at the upgrade.
+func scopeMatcher(scope string) string {
+	if scope == servicetrends.ScopeAll {
+		return `scope=~"all|"`
+	}
+	return fmt.Sprintf("scope=%q", scope)
+}
+
+// mergeScopes folds the labelled and unlabelled halves of a service's history
+// into one line.
+//
+// Matching both leaves two series per service — the one recorded before
+// scopes existed and the one recorded since — which would be drawn as two
+// lines for the same thing. They never carry a sample at the same instant,
+// so taking the greater of them joins them end to end.
+func mergeScopes(q string) string {
+	return "max without (scope) (" + q + ")"
 }
 
 // lastOverWindow reads each point from its own window only.

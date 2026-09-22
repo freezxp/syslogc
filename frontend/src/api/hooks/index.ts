@@ -47,6 +47,7 @@ import type {
   SystemStorage,
   TimeRange,
   TrendMetric,
+  TrendScope,
   TrendWindow,
   UserCreateInput,
   UserUpdateInput,
@@ -370,16 +371,17 @@ export function useServiceTrends(
   range: TimeRange | null,
   window: TrendWindow,
   metric: TrendMetric,
+  scope: TrendScope,
   services: string[],
   enabled = true,
 ) {
   return useQuery({
-    queryKey: [...serviceTrendsKey, range, window, metric, services],
+    queryKey: [...serviceTrendsKey, range, window, metric, scope, services],
     enabled: enabled && range !== null,
     queryFn: ({ signal }) =>
       unwrap(
         client.POST('/api/v1/analytics/service-trends', {
-          body: { time_range: range!, window, metric, services: services.length ? services : undefined },
+          body: { time_range: range!, window, metric, scope, services: services.length ? services : undefined },
           signal,
         }),
       ) as Promise<ServiceTrendResponse>,

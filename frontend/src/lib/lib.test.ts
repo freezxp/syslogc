@@ -44,9 +44,11 @@ import {
 import {
   decodeServiceTrends,
   encodeServiceTrends,
+  mainScopeEmptyHint,
   peakSentence,
   rangeTooLong,
   rangeTooShort,
+  scopeHelp,
   serviceFilterLabel,
   trendChartData,
   trendMetricIsAdditive,
@@ -717,15 +719,17 @@ describe('analytics query', () => {
 })
 
 describe('service trends', () => {
-  const base = { win: undefined, count: undefined, svc: undefined }
+  const base = { win: undefined, count: undefined, scope: undefined, svc: undefined }
 
   it('defaults to hourly unique clients over every service', () => {
-    expect(decodeServiceTrends(base)).toEqual({ window: '1h', metric: 'unique_clients', services: [] })
+    expect(decodeServiceTrends(base)).toEqual({ window: '1h', metric: 'unique_clients', scope: 'all', services: [] })
     // A window the rollup never recorded cannot be answered, so it is ignored.
     expect(decodeServiceTrends({ ...base, win: '17m' }).window).toBe('1h')
     expect(decodeServiceTrends({ ...base, win: '1d' }).window).toBe('1d')
     expect(decodeServiceTrends({ ...base, count: 'queries' }).metric).toBe('queries')
     expect(decodeServiceTrends({ ...base, count: 'nonsense' }).metric).toBe('unique_clients')
+    expect(decodeServiceTrends({ ...base, scope: 'main' }).scope).toBe('main')
+    expect(decodeServiceTrends({ ...base, scope: 'nonsense' }).scope).toBe('all')
   })
 
   it('reads a service filter, ignoring blanks and repeats', () => {
@@ -733,15 +737,44 @@ describe('service trends', () => {
   })
 
   it('round-trips through the URL, dropping defaults', () => {
-    const q = { window: '5m' as const, metric: 'queries' as const, services: ['tiktok', 'youtube'] }
+    const q = {
+      window: '5m' as const,
+      metric: 'queries' as const,
+      scope: 'main' as const,
+      services: ['tiktok', 'youtube'],
+    }
     const encoded = encodeServiceTrends(q)
-    expect(encoded).toEqual({ win: '5m', count: 'queries', svc: 'tiktok,youtube' })
+    expect(encoded).toEqual({ win: '5m', count: 'queries', scope: 'main', svc: 'tiktok,youtube' })
     expect(decodeServiceTrends(encoded)).toEqual(q)
-    expect(encodeServiceTrends({ window: '1h', metric: 'unique_clients', services: [] })).toEqual({
+    expect(encodeServiceTrends({ window: '1h', metric: 'unique_clients', scope: 'all', services: [] })).toEqual({
       win: undefined,
       count: undefined,
+      scope: undefined,
       svc: undefined,
     })
+  })
+
+  it('blames the catalog, not the rollup, when the main scope has nothing to count', () => {
+    const service = (name: string, main?: string[]) => ({ name, enabled: true, main_domains: main })
+    // Every service asked for is missing main domains: the scope counts nothing
+    // whatever the rollup did.
+    expect(mainScopeEmptyHint([service('tiktok'), service('youtube')], [])).toMatch(/None of these services/)
+    expect(mainScopeEmptyHint([service('tiktok')], [])).toMatch(/This service has no main domains/)
+    // One of them has some, so an empty answer really is an empty recording.
+    expect(mainScopeEmptyHint([service('tiktok'), service('youtube', ['youtube.com'])], [])).toBeNull()
+    // The filter narrows what is counted, so it narrows the explanation too.
+    expect(mainScopeEmptyHint([service('tiktok'), service('youtube', ['youtube.com'])], ['tiktok'])).toMatch(
+      /This service has no main domains/,
+    )
+    // A disabled service is not counted in either scope, and an empty catalog
+    // has its own empty state.
+    expect(mainScopeEmptyHint([{ name: 'tiktok', enabled: false }], [])).toBeNull()
+    expect(mainScopeEmptyHint([], [])).toBeNull()
+  })
+
+  it('says what each scope leaves in and out', () => {
+    expect(scopeHelp('all')).toMatch(/inflates/)
+    expect(scopeHelp('main')).toMatch(/no main domains is not counted at all/)
   })
 
   it('widens the explorer default to a day, but leaves a chosen range alone', () => {
@@ -788,6 +821,7 @@ describe('service trends', () => {
       window: '1h',
       step_seconds: 3600,
       metric: 'unique_clients',
+      scope: 'all',
       series: [
         {
           service: 'tiktok',
@@ -838,6 +872,7 @@ describe('service trends', () => {
         window: '1h',
         step_seconds: 3600,
         metric: 'unique_clients',
+        scope: 'all',
         series,
       },
       2,
@@ -883,6 +918,7 @@ describe('service catalog', () => {
     name: 'tiktok',
     label: 'TikTok',
     domains: 'tiktok.com',
+    mainDomains: '',
     enabled: true,
     ...patch,
   })
@@ -897,6 +933,29 @@ describe('service catalog', () => {
     const form = catalogToForm(stored)
     expect(form[0]).toMatchObject({ name: 'tiktok', domains: 'tiktok.com\ntiktokcdn.com', enabled: false })
     expect(formToServices(form)).toEqual(stored)
+  })
+
+  it('round-trips main domains, and sends none rather than an empty list', () => {
+    const stored = { name: 'tiktok', label: 'TikTok', domains: ['tiktok.com', 'tiktokcdn.com'], enabled: true }
+    expect(formToServices(catalogToForm([stored]))[0]).not.toHaveProperty('main_domains')
+    const withMain = [{ ...stored, main_domains: ['tiktok.com'] }]
+    expect(catalogToForm(withMain)[0]).toMatchObject({ mainDomains: 'tiktok.com' })
+    expect(formToServices(catalogToForm(withMain))).toEqual(withMain)
+  })
+
+  it('refuses a main domain the service does not own', () => {
+    const errors = validateCatalog([
+      service({ domains: 'tiktok.com\ntiktokcdn.com', mainDomains: 'tiktok.com' }),
+      service({ name: 'youtube', domains: 'youtube.com', mainDomains: 'youtu.be' }),
+      service({ name: 'netflix', domains: 'netflix.com', mainDomains: 'localhost' }),
+      // The server ignores case and surrounding dots when it matches a domain,
+      // so neither is a mismatch here either.
+      service({ name: 'spotify', domains: 'spotify.com', mainDomains: '.Spotify.com.' }),
+    ])
+    expect(errors.rows[0]).toBeUndefined()
+    expect(errors.rows[1]).toMatch(/Main domain “youtu.be” is not one of this service’s domains/)
+    expect(errors.rows[2]).toMatch(/such as tiktok.com/)
+    expect(errors.rows[3]).toBeUndefined()
   })
 
   it('accepts a catalog the server would accept', () => {

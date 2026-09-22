@@ -3,7 +3,14 @@
  * trend response to chart rows, and the sentence that answers the question the
  * view exists for — when did the most clients reach a service?
  */
-import type { ServiceTrendPeak, ServiceTrendResponse, TrendMetric, TrendWindow } from '@/api/types'
+import type {
+  ServiceTrendPeak,
+  ServiceTrendResponse,
+  TrendMetric,
+  TrendScope,
+  TrendService,
+  TrendWindow,
+} from '@/api/types'
 import { formatExact, formatTimestamp } from '@/lib/format'
 import type { AnalyticsSearch } from '@/lib/url-state'
 
@@ -17,6 +24,7 @@ export const TREND_WINDOWS: { value: TrendWindow; label: string; seconds: number
 
 export const DEFAULT_TREND_WINDOW: TrendWindow = '1h'
 export const DEFAULT_TREND_METRIC: TrendMetric = 'unique_clients'
+export const DEFAULT_TREND_SCOPE: TrendScope = 'all'
 
 /** A day of hourly windows: long enough to show the daily shape, short enough to read. */
 export const DEFAULT_TREND_RANGE = { from: 'now-24h', to: 'now' }
@@ -34,6 +42,7 @@ export const TREND_SERIES_SHOWN = 8
 export interface ServiceTrendQuery {
   window: TrendWindow
   metric: TrendMetric
+  scope: TrendScope
   /** Service names to show; empty means every recorded service. */
   services: string[]
 }
@@ -43,7 +52,9 @@ function isWindow(value: string | undefined): value is TrendWindow {
 }
 
 /** Reads the trend query out of the URL, falling back to the default view. */
-export function decodeServiceTrends(search: Pick<AnalyticsSearch, 'win' | 'count' | 'svc'>): ServiceTrendQuery {
+export function decodeServiceTrends(
+  search: Pick<AnalyticsSearch, 'win' | 'count' | 'scope' | 'svc'>,
+): ServiceTrendQuery {
   const win = search.win?.trim()
   const names = (search.svc ?? '')
     .split(',')
@@ -52,15 +63,17 @@ export function decodeServiceTrends(search: Pick<AnalyticsSearch, 'win' | 'count
   return {
     window: isWindow(win) ? win : DEFAULT_TREND_WINDOW,
     metric: search.count === 'queries' ? 'queries' : DEFAULT_TREND_METRIC,
+    scope: search.scope === 'main' ? 'main' : DEFAULT_TREND_SCOPE,
     services: Array.from(new Set(names)),
   }
 }
 
 /** Inverse of `decodeServiceTrends`; defaults are dropped so shared URLs stay short. */
-export function encodeServiceTrends(q: ServiceTrendQuery): Pick<AnalyticsSearch, 'win' | 'count' | 'svc'> {
+export function encodeServiceTrends(q: ServiceTrendQuery): Pick<AnalyticsSearch, 'win' | 'count' | 'scope' | 'svc'> {
   return {
     win: q.window === DEFAULT_TREND_WINDOW ? undefined : q.window,
     count: q.metric === 'queries' ? 'queries' : undefined,
+    scope: q.scope === 'main' ? 'main' : undefined,
     svc: q.services.length ? q.services.join(',') : undefined,
   }
 }
@@ -138,6 +151,35 @@ export function windowHelp(metric: TrendMetric): string {
   return metric === 'queries'
     ? 'Every window is counted separately, so a point is the queries in one window — not a running total.'
     : 'Every window is counted separately and unique counts cannot be added up: a day’s unique clients is not the sum of its hours, because a client active all day is still one client.'
+}
+
+/**
+ * What the scope changes, in the one sentence it takes: an app talks to its
+ * CDNs on its own, so counting every domain answers "whose device talked to
+ * this service" rather than "who opened it".
+ */
+export function scopeHelp(scope: TrendScope): string {
+  return scope === 'main'
+    ? 'Background CDN and API traffic is left out, so this is closer to who opened a service; one with no main domains is not counted at all.'
+    : 'Background CDN and API traffic counts towards a service too, which inflates who “used” it; main domains only is closer to who opened it.'
+}
+
+/**
+ * Why the main scope in particular has nothing to draw, or null when the usual
+ * empty state fits. A service with no main domains is absent from this scope
+ * altogether, so saying "nothing recorded" would blame the rollup for a gap in
+ * the catalog.
+ */
+export function mainScopeEmptyHint(
+  services: Pick<TrendService, 'name' | 'enabled' | 'main_domains'>[],
+  selected: string[],
+): string | null {
+  const counted = services.filter((s) => s.enabled && (selected.length === 0 || selected.includes(s.name)))
+  if (counted.length === 0) return null
+  if (counted.some((s) => s.main_domains?.length)) return null
+  return counted.length === 1
+    ? 'This service has no main domains, so this scope counts nothing for it. Add them in the catalog, or count all domains.'
+    : 'None of these services have main domains, so this scope counts nothing. Add them in the catalog, or count all domains.'
 }
 
 /**

@@ -179,6 +179,28 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
                 </p>
               </div>
 
+              {/* A refinement of the list above rather than a second list, so it
+                  is indented under it and stays out of the way when unused. */}
+              <div className="mt-1.5 border-l-2 border-border pl-2.5">
+                <Label htmlFor={`${row.key}-main-domains`} className="text-xs">
+                  Main domains <span className="font-normal text-subtle">— optional</span>
+                </Label>
+                <Textarea
+                  id={`${row.key}-main-domains`}
+                  rows={2}
+                  spellCheck={false}
+                  className="mono text-sm leading-snug"
+                  placeholder="tiktok.com"
+                  value={row.mainDomains}
+                  disabled={!editable}
+                  onChange={(e) => replace(i, { mainDomains: e.target.value })}
+                />
+                <p className="mt-0.5 text-xs text-subtle">
+                  One per line, each of them also in the list above: the domains the service is reached at, rather than
+                  the CDNs its app queries by itself. Counted separately in the trends view; leave empty for none.
+                </p>
+              </div>
+
               <div className="mt-2 flex items-center gap-3">
                 <label className="flex items-center gap-2 text-base">
                   <input

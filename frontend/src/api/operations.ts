@@ -343,12 +343,22 @@ export type TrendWindow = '5m' | '1h' | '1d'
 
 export type TrendMetric = 'unique_clients' | 'queries'
 
+/**
+ * Which of a service's domains are counted. `all` counts every one of them,
+ * background CDNs and APIs included; `main` counts only the domains the
+ * service is reached at, which reads as who opened it rather than whose device
+ * talked to it. A service with no main domains is absent from `main` entirely.
+ */
+export type TrendScope = 'all' | 'main'
+
 /** One named group of domains, e.g. TikTok is tiktok.com plus a few more. */
 export interface TrendService {
   /** Becomes a metric label, so it is a slug: lower-case letters, digits, - and _. */
   name: string
   label: string
   domains: string[]
+  /** A subset of `domains`: the ones the service is reached at. May be absent. */
+  main_domains?: string[]
   /** False keeps a service in the catalog without counting it. */
   enabled: boolean
 }
@@ -374,6 +384,8 @@ export interface ServiceTrendRequest {
   /** Omitted or empty asks for every recorded service. */
   services?: string[]
   metric?: TrendMetric
+  /** Omitted means `all`. */
+  scope?: TrendScope
 }
 
 export interface ServiceTrendPoint {
@@ -405,6 +417,7 @@ export interface ServiceTrendResponse {
   window: TrendWindow
   step_seconds: number
   metric: TrendMetric
+  scope: TrendScope
   /** Busiest first, so the legend reads in the order that matters. */
   series: ServiceTrendSeries[]
   peak?: ServiceTrendPeak

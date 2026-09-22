@@ -448,3 +448,195 @@ func (w *limitedWriter) Write(_ context.Context, s []metricstore.Sample) error {
 	w.total += len(s)
 	return nil
 }
+
+func TestDefaultCatalogCountsEachServiceSeparately(t *testing.T) {
+	c := DefaultCatalog()
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// No domain may belong to two services: a shared one would count the
+	// same client under both, which is exactly what separating Facebook from
+	// Instagram is meant to avoid.
+	owner := map[string]string{}
+	for _, s := range c.Services {
+		for _, d := range s.Domains {
+			if other, taken := owner[d]; taken {
+				t.Errorf("%q is claimed by both %s and %s", d, other, s.Name)
+			}
+			owner[d] = s.Name
+		}
+	}
+
+	// Meta's shared CDN belongs to no app in particular, so it belongs to
+	// none of them: including it would fold Instagram and Threads back into
+	// whichever service claimed it.
+	for _, shared := range []string{"fbcdn.net", "facebook.net"} {
+		if svc, ok := owner[shared]; ok {
+			t.Errorf("shared CDN %q is claimed by %s, which would merge Meta's apps", shared, svc)
+		}
+	}
+
+	// The services people ask about by name are all present and separate.
+	want := []string{
+		"facebook", "instagram", "threads", "tiktok", "youtube", "x", "linkedin", "reddit",
+		"xiaohongshu", "lemon8", "tumblr", "pinterest", "snapchat", "quora", "weibo", "bigolive",
+	}
+	have := map[string]bool{}
+	for _, s := range c.Services {
+		have[s.Name] = true
+	}
+	for _, name := range want {
+		if !have[name] {
+			t.Errorf("the default catalog is missing %q", name)
+		}
+	}
+
+	// One pass counts every service, so the catalog has to fit in one query.
+	if len(c.Services) > MaxServices {
+		t.Errorf("%d services, at most %d can be counted in one pass", len(c.Services), MaxServices)
+	}
+	t.Logf("%d services, %d domains", len(c.Services), len(owner))
+}
+
+func TestDefaultCatalogSeparatesMetaApps(t *testing.T) {
+	c := DefaultCatalog()
+	filters := map[string]func(string) bool{}
+	for _, s := range c.Services {
+		f := s.Filter("dns.qname")
+		filters[s.Name] = func(qname string) bool { return matchesExpr(f, qname) }
+	}
+	for _, tc := range []struct{ qname, service string }{
+		{"www.facebook.com", "facebook"},
+		{"graph.facebook.com", "facebook"},
+		{"www.instagram.com", "instagram"},
+		{"scontent.cdninstagram.com", "instagram"},
+		{"www.threads.net", "threads"},
+		{"web.whatsapp.com", "whatsapp"},
+		{"api.tiktokv.com", "tiktok"},
+		{"www.lemon8-app.com", "lemon8"},
+		{"www.xiaohongshu.com", "xiaohongshu"},
+		{"api.bigo.tv", "bigolive"},
+	} {
+		matched := []string{}
+		for name, f := range filters {
+			if f(tc.qname) {
+				matched = append(matched, name)
+			}
+		}
+		if len(matched) != 1 || matched[0] != tc.service {
+			t.Errorf("%s matched %v, want only %s", tc.qname, matched, tc.service)
+		}
+	}
+}
+
+// matchesExpr applies a catalog filter the way the storage backend would.
+func matchesExpr(e *filter.Expr, qname string) bool {
+	if e == nil {
+		return false
+	}
+	switch e.Op {
+	case filter.Or:
+		for _, a := range e.Args {
+			if matchesExpr(a, qname) {
+				return true
+			}
+		}
+		return false
+	case filter.Eq:
+		return qname == e.Value
+	case filter.Contains:
+		return strings.Contains(qname, e.Value)
+	default:
+		return false
+	}
+}
+
+func TestRunRecordsBothScopes(t *testing.T) {
+	now := time.Date(2026, 9, 22, 13, 7, 0, 0, time.UTC)
+	q, w := &fakeQuerier{}, &fakeWriter{}
+	r, _ := testRecorder(t, q, w, now, time.Hour)
+	r.opts.Catalog = func(context.Context) (Catalog, error) {
+		return Catalog{Services: []Service{
+			{Name: "tiktok", Enabled: true, Domains: []string{"tiktok.com", "tiktokcdn.com"}, MainDomains: []string{"tiktok.com"}},
+			// A service with no main domains is counted once, not twice.
+			{Name: "corporate", Enabled: true, Domains: []string{"example.com"}},
+		}}, nil
+	}
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	scopes := map[string]map[string]bool{}
+	for _, s := range w.samples {
+		scope, service := s.Labels["scope"], s.Labels["service"]
+		if scopes[scope] == nil {
+			scopes[scope] = map[string]bool{}
+		}
+		scopes[scope][service] = true
+	}
+	if !scopes[ScopeAll]["tiktok"] || !scopes[ScopeAll]["corporate"] {
+		t.Errorf("the full scope is missing services: %v", scopes[ScopeAll])
+	}
+	if !scopes[ScopeMain]["tiktok"] {
+		t.Errorf("the main scope is missing tiktok: %v", scopes[ScopeMain])
+	}
+	if scopes[ScopeMain]["corporate"] {
+		t.Error("a service without main domains was counted in the main scope")
+	}
+
+	// The main pass asks only about the main domains.
+	var mainQuery *storage.CategoryQuery
+	for i, got := range q.queries {
+		if len(got.Categories) == 1 && got.Categories[0].Name == "tiktok" {
+			mainQuery = &q.queries[i]
+		}
+	}
+	if mainQuery == nil {
+		t.Fatal("no main-domain query was made")
+	}
+	if n := len(mainQuery.Categories[0].Filter.Args); n != 2 {
+		t.Errorf("main filter has %d arms, want the one domain's two", n)
+	}
+}
+
+func TestMainDomainsMustBeDomainsOfTheService(t *testing.T) {
+	c := Catalog{Services: []Service{
+		{Name: "tiktok", Enabled: true, Domains: []string{"tiktok.com"}, MainDomains: []string{"tiktok.com"}},
+		{Name: "typo", Enabled: true, Domains: []string{"example.com"}, MainDomains: []string{"exmaple.com"}},
+	}}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "is not one of its domains") {
+		t.Errorf("err = %v, want the typo to be caught", err)
+	}
+}
+
+func TestDefaultCatalogMainDomainsAreASubsetAndMeaningful(t *testing.T) {
+	c := DefaultCatalog()
+	for _, s := range c.Services {
+		if len(s.MainDomains) == 0 {
+			t.Errorf("%s has no main domains, so it has no separate main count", s.Name)
+		}
+		if len(s.MainDomains) > len(s.Domains) {
+			t.Errorf("%s: more main domains than domains", s.Name)
+		}
+	}
+	// The CDNs are what the main scope exists to leave out.
+	byName := map[string]Service{}
+	for _, s := range c.Services {
+		byName[s.Name] = s
+	}
+	for _, tc := range []struct{ service, cdn string }{
+		{"instagram", "cdninstagram.com"},
+		{"youtube", "googlevideo.com"},
+		{"tiktok", "tiktokcdn.com"},
+		{"x", "twimg.com"},
+		{"snapchat", "sc-cdn.net"},
+	} {
+		for _, d := range byName[tc.service].MainDomains {
+			if d == tc.cdn {
+				t.Errorf("%s counts %s as a main domain, which is a CDN", tc.service, tc.cdn)
+			}
+		}
+	}
+}

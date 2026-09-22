@@ -96,6 +96,7 @@ export type {
   SystemConfig,
   SystemRetention,
   TrendMetric,
+  TrendScope,
   TrendService,
   TrendWindow,
   UserCreateInput,

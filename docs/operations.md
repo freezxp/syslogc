@@ -190,17 +190,43 @@ counts live in VictoriaMetrics rather than in the logs, so they stay
 available after the logs they came from have been deleted, and a year of
 them costs a few megabytes.
 
-A **service** is a named set of domains. The catalog ships with the usual
-suspects (Facebook/Instagram/WhatsApp, TikTok, YouTube, Netflix, X,
-Snapchat, Telegram, Spotify, Microsoft 365, Google) and is edited on the
-**Analytics** page by an operator or administrator. A domain matches itself
-and its subdomains, so `tiktok.com` covers `www.tiktok.com` without covering
-`nottiktok.com`.
+A **service** is a named set of domains. The catalog ships with the social
+networks people usually ask about — Facebook, Instagram, Threads, WhatsApp,
+TikTok, Lemon8, Douyin, YouTube, X, LinkedIn, Reddit, Xiaohongshu (RedNote),
+Weibo, Tumblr, Pinterest, Snapchat, Quora, BIGO LIVE, Telegram, WeChat,
+LINE, Discord, Twitch — plus Netflix, Spotify, Google and Microsoft 365 for
+contrast with the working day. It is edited on the **Analytics** page by an
+operator or administrator. A domain matches itself and its subdomains, so
+`tiktok.com` covers `www.tiktok.com` without covering `nottiktok.com`.
+
+Each app is matched on the domains only it uses. Meta's apps share a CDN, so
+`fbcdn.net` belongs to none of them: giving it to Facebook would count every
+Instagram and Threads user as a Facebook user, which is the opposite of
+counting them separately. The same applies to ByteDance's shared CDNs across
+TikTok, Lemon8 and Douyin.
+
+At most 32 services are counted, because they share one pass over the logs;
+the shipped catalog leaves room for a few of your own.
 
 Membership is decided when the rollup runs, not when a log is stored. Adding
 a service therefore also changes what past windows would count, and history
 can be backfilled from logs stored long before the service was in the
 catalog — by default the last 7 days are filled in on first start.
+
+### Reached, or merely talked to
+
+Each service is counted twice over, under two scopes:
+
+| Scope | Counts | Answers |
+|---|---|---|
+| `all` | every domain the service owns, CDNs and APIs included | whose devices talked to it at all |
+| `main` | only the domains it is reached at — `instagram.com`, not `cdninstagram.com` | who actually opened it |
+
+A phone with the app installed queries a service's CDNs in the background
+whether or not anybody opened it, so the full count is much the larger of
+the two and moves less over the day. The main count is the one to read as
+"people using this service". Each service's `main_domains` must be a subset
+of its `domains`, so the main count can never exceed the full one.
 
 ### Why there are three windows
 

@@ -578,6 +578,14 @@ paths:
               properties:
                 time_range: {$ref: "#/components/schemas/TimeRange"}
                 window: {type: string, enum: ["5m", "1h", "1d"]}
+                scope:
+                  type: string
+                  enum: [all, main]
+                  default: all
+                  description: >-
+                    `all` counts every domain a service owns; `main` counts
+                    only the domains it is reached at, which reads as who
+                    opened it rather than whose device talked to it.
                 services: {type: array, items: {type: string}, description: Empty returns every service}
                 metric: {type: string, enum: [unique_clients, queries], default: unique_clients}
       responses:
@@ -1138,6 +1146,14 @@ components:
           maxItems: 32
           items: {type: string}
           description: A domain matches itself and its subdomains.
+        main_domains:
+          type: array
+          maxItems: 32
+          items: {type: string}
+          description: >-
+            The domains the service is reached at, as opposed to the CDNs and
+            APIs its apps query in the background. Must be a subset of
+            `domains`; empty means the service has no separate main count.
         enabled: {type: boolean, description: False keeps a service in the catalog without counting it.}
 
     ServiceCatalog:

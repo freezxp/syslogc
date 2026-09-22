@@ -21,6 +21,8 @@ export interface ServiceForm {
   label: string
   /** One domain per line, as typed. */
   domains: string
+  /** The subset of `domains` the service is reached at; empty is normal. */
+  mainDomains: string
   enabled: boolean
 }
 
@@ -28,7 +30,15 @@ let serviceKeySeq = 0
 
 export function newServiceForm(service: Partial<Omit<ServiceForm, 'key'>> = {}): ServiceForm {
   serviceKeySeq += 1
-  return { key: `service-${serviceKeySeq}`, name: '', label: '', domains: '', enabled: true, ...service }
+  return {
+    key: `service-${serviceKeySeq}`,
+    name: '',
+    label: '',
+    domains: '',
+    mainDomains: '',
+    enabled: true,
+    ...service,
+  }
 }
 
 export function catalogToForm(services: TrendService[]): ServiceForm[] {
@@ -37,6 +47,7 @@ export function catalogToForm(services: TrendService[]): ServiceForm[] {
       name: s.name,
       label: s.label ?? '',
       domains: (s.domains ?? []).join('\n'),
+      mainDomains: (s.main_domains ?? []).join('\n'),
       enabled: s.enabled,
     }),
   )
@@ -51,13 +62,24 @@ export function parseDomains(text: string): string[] {
   return Array.from(new Set(list))
 }
 
+/** The server ignores surrounding dots and case when it matches a domain. */
+function normalDomain(domain: string): string {
+  return domain.replace(/^\.+|\.+$/g, '')
+}
+
 export function formToServices(forms: ServiceForm[]): TrendService[] {
-  return forms.map((f) => ({
-    name: f.name.trim(),
-    label: f.label.trim(),
-    domains: parseDomains(f.domains),
-    enabled: f.enabled,
-  }))
+  return forms.map((f) => {
+    const main = parseDomains(f.mainDomains)
+    return {
+      name: f.name.trim(),
+      label: f.label.trim(),
+      domains: parseDomains(f.domains),
+      // Left out when there are none, the way the server omits it: a service
+      // without main domains simply has no separate main count.
+      ...(main.length ? { main_domains: main } : {}),
+      enabled: f.enabled,
+    }
+  })
 }
 
 export interface CatalogErrors {
@@ -123,6 +145,17 @@ export function validateCatalog(forms: ServiceForm[]): CatalogErrors {
     for (const domain of domains) {
       const invalid = domainError(domain)
       if (invalid) addRowError(errors, i, invalid)
+    }
+
+    // A main count is a subset of the full one, so a main domain the service
+    // does not own would silently count nothing at all.
+    const owned = new Set(domains.map(normalDomain))
+    for (const domain of parseDomains(form.mainDomains)) {
+      const invalid = domainError(domain)
+      if (invalid) addRowError(errors, i, invalid)
+      else if (!owned.has(normalDomain(domain))) {
+        addRowError(errors, i, `Main domain “${domain}” is not one of this service’s domains.`)
+      }
     }
   })
   return errors

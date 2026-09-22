@@ -29,6 +29,7 @@ import type {
   StatsRequest,
   TimeRange,
   TrendMetric,
+  TrendScope,
   TrendService,
   TrendWindow,
   UserCreateInput,
@@ -606,6 +607,7 @@ const TREND_PROFILES: TrendProfile[] = [
       label: 'TikTok',
       enabled: true,
       domains: ['tiktok.com', 'tiktokv.com', 'tiktokcdn.com', 'byteoversea.com'],
+      main_domains: ['tiktok.com'],
     },
     peakHour: 21,
     spread: 3,
@@ -619,6 +621,7 @@ const TREND_PROFILES: TrendProfile[] = [
       label: 'YouTube',
       enabled: true,
       domains: ['youtube.com', 'youtu.be', 'ytimg.com', 'googlevideo.com'],
+      main_domains: ['youtube.com', 'youtu.be'],
     },
     peakHour: 20,
     spread: 4,
@@ -632,6 +635,7 @@ const TREND_PROFILES: TrendProfile[] = [
       label: 'Microsoft 365',
       enabled: true,
       domains: ['office365.com', 'office.com', 'microsoftonline.com', 'sharepoint.com'],
+      main_domains: ['office365.com', 'office.com'],
     },
     peakHour: 10,
     spread: 3.5,
@@ -645,6 +649,7 @@ const TREND_PROFILES: TrendProfile[] = [
       label: 'Facebook & Instagram',
       enabled: true,
       domains: ['facebook.com', 'fbcdn.net', 'instagram.com', 'cdninstagram.com', 'whatsapp.net'],
+      main_domains: ['facebook.com', 'instagram.com'],
     },
     peakHour: 19,
     spread: 5,
@@ -653,7 +658,13 @@ const TREND_PROFILES: TrendProfile[] = [
     weekend: 1.15,
   },
   {
-    service: { name: 'google', label: 'Google', enabled: true, domains: ['google.com', 'gstatic.com', 'gmail.com'] },
+    service: {
+      name: 'google',
+      label: 'Google',
+      enabled: true,
+      domains: ['google.com', 'gstatic.com', 'gmail.com'],
+      main_domains: ['google.com', 'gmail.com'],
+    },
     peakHour: 13,
     spread: 6,
     peakClients: 760,
@@ -661,7 +672,13 @@ const TREND_PROFILES: TrendProfile[] = [
     weekend: 0.8,
   },
   {
-    service: { name: 'snapchat', label: 'Snapchat', enabled: true, domains: ['snapchat.com', 'sc-cdn.net'] },
+    service: {
+      name: 'snapchat',
+      label: 'Snapchat',
+      enabled: true,
+      domains: ['snapchat.com', 'sc-cdn.net'],
+      main_domains: ['snapchat.com'],
+    },
     peakHour: 22,
     spread: 2.5,
     peakClients: 520,
@@ -669,7 +686,13 @@ const TREND_PROFILES: TrendProfile[] = [
     weekend: 1.4,
   },
   {
-    service: { name: 'spotify', label: 'Spotify', enabled: true, domains: ['spotify.com', 'scdn.co'] },
+    service: {
+      name: 'spotify',
+      label: 'Spotify',
+      enabled: true,
+      domains: ['spotify.com', 'scdn.co'],
+      main_domains: ['spotify.com'],
+    },
     peakHour: 8,
     spread: 3,
     peakClients: 380,
@@ -677,14 +700,21 @@ const TREND_PROFILES: TrendProfile[] = [
     weekend: 0.9,
   },
   {
-    service: { name: 'netflix', label: 'Netflix', enabled: true, domains: ['netflix.com', 'nflxvideo.net'] },
+    service: {
+      name: 'netflix',
+      label: 'Netflix',
+      enabled: true,
+      domains: ['netflix.com', 'nflxvideo.net'],
+      main_domains: ['netflix.com'],
+    },
     peakHour: 21,
     spread: 2.5,
     peakClients: 340,
     queriesPerClient: 5,
     weekend: 1.3,
   },
-  // Kept in the catalog but not counted, so the editor has something to show.
+  // Kept in the catalog but not counted, so the editor has something to show;
+  // it has no main domains either, so the empty case of that field is visible.
   {
     service: { name: 'telegram', label: 'Telegram', enabled: false, domains: ['telegram.org', 't.me'] },
     peakHour: 18,
@@ -719,6 +749,16 @@ function trendJitter(name: string, t: number): number {
   return 0.92 + (hashString(`${name}:${Math.floor(t / 1000)}`) % 160) / 1000
 }
 
+/**
+ * How much of a service its main domains alone account for. An app talks to its
+ * CDNs and APIs by itself, so those domains carry clients the service was never
+ * opened by: counting only the main ones always lands lower. Stable per service,
+ * so switching scope back and forth does not reshuffle the chart.
+ */
+function trendMainShare(name: string): number {
+  return 0.35 + (hashString(`main:${name}`) % 25) / 100
+}
+
 /** A service edited in the UI still gets a believable day, derived from its name. */
 function trendProfile(service: TrendService): TrendProfile {
   const known = TREND_PROFILES.find((p) => p.service.name === service.name)
@@ -734,7 +774,7 @@ function trendProfile(service: TrendService): TrendProfile {
   }
 }
 
-function trendValue(p: TrendProfile, at: Date, window: TrendWindow, metric: TrendMetric): number {
+function trendValue(p: TrendProfile, at: Date, window: TrendWindow, metric: TrendMetric, scope: TrendScope): number {
   // A daily window spans the whole curve, so it carries its average rather than
   // whatever the clock happened to say at midnight.
   let shape = 0.42
@@ -744,7 +784,8 @@ function trendValue(p: TrendProfile, at: Date, window: TrendWindow, metric: Tren
     shape = Math.exp(-(away * away) / (2 * p.spread * p.spread)) + 0.05
   }
   const weekend = at.getDay() === 0 || at.getDay() === 6 ? p.weekend : 1
-  const clients = p.peakClients * shape * weekend * trendJitter(p.service.name, at.getTime())
+  const share = scope === 'main' ? trendMainShare(p.service.name) : 1
+  const clients = p.peakClients * shape * weekend * share * trendJitter(p.service.name, at.getTime())
   // Queries do add up: a longer window simply holds more of them.
   if (metric === 'queries') return Math.round(clients * p.queriesPerClient * (TREND_WINDOW_SECONDS[window] / 3600))
   return Math.round(clients * TREND_CLIENT_SCALE[window])
@@ -783,6 +824,28 @@ function catalogValidationError(services: TrendService[]): Response | null {
     for (const d of domains) {
       const bad = domainProblem(d)
       if (bad) messages.push(`${where}: domain "${d}": ${bad}`)
+    }
+    const owned = new Set(
+      domains.map((d) =>
+        d
+          .trim()
+          .toLowerCase()
+          .replace(/^\.+|\.+$/g, ''),
+      ),
+    )
+    for (const d of s.main_domains ?? []) {
+      const bad = domainProblem(d)
+      if (bad) messages.push(`${where}: main domain "${d}": ${bad}`)
+      else if (
+        !owned.has(
+          d
+            .trim()
+            .toLowerCase()
+            .replace(/^\.+|\.+$/g, ''),
+        )
+      ) {
+        messages.push(`${where}: main domain "${d}" is not one of its domains`)
+      }
     }
   })
   return messages.length ? validationProblem('/services', messages.join('\n')) : null
@@ -1152,6 +1215,8 @@ export const handlers = [
     const metric: TrendMetric = body.metric ?? 'unique_clients'
     if (metric !== 'unique_clients' && metric !== 'queries')
       return validationProblem('/metric', 'metric must be unique_clients or queries')
+    const scope: TrendScope = body.scope ?? 'all'
+    if (scope !== 'all' && scope !== 'main') return validationProblem('/scope', 'scope must be all or main')
     const { start, end } = resolve(body.time_range)
     const points = Math.floor((end.getTime() - start.getTime()) / 1000 / step)
     if (points > 2000)
@@ -1164,8 +1229,14 @@ export const handlers = [
 
     const wanted = new Set(body.services ?? [])
     // Only enabled services are recorded at all, so a disabled one simply has
-    // no series rather than an empty one.
-    const counted = serviceCatalog.filter((s) => s.enabled && (wanted.size === 0 || wanted.has(s.name)))
+    // no series rather than an empty one — and in the main scope, so does a
+    // service with no main domains: there is nothing separate to count for it.
+    const counted = serviceCatalog.filter(
+      (s) =>
+        s.enabled &&
+        (wanted.size === 0 || wanted.has(s.name)) &&
+        (scope === 'all' || (s.main_domains?.length ?? 0) > 0),
+    )
     // Windows start on a step boundary, the way a rollup records them.
     const first = Math.ceil(start.getTime() / 1000 / step) * step
     const series = counted.map((service) => {
@@ -1175,7 +1246,7 @@ export const handlers = [
       const pts = []
       for (let t = first; t * 1000 < end.getTime(); t += step) {
         const at = new Date(t * 1000)
-        const value = trendValue(profile, at, body.window, metric)
+        const value = trendValue(profile, at, body.window, metric, scope)
         pts.push({ at: at.toISOString(), value })
         if (value > peak) {
           peak = value
@@ -1192,6 +1263,7 @@ export const handlers = [
       window: body.window,
       step_seconds: step,
       metric,
+      scope,
       series,
       ...(busiest && busiest.peak > 0
         ? {

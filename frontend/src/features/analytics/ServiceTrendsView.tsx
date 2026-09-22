@@ -10,7 +10,7 @@ import { useCallback, useMemo } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useServiceCatalog, useServiceTrends } from '@/api/hooks'
-import type { TimeRange, TrendMetric } from '@/api/types'
+import type { TimeRange } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { GroupedSeriesChart } from '@/components/charts'
 import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
@@ -38,9 +38,11 @@ import {
   decodeServiceTrends,
   DEFAULT_TREND_RANGE,
   encodeServiceTrends,
+  mainScopeEmptyHint,
   peakSentence,
   rangeTooLong,
   rangeTooShort,
+  scopeHelp,
   serviceFilterLabel,
   trendChartData,
   trendMetricIsAdditive,
@@ -87,7 +89,7 @@ export function ServiceTrendsView() {
       : null
 
   const catalog = useServiceCatalog()
-  const trends = useServiceTrends(apiRange, query.window, query.metric, query.services)
+  const trends = useServiceTrends(apiRange, query.window, query.metric, query.scope, query.services)
 
   const chart = useMemo(() => trendChartData(trends.data), [trends.data])
   const chartSeries = useMemo(
@@ -101,6 +103,10 @@ export function ServiceTrendsView() {
 
   const services = catalog.data?.services ?? []
   const labelOf = (name: string) => services.find((s) => s.name === name)?.label || undefined
+  // A service with no main domains is absent from the main scope altogether, so
+  // an empty chart there is a gap in the catalog rather than a rollup that has
+  // stopped recording — and the server, which only sees empty series, cannot say so.
+  const scopeEmpty = query.scope === 'main' ? mainScopeEmptyHint(services, query.services) : null
   const catalogOpen = search.catalog === '1'
   const notConfigured = trends.error instanceof ApiError && trends.error.code === 'not_configured'
   // Kept-around data from a previous window would answer a question nobody is
@@ -131,8 +137,28 @@ export function ServiceTrendsView() {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-muted">Metric</span>
           <div className="flex items-center gap-1" role="group" aria-label="Metric">
-            <MetricTab metric="unique_clients" label="Unique clients" current={query.metric} onSelect={setQuery} />
-            <MetricTab metric="queries" label="DNS queries" current={query.metric} onSelect={setQuery} />
+            <Tab
+              label="Unique clients"
+              active={query.metric === 'unique_clients'}
+              onSelect={() => setQuery({ metric: 'unique_clients' })}
+            />
+            <Tab
+              label="DNS queries"
+              active={query.metric === 'queries'}
+              onSelect={() => setQuery({ metric: 'queries' })}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-muted">Scope</span>
+          <div className="flex items-center gap-1" role="group" aria-label="Scope" aria-describedby="trend-scope-help">
+            <Tab label="All domains" active={query.scope === 'all'} onSelect={() => setQuery({ scope: 'all' })} />
+            <Tab
+              label="Main domains only"
+              active={query.scope === 'main'}
+              onSelect={() => setQuery({ scope: 'main' })}
+            />
           </div>
         </div>
 
@@ -177,9 +203,10 @@ export function ServiceTrendsView() {
         </Button>
       </div>
 
-      <p id="trend-window-help" className="shrink-0 border-b border-border bg-surface px-3 py-1.5 text-sm text-subtle">
-        {windowHelp(query.metric)}
-      </p>
+      <div className="shrink-0 space-y-0.5 border-b border-border bg-surface px-3 py-1.5 text-sm text-subtle">
+        <p id="trend-window-help">{windowHelp(query.metric)}</p>
+        <p id="trend-scope-help">{scopeHelp(query.scope)}</p>
+      </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {range.error ? (
@@ -252,10 +279,12 @@ export function ServiceTrendsView() {
                 <Skeleton className="h-[260px]" />
               ) : chartSeries.length === 0 ? (
                 <EmptyState
-                  title="Nothing recorded in this window"
-                  // The server knows why far better than the browser does: it can
-                  // see whether anything even produces the field being counted.
+                  title={scopeEmpty ? 'No main domains to count' : 'Nothing recorded in this window'}
+                  // Otherwise the server knows why far better than the browser
+                  // does: it can see whether anything even produces the field
+                  // being counted.
                   hint={
+                    scopeEmpty ??
                     trends.data?.hint ??
                     'Widen the time range, choose another window, or check that the services you expect are enabled in the catalog.'
                   }
@@ -333,20 +362,10 @@ function Control({ label, htmlFor, children }: { label: string; htmlFor?: string
   )
 }
 
-function MetricTab({
-  metric,
-  label,
-  current,
-  onSelect,
-}: {
-  metric: TrendMetric
-  label: string
-  current: TrendMetric
-  onSelect: (patch: Partial<ServiceTrendQuery>) => void
-}) {
-  const active = current === metric
+/** One option of a toggle: the pressed one is outlined, the others are quiet. */
+function Tab({ label, active, onSelect }: { label: string; active: boolean; onSelect: () => void }) {
   return (
-    <Button size="sm" variant={active ? 'outline' : 'ghost'} aria-pressed={active} onClick={() => onSelect({ metric })}>
+    <Button size="sm" variant={active ? 'outline' : 'ghost'} aria-pressed={active} onClick={onSelect}>
       {label}
     </Button>
   )

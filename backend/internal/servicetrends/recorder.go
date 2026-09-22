@@ -26,6 +26,16 @@ var (
 	ResolutionDay  = 24 * time.Hour
 )
 
+// Scopes a count can be recorded under.
+const (
+	// ScopeAll counts every domain a service owns, including the CDNs and
+	// APIs its apps query in the background.
+	ScopeAll = "all"
+	// ScopeMain counts only the domains somebody reaches the service at, so
+	// it reads as "who opened it" rather than "whose device talked to it".
+	ScopeMain = "main"
+)
+
 // maxBucketsPerQuery bounds how many buckets one rollup query covers, so a
 // long backfill is done in steps instead of one enormous request.
 const maxBucketsPerQuery = 288
@@ -135,13 +145,25 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 		}
 	}
 
+	// The main-domain counts are a second pass: a service is one category
+	// per scope, and both scopes together would not fit in one query.
+	mainCategories := catalog.MainCategories(r.opts.DomainField)
+
 	now := r.opts.Now().UTC()
 	written := 0
 	for _, step := range r.Resolutions() {
-		n, upto, err := r.record(ctx, categories, step, state[WindowName(step)], now)
+		from := state[WindowName(step)]
+		n, upto, err := r.record(ctx, categories, ScopeAll, step, from, now)
 		written += n
 		if err != nil {
 			return written, err
+		}
+		if len(mainCategories) > 0 {
+			n, _, err := r.record(ctx, mainCategories, ScopeMain, step, from, now)
+			written += n
+			if err != nil {
+				return written, err
+			}
 		}
 		if !upto.IsZero() {
 			state[WindowName(step)] = upto
@@ -157,7 +179,7 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 
 // record writes every complete window of one resolution between `from` and
 // now, and reports the end of the last window it recorded.
-func (r *Recorder) record(ctx context.Context, categories []storage.Category, step time.Duration,
+func (r *Recorder) record(ctx context.Context, categories []storage.Category, scope string, step time.Duration,
 	from, now time.Time) (int, time.Time, error) {
 	// Only windows that have fully elapsed are counted; a partial window
 	// would be recorded as if it were complete and stay wrong forever.
@@ -204,7 +226,7 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, st
 			if row.Time.Before(start) || !row.Time.Before(stop) {
 				continue
 			}
-			labels := map[string]string{"service": row.Category, "window": window}
+			labels := map[string]string{"service": row.Category, "window": window, "scope": scope}
 			if r.opts.Tenant != "" {
 				labels["tenant"] = r.opts.Tenant
 			}
