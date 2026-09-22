@@ -11,6 +11,7 @@ import { client, setCsrfToken, unwrap } from '../client'
 import type {
   AdminUser,
   AnalyticsMetric,
+  ApiKeyScope,
   AuditEvent,
   AuditQuery,
   BreakdownResponse,
@@ -32,6 +33,9 @@ import type {
   SearchResponse,
   Selection,
   SeriesResponse,
+  ServiceCatalog,
+  ServiceCatalogInput,
+  ServiceTrendResponse,
   Session,
   SourceInput,
   StatsResponse,
@@ -41,6 +45,8 @@ import type {
   SystemRetention,
   SystemStorage,
   TimeRange,
+  TrendMetric,
+  TrendWindow,
   UserCreateInput,
   UserUpdateInput,
   ValidateResponse,
@@ -319,6 +325,69 @@ export function useSeries(
   })
 }
 
+// ---- DNS service trends ----------------------------------------------------
+
+export const serviceCatalogKey = ['analytics', 'services'] as const
+const serviceTrendsKey = ['analytics', 'service-trends'] as const
+
+/** The catalog the rollup counts against; it also names the trend filter's options. */
+export function useServiceCatalog() {
+  return useQuery({
+    queryKey: serviceCatalogKey,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/analytics/services', { signal })) as Promise<ServiceCatalog>,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * Replaces the catalog. The reply is narrower than the GET (no `recording`), so
+ * it is merged into the cached catalog; a successful save also means the stored
+ * catalog parses again, which clears `problem`.
+ */
+export function useUpdateServiceCatalog() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ServiceCatalogInput) =>
+      unwrap(client.PUT('/api/v1/analytics/services', { body })) as Promise<ServiceCatalog>,
+    onSuccess: (res) => {
+      qc.setQueryData(serviceCatalogKey, (prev: ServiceCatalog | undefined) =>
+        prev ? { ...prev, services: res.services, problem: '' } : res,
+      )
+      // Past windows keep the counts they were recorded with, but which services
+      // exist at all changes now.
+      qc.invalidateQueries({ queryKey: serviceTrendsKey })
+    },
+  })
+}
+
+/**
+ * Recorded series for one window. `services` empty asks for all of them; the
+ * range is already absolute, so relative ranges re-resolve with the URL.
+ */
+export function useServiceTrends(
+  range: TimeRange | null,
+  window: TrendWindow,
+  metric: TrendMetric,
+  services: string[],
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: [...serviceTrendsKey, range, window, metric, services],
+    enabled: enabled && range !== null,
+    queryFn: ({ signal }) =>
+      unwrap(
+        client.POST('/api/v1/analytics/service-trends', {
+          body: { time_range: range!, window, metric, services: services.length ? services : undefined },
+          signal,
+        }),
+      ) as Promise<ServiceTrendResponse>,
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+    retry: false,
+  })
+}
+
 // ---- saved searches --------------------------------------------------------
 
 export function useSavedSearches(q: string) {
@@ -385,7 +454,7 @@ export function useApiKeys() {
 export function useCreateApiKey() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: { name: string; scopes: Session['permissions']; expires_at?: string | null }) =>
+    mutationFn: (body: { name: string; scopes: ApiKeyScope[]; expires_at?: string | null }) =>
       unwrap(client.POST('/api/v1/api-keys', { body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
   })

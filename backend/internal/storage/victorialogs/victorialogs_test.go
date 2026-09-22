@@ -16,6 +16,7 @@ import (
 
 	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/storage"
+	"github.com/freezxp/syslogc/backend/internal/storage/filter"
 )
 
 func sampleEntry() logentry.Entry {
@@ -328,4 +329,151 @@ func BenchmarkEncodeBatch(b *testing.B) {
 		buf = encodeBatch(buf[:0], batch)
 	}
 	b.SetBytes(int64(len(buf)))
+}
+
+func TestCategoryCounts(t *testing.T) {
+	var query string
+	b := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.PostForm.Get("query")
+		_, _ = io.WriteString(w, `{"_time":"2026-09-14T10:00:00Z","c0":"120","n0":"400","c1":"7","n1":"9"}`+"\n"+
+			`{"_time":"2026-09-14T10:05:00Z","c0":"98","n0":"310","c1":"0","n1":"0"}`+"\n")
+	}, "none")
+
+	start := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	rows, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection:     storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(10 * time.Minute)}},
+		DistinctField: "dns.client_ip",
+		Step:          5 * time.Minute,
+		Categories: []storage.Category{
+			{Name: "tiktok", Filter: &filter.Expr{Op: filter.Contains, Field: "dns.qname", Value: "tiktok"}},
+			{Name: "everything", Filter: nil},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// One conditional pair per category, over a single pass.
+	for _, want := range []string{
+		"| stats by (_time:300000ms)",
+		`count_uniq("dns.client_ip") if (`,
+		" as c0, count() if (",
+		" as n0,",
+		"as c1, count() as n1", // a nil filter counts everything, with no condition
+	} {
+		if !strings.Contains(query, want) {
+			t.Errorf("query %q is missing %q", query, want)
+		}
+	}
+
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want one per category per bucket: %+v", len(rows), rows)
+	}
+	first := rows[0]
+	if first.Category != "tiktok" || first.Distinct != 120 || first.Messages != 400 ||
+		!first.Time.Equal(start) {
+		t.Errorf("row = %+v", first)
+	}
+	// A category with no matches is reported as zero, not dropped: the chart
+	// needs the gap to be a zero.
+	if last := rows[3]; last.Category != "everything" || last.Distinct != 0 {
+		t.Errorf("row = %+v", last)
+	}
+}
+
+func TestCategoryCountsCannotBeReshapedByACategoryName(t *testing.T) {
+	var query string
+	b := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.PostForm.Get("query")
+		_, _ = io.WriteString(w, `{"c0":"1","n0":"1"}`+"\n")
+	}, "none")
+
+	start := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	hostile := `x") as y, count(*`
+	rows, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection:     storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(time.Hour)}},
+		DistinctField: "dns.client_ip",
+		Categories:    []storage.Category{{Name: hostile, Filter: &filter.Expr{Op: filter.Eq, Field: "dns.qname", Value: `evil" | drop`}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The name is never part of the pipeline, and the filter value stays
+	// inside a quoted string with its quote escaped, so its pipe is data.
+	if strings.Contains(query, "as y") {
+		t.Errorf("the category name reached the pipeline: %s", query)
+	}
+	if strings.Contains(query, `evil" | drop`) {
+		t.Errorf("the filter value escaped its quotes: %s", query)
+	}
+	if !strings.Contains(query, `evil\" | drop`) {
+		t.Errorf("the filter value was not passed through escaped: %s", query)
+	}
+	// Outside the quoted literals there is exactly one pipeline stage.
+	if n := strings.Count(unquoted(query), "|"); n != 1 {
+		t.Errorf("query has %d pipeline stages, want only the stats stage: %s", n, query)
+	}
+	if !strings.Contains(query, "as c0") {
+		t.Errorf("query = %s", query)
+	}
+	// The name still labels the result.
+	if len(rows) != 1 || rows[0].Category != hostile {
+		t.Errorf("rows = %+v", rows)
+	}
+}
+
+func TestCategoryCountsValidatesTheQuery(t *testing.T) {
+	b := newTestBackend(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a rejected query was sent")
+	}, "none")
+	start := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	sel := storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(time.Hour)}}
+	cat := []storage.Category{{Name: "a"}}
+
+	if _, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{Selection: sel, Categories: cat}); err == nil {
+		t.Error("a query without a distinct field was accepted")
+	}
+	many := make([]storage.Category, storage.MaxCategories+1)
+	for i := range many {
+		many[i] = storage.Category{Name: "c"}
+	}
+	if _, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection: sel, Categories: many, DistinctField: "f"}); err == nil {
+		t.Error("too many categories were accepted")
+	}
+	// No categories is not an error, it just has nothing to count.
+	rows, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{Selection: sel, DistinctField: "f"})
+	if err != nil || len(rows) != 0 {
+		t.Errorf("rows = %+v, err = %v", rows, err)
+	}
+	// Pipes in the selection would let the caller reshape the results.
+	_, err = b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection: storage.Selection{Range: sel.Range,
+			Native: &storage.NativeQuery{Dialect: "logsql", Text: `* | drop _msg`}},
+		Categories: cat, DistinctField: "f"})
+	if !errors.Is(err, storage.ErrPipesNotAllowed) {
+		t.Errorf("err = %v, want ErrPipesNotAllowed", err)
+	}
+}
+
+// unquoted removes double-quoted literals, so a test can look at the shape of
+// a query without seeing the values inside it.
+func unquoted(q string) string {
+	var b strings.Builder
+	in, escaped := false, false
+	for _, r := range q {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '"':
+			in = !in
+		case !in:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

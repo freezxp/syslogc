@@ -33,6 +33,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metadata/postgres/pgtest"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
+	"github.com/freezxp/syslogc/backend/internal/metricstore"
 	"github.com/freezxp/syslogc/backend/internal/query"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 )
@@ -135,6 +136,20 @@ func (f *fakeQuerier) Aggregate(_ context.Context, q storage.AggregateQuery) ([]
 	return out, nil
 }
 
+func (f *fakeQuerier) CategoryCounts(_ context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	out := []storage.CategoryRow{}
+	for i, c := range q.Categories {
+		if q.Step == 0 {
+			out = append(out, storage.CategoryRow{Category: c.Name, Distinct: float64(10 - i), Messages: float64(30 - i)})
+			continue
+		}
+		for t := q.Range.Start.Truncate(q.Step); t.Before(q.Range.End); t = t.Add(q.Step) {
+			out = append(out, storage.CategoryRow{Time: t, Category: c.Name, Distinct: float64(i + 1), Messages: float64(3 * (i + 1))})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeQuerier) FieldNames(context.Context, storage.Selection) ([]storage.FieldInfo, error) {
 	return []storage.FieldInfo{{Name: "_msg", Count: 5}, {Name: "_stream", Count: 5}, {Name: "labels.site", Count: 5}, {Name: "vpn_name", Count: 2}, {Name: "hostname", Count: 5}}, nil
 }
@@ -219,6 +234,37 @@ type env struct {
 	querier *fakeQuerier
 	sink    *fakeSink
 	metrics *metrics.Metrics
+	trends  *fakeTrendReader
+	deps    *APIDeps
+}
+
+// fakeTrendReader answers range queries with one rising series per service
+// named in the query, and records what it was asked.
+type fakeTrendReader struct {
+	queries []metricstore.RangeQuery
+	err     error
+	empty   bool
+}
+
+func (f *fakeTrendReader) QueryRange(_ context.Context, q metricstore.RangeQuery) ([]metricstore.Series, error) {
+	f.queries = append(f.queries, q)
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := []metricstore.Series{}
+	if f.empty {
+		return out, nil
+	}
+	for i, name := range []string{"tiktok", "youtube"} {
+		s := metricstore.Series{Labels: map[string]string{"service": name}}
+		v := float64(10 * (i + 1))
+		for at := q.Start; at.Before(q.End); at = at.Add(q.Step) {
+			s.Points = append(s.Points, metricstore.Point{At: at, Value: v})
+			v += float64(i + 1)
+		}
+		out = append(out, s)
+	}
+	return out, nil
 }
 
 var passwords = map[string]string{"admin": "admin-password-1", "ops": "operator-pass-1", "viewer": "viewer-password1"}
@@ -245,23 +291,26 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	sink := &fakeSink{}
+	trends := &fakeTrendReader{}
 	ui := fstest.MapFS{
 		"index.html":      {Data: []byte("<!doctype html><title>Syslogc UI</title>")},
 		"assets/app-1.js": {Data: []byte("console.log(1)")},
 	}
+	deps := &APIDeps{Auth: authSvc, Store: store, Query: qs, Storage: fakeBackend{}, WebUI: ui,
+		Retention:     func() any { return map[string]string{"status": "in_sync"} },
+		FileSources:   []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
+		Config:        config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}},
+		ServiceTrends: trends}
 	server := New(Options{
 		Metrics: m, Log: log, NodeID: "n1", Version: "test", Roles: []string{"all"},
 		Checks: []ReadinessCheck{{Name: "storage", Check: func(context.Context) error { return nil }}},
-		API: &APIDeps{Auth: authSvc, Store: store, Query: qs, Storage: fakeBackend{}, WebUI: ui,
-			Retention:   func() any { return map[string]string{"status": "in_sync"} },
-			FileSources: []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
-			Config:      config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}}},
+		API:    deps,
 		Ingest: &IngestDeps{Sink: sink, Source: func() *source.Settings { return httpSrc },
 			MaxBodyBytes: 1 << 20, MaxEvents: 100, EnqueueTimeout: 50 * time.Millisecond},
 	})
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
-	return &env{t: t, srv: ts, store: store, querier: fq, sink: sink, metrics: m}
+	return &env{t: t, srv: ts, store: store, querier: fq, sink: sink, metrics: m, trends: trends, deps: deps}
 }
 
 // client is a browser-like client with a cookie jar and CSRF token.
@@ -1365,5 +1414,242 @@ func TestAdoptSource(t *testing.T) {
 	if resp, body := ops.do("GET", "/api/v1/sources", nil, nil); resp.StatusCode != http.StatusOK ||
 		!strings.Contains(string(body), `"origin":"file"`) {
 		t.Errorf("after delete the file source should be listed again: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestServiceCatalog(t *testing.T) {
+	e := newEnv(t)
+	admin, ops, viewer := e.login("admin"), e.login("ops"), e.login("viewer")
+
+	// Nothing stored yet, so the built-in catalog is served.
+	resp, body := viewer.do("GET", "/api/v1/analytics/services", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"name":"tiktok"`) ||
+		!strings.Contains(string(body), `"recording":true`) {
+		t.Fatalf("default catalog: %d %s", resp.StatusCode, body)
+	}
+
+	// Editing it is an operator's job.
+	edit := map[string]any{"services": []map[string]any{
+		{"name": "tiktok", "label": "TikTok", "domains": []string{"tiktok.com"}, "enabled": true},
+		{"name": "corporate", "label": "Corporate", "domains": []string{"time.com.my"}, "enabled": false},
+	}}
+	if resp, _ := viewer.do("PUT", "/api/v1/analytics/services", edit, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer editing the catalog: %d", resp.StatusCode)
+	}
+	if resp, body := ops.do("PUT", "/api/v1/analytics/services", edit, nil); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), `"corporate"`) {
+		t.Fatalf("operator editing the catalog: %d %s", resp.StatusCode, body)
+	}
+
+	// The stored catalog replaces the built-in one.
+	resp, body = viewer.do("GET", "/api/v1/analytics/services", nil, nil)
+	if resp.StatusCode != http.StatusOK || strings.Contains(string(body), `"youtube"`) ||
+		!strings.Contains(string(body), `"corporate"`) {
+		t.Errorf("stored catalog: %d %s", resp.StatusCode, body)
+	}
+
+	for _, tc := range []struct {
+		name, want string
+		services   []map[string]any
+	}{
+		{"no name", "name: is required", []map[string]any{{"domains": []string{"a.com"}}}},
+		{"bad name", "unexpected character", []map[string]any{{"name": "Tik Tok", "domains": []string{"a.com"}}}},
+		{"duplicate", "already used", []map[string]any{
+			{"name": "a", "domains": []string{"a.com"}}, {"name": "a", "domains": []string{"b.com"}}}},
+		{"no domains", "at least one domain", []map[string]any{{"name": "a"}}},
+		{"bad domain", "must be a domain name", []map[string]any{{"name": "a", "domains": []string{"localhost"}}}},
+		{"wildcard", "without spaces or wildcards", []map[string]any{{"name": "a", "domains": []string{"*.a.com"}}}},
+	} {
+		resp, body := admin.do("PUT", "/api/v1/analytics/services", map[string]any{"services": tc.services}, nil)
+		if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), tc.want) {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, body)
+		}
+	}
+
+	// A rejected edit leaves the stored catalog alone, and the accepted one
+	// was audited.
+	if _, body := viewer.do("GET", "/api/v1/analytics/services", nil, nil); !strings.Contains(string(body), `"corporate"`) {
+		t.Errorf("a rejected edit changed the catalog: %s", body)
+	}
+	if _, body := admin.do("GET", "/api/v1/audit?action=analytics.catalog.update", nil, nil); !strings.Contains(string(body), `"services":2`) {
+		t.Errorf("catalog change not audited: %s", body)
+	}
+}
+
+func TestServiceTrends(t *testing.T) {
+	e := newEnv(t)
+	viewer := e.login("viewer")
+
+	resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-24h", "to": "now"}, "window": "1h"}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("trends: %d %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Window      string `json:"window"`
+		StepSeconds int    `json:"step_seconds"`
+		Series      []struct {
+			Service string  `json:"service"`
+			Label   string  `json:"label"`
+			Peak    float64 `json:"peak"`
+			Points  []struct {
+				Value float64 `json:"value"`
+			} `json:"points"`
+		} `json:"series"`
+		Peak struct {
+			Service string  `json:"service"`
+			Value   float64 `json:"value"`
+		} `json:"peak"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Window != "1h" || got.StepSeconds != 3600 {
+		t.Errorf("window = %s, step = %d", got.Window, got.StepSeconds)
+	}
+	if len(got.Series) != 2 {
+		t.Fatalf("series = %+v", got.Series)
+	}
+	// Busiest first, and the catalog supplies the display label.
+	if got.Series[0].Service != "youtube" || got.Series[0].Peak <= got.Series[1].Peak {
+		t.Errorf("series are not busiest-first: %+v", got.Series)
+	}
+	if got.Series[0].Label != "YouTube" {
+		t.Errorf("label = %q, want it from the catalog", got.Series[0].Label)
+	}
+	// The peak callout answers "when were the most unique clients on it".
+	if got.Peak.Service != "youtube" || got.Peak.Value != got.Series[0].Peak {
+		t.Errorf("peak = %+v", got.Peak)
+	}
+
+	// The query asked the metrics store for the recorded window only.
+	q := e.trends.queries[len(e.trends.queries)-1]
+	if !strings.Contains(q.Query, `window="1h"`) || !strings.Contains(q.Query, "syslogc_dns_service_unique_clients") {
+		t.Errorf("promQL = %q", q.Query)
+	}
+	if q.Step != time.Hour {
+		t.Errorf("step = %s", q.Step)
+	}
+
+	// Selecting services narrows the query; names are validated, so a
+	// hostile one cannot reshape the selector.
+	if resp, _ := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "5m",
+		"services": []string{"tiktok", "youtube"}}, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("selected services: %d", resp.StatusCode)
+	}
+	if q := e.trends.queries[len(e.trends.queries)-1]; !strings.Contains(q.Query, `service=~"tiktok|youtube"`) {
+		t.Errorf("promQL = %q", q.Query)
+	}
+	for _, bad := range []string{`x"} or up{`, "UPPER", "with space", "semi;colon"} {
+		resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+			"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "5m",
+			"services": []string{bad}}, nil)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("service %q: %d %s", bad, resp.StatusCode, body)
+		}
+	}
+
+	// Only recorded windows can be asked for, because a distinct count
+	// cannot be re-bucketed after the fact.
+	for _, tc := range []struct{ window, want string }{
+		{"", "window must be one of"},
+		{"2h", "window must be one of"},
+		{"1w", "window must be one of"},
+	} {
+		resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+			"time_range": map[string]string{"from": "now-24h", "to": "now"}, "window": tc.window}, nil)
+		if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), tc.want) {
+			t.Errorf("window %q: %d %s", tc.window, resp.StatusCode, body)
+		}
+	}
+
+	// A range that would return more points than a chart can show is
+	// refused with advice rather than truncated silently.
+	resp, body = viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-30d", "to": "now"}, "window": "5m"}, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "coarser window") {
+		t.Errorf("long range: %d %s", resp.StatusCode, body)
+	}
+
+	// The metric can be switched to query counts.
+	if resp, _ := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "1h", "metric": "queries"}, nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("queries metric: %d", resp.StatusCode)
+	}
+	if q := e.trends.queries[len(e.trends.queries)-1]; !strings.Contains(q.Query, "syslogc_dns_service_queries") {
+		t.Errorf("promQL = %q", q.Query)
+	}
+	if resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "1h", "metric": "sessions"}, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+		!strings.Contains(string(body), "unique_clients or queries") {
+		t.Errorf("unknown metric: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestServiceTrendsWithoutAMetricsStore(t *testing.T) {
+	e := newEnv(t)
+	// A node with no metrics store reports that plainly, so the UI can
+	// explain it instead of showing an empty chart.
+	e.deps.ServiceTrends = nil
+	viewer := e.login("viewer")
+	resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-24h", "to": "now"}, "window": "1h"}, nil)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "not_configured") {
+		t.Errorf("no metrics store: %d %s", resp.StatusCode, body)
+	}
+	if _, body := viewer.do("GET", "/api/v1/analytics/services", nil, nil); !strings.Contains(string(body), `"recording":false`) {
+		t.Errorf("recording flag: %s", body)
+	}
+}
+
+func TestExtractPresets(t *testing.T) {
+	e := newEnv(t)
+	viewer := e.login("viewer")
+	resp, body := viewer.do("GET", "/api/v1/sources/extract-presets", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("presets: %d %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Presets []struct {
+			ID     string `json:"id"`
+			Sample string `json:"sample"`
+			Rule   struct {
+				Regex  string `json:"regex"`
+				Prefix string `json:"prefix"`
+			} `json:"rule"`
+		} `json:"presets"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Presets) == 0 || got.Presets[0].ID != "dnsdist" {
+		t.Fatalf("presets = %+v", got.Presets)
+	}
+	// The preset carries a sample, so the editor's test panel can show it
+	// working before the rule is saved.
+	if got.Presets[0].Sample == "" || got.Presets[0].Rule.Prefix != "dns." {
+		t.Errorf("preset = %+v", got.Presets[0])
+	}
+	// It is usable as-is: feeding its own sample through the dry run matches.
+	resp, body = e.login("ops").do("POST", "/api/v1/sources/test-extract", map[string]any{
+		"rules":   []map[string]any{{"name": "p", "regex": got.Presets[0].Rule.Regex, "prefix": "dns."}},
+		"samples": []string{got.Presets[0].Sample},
+	}, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"dns.qname"`) {
+		t.Errorf("preset dry run: %d %s", resp.StatusCode, body)
+	}
+}
+
+func TestServiceTrendsExplainsAnEmptyChart(t *testing.T) {
+	e := newEnv(t)
+	viewer := e.login("viewer")
+	// No series recorded: the answer should say why rather than be blank.
+	// The fake querier reports no dns.qname field, which is the usual cause.
+	e.trends.empty = true
+	_, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
+		"time_range": map[string]string{"from": "now-24h", "to": "now"}, "window": "1h"}, nil)
+	if !strings.Contains(string(body), "extract rule") {
+		t.Errorf("an empty chart was not explained: %s", body)
 	}
 }

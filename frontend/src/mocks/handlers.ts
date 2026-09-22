@@ -24,9 +24,13 @@ import type {
   SearchRequest,
   Selection,
   SeriesRequest,
+  ServiceTrendRequest,
   Session,
   StatsRequest,
   TimeRange,
+  TrendMetric,
+  TrendService,
+  TrendWindow,
   UserCreateInput,
   UserUpdateInput,
 } from '@/api/types'
@@ -44,6 +48,7 @@ export function resetMockData(rows?: LogRow[]): void {
   logs = rows ?? generateLogs(2500, Date.now(), 7 * 24 * 3600_000)
   loggedIn = true
   retentionDesired = null
+  serviceCatalog = TREND_PROFILES.map((p) => ({ ...p.service }))
 }
 
 /** Appends rows (used by the mock live tail so searches see them too). */
@@ -75,6 +80,7 @@ const SESSION: Session = {
     'system:view',
     'config:view',
     'retention:manage',
+    'analytics:manage',
     'apikeys:own',
     'apikeys:manage',
     'users:manage',
@@ -572,6 +578,216 @@ function retentionState() {
   }
 }
 
+// ---- DNS service trends ------------------------------------------------------
+
+/**
+ * A mock service and the shape of its day: when it peaks, how sharp that peak
+ * is and what it is worth. Social apps peak in the evening and pick up at the
+ * weekend, work services peak mid-morning and go quiet on Saturday — the
+ * pattern the view exists to show.
+ */
+interface TrendProfile {
+  service: TrendService
+  /** Hour of the day the service peaks at, in the reader's own zone. */
+  peakHour: number
+  /** Width of the peak in hours; a broad service is busy all day. */
+  spread: number
+  /** Distinct clients in the busiest hour. */
+  peakClients: number
+  /** Queries one client makes in an hour. */
+  queriesPerClient: number
+  weekend: number
+}
+
+const TREND_PROFILES: TrendProfile[] = [
+  {
+    service: {
+      name: 'tiktok',
+      label: 'TikTok',
+      enabled: true,
+      domains: ['tiktok.com', 'tiktokv.com', 'tiktokcdn.com', 'byteoversea.com'],
+    },
+    peakHour: 21,
+    spread: 3,
+    peakClients: 1240,
+    queriesPerClient: 9,
+    weekend: 1.35,
+  },
+  {
+    service: {
+      name: 'youtube',
+      label: 'YouTube',
+      enabled: true,
+      domains: ['youtube.com', 'youtu.be', 'ytimg.com', 'googlevideo.com'],
+    },
+    peakHour: 20,
+    spread: 4,
+    peakClients: 1080,
+    queriesPerClient: 11,
+    weekend: 1.2,
+  },
+  {
+    service: {
+      name: 'microsoft365',
+      label: 'Microsoft 365',
+      enabled: true,
+      domains: ['office365.com', 'office.com', 'microsoftonline.com', 'sharepoint.com'],
+    },
+    peakHour: 10,
+    spread: 3.5,
+    peakClients: 940,
+    queriesPerClient: 16,
+    weekend: 0.18,
+  },
+  {
+    service: {
+      name: 'facebook',
+      label: 'Facebook & Instagram',
+      enabled: true,
+      domains: ['facebook.com', 'fbcdn.net', 'instagram.com', 'cdninstagram.com', 'whatsapp.net'],
+    },
+    peakHour: 19,
+    spread: 5,
+    peakClients: 830,
+    queriesPerClient: 7,
+    weekend: 1.15,
+  },
+  {
+    service: { name: 'google', label: 'Google', enabled: true, domains: ['google.com', 'gstatic.com', 'gmail.com'] },
+    peakHour: 13,
+    spread: 6,
+    peakClients: 760,
+    queriesPerClient: 18,
+    weekend: 0.8,
+  },
+  {
+    service: { name: 'snapchat', label: 'Snapchat', enabled: true, domains: ['snapchat.com', 'sc-cdn.net'] },
+    peakHour: 22,
+    spread: 2.5,
+    peakClients: 520,
+    queriesPerClient: 6,
+    weekend: 1.4,
+  },
+  {
+    service: { name: 'spotify', label: 'Spotify', enabled: true, domains: ['spotify.com', 'scdn.co'] },
+    peakHour: 8,
+    spread: 3,
+    peakClients: 380,
+    queriesPerClient: 8,
+    weekend: 0.9,
+  },
+  {
+    service: { name: 'netflix', label: 'Netflix', enabled: true, domains: ['netflix.com', 'nflxvideo.net'] },
+    peakHour: 21,
+    spread: 2.5,
+    peakClients: 340,
+    queriesPerClient: 5,
+    weekend: 1.3,
+  },
+  // Kept in the catalog but not counted, so the editor has something to show.
+  {
+    service: { name: 'telegram', label: 'Telegram', enabled: false, domains: ['telegram.org', 't.me'] },
+    peakHour: 18,
+    spread: 4,
+    peakClients: 210,
+    queriesPerClient: 5,
+    weekend: 1.1,
+  },
+]
+
+const TREND_WINDOW_SECONDS: Record<TrendWindow, number> = { '5m': 300, '1h': 3600, '1d': 86_400 }
+const TREND_WINDOW_NAMES: TrendWindow[] = ['5m', '1h', '1d']
+
+/**
+ * Distinct clients seen in one window, relative to an hour. Five minutes catch
+ * a fraction of an hour's clients and a whole day catches far fewer than its
+ * hours added together — a client busy all day is still one client. That is
+ * the point of recording each window separately, so the mock honours it.
+ */
+const TREND_CLIENT_SCALE: Record<TrendWindow, number> = { '5m': 0.3, '1h': 1, '1d': 3.6 }
+
+let serviceCatalog: TrendService[] = TREND_PROFILES.map((p) => ({ ...p.service }))
+
+function hashString(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
+  return h >>> 0
+}
+
+/** Stable per service and timestamp, so a refetch does not redraw the chart. */
+function trendJitter(name: string, t: number): number {
+  return 0.92 + (hashString(`${name}:${Math.floor(t / 1000)}`) % 160) / 1000
+}
+
+/** A service edited in the UI still gets a believable day, derived from its name. */
+function trendProfile(service: TrendService): TrendProfile {
+  const known = TREND_PROFILES.find((p) => p.service.name === service.name)
+  if (known) return { ...known, service }
+  const h = hashString(service.name)
+  return {
+    service,
+    peakHour: h % 24,
+    spread: 2 + (h % 5),
+    peakClients: 60 + (h % 420),
+    queriesPerClient: 5 + (h % 9),
+    weekend: 1,
+  }
+}
+
+function trendValue(p: TrendProfile, at: Date, window: TrendWindow, metric: TrendMetric): number {
+  // A daily window spans the whole curve, so it carries its average rather than
+  // whatever the clock happened to say at midnight.
+  let shape = 0.42
+  if (window !== '1d') {
+    const hour = at.getHours() + at.getMinutes() / 60
+    const away = Math.min(Math.abs(hour - p.peakHour), 24 - Math.abs(hour - p.peakHour))
+    shape = Math.exp(-(away * away) / (2 * p.spread * p.spread)) + 0.05
+  }
+  const weekend = at.getDay() === 0 || at.getDay() === 6 ? p.weekend : 1
+  const clients = p.peakClients * shape * weekend * trendJitter(p.service.name, at.getTime())
+  // Queries do add up: a longer window simply holds more of them.
+  if (metric === 'queries') return Math.round(clients * p.queriesPerClient * (TREND_WINDOW_SECONDS[window] / 3600))
+  return Math.round(clients * TREND_CLIENT_SCALE[window])
+}
+
+function nameProblem(name: string): string | null {
+  if (name === '') return 'is required'
+  if (name.length > 64) return 'longer than 64 characters'
+  const bad = [...name].find((c) => !/[a-z0-9_-]/.test(c))
+  return bad === undefined ? null : `unexpected character "${bad}" (use lower-case letters, digits, - and _)`
+}
+
+function domainProblem(domain: string): string | null {
+  if (domain.trim() === '') return 'is empty'
+  if (domain.length > 253) return 'longer than 253 characters'
+  if (/["'*\s]/.test(domain)) return 'must be a plain domain name, without spaces or wildcards'
+  if (!domain.replace(/^\.+|\.+$/g, '').includes('.')) return 'must be a domain name, such as tiktok.com'
+  return null
+}
+
+/** Every complaint at once, named the way the server names them. */
+function catalogValidationError(services: TrendService[]): Response | null {
+  const messages: string[] = []
+  if (services.length > 32) messages.push(`at most 32 services are allowed, the catalog has ${services.length}`)
+  const seen = new Set<string>()
+  services.forEach((s, i) => {
+    const where = s.name ? `service "${s.name}"` : `service ${i + 1}`
+    const name = nameProblem(s.name ?? '')
+    if (name) messages.push(`${where}: name: ${name}`)
+    else if (seen.has(s.name)) messages.push(`${where}: name: already used by another service`)
+    seen.add(s.name)
+    if ((s.label ?? '').length > 64) messages.push(`${where}: label: longer than 64 characters`)
+    const domains = s.domains ?? []
+    if (domains.length === 0) messages.push(`${where}: needs at least one domain`)
+    else if (domains.length > 32) messages.push(`${where}: at most 32 domains are allowed, it has ${domains.length}`)
+    for (const d of domains) {
+      const bad = domainProblem(d)
+      if (bad) messages.push(`${where}: domain "${d}": ${bad}`)
+    }
+  })
+  return messages.length ? validationProblem('/services', messages.join('\n')) : null
+}
+
 const api = (path: string) => `*/api/v1${path}`
 
 export const handlers = [
@@ -901,6 +1117,92 @@ export const handlers = [
       timestamps,
       groups,
       stats: { duration_ms: Math.round(performance.now() - started) + 14 },
+    })
+  }),
+
+  http.get(api('/analytics/services'), () => {
+    const auth = requireAuth()
+    if (auth) return auth
+    return HttpResponse.json({
+      services: serviceCatalog,
+      windows: TREND_WINDOW_NAMES,
+      recording: true,
+      problem: '',
+    })
+  }),
+
+  http.put(api('/analytics/services'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as { services?: TrendService[] }
+    const services = body.services ?? []
+    const invalid = catalogValidationError(services)
+    if (invalid) return invalid
+    await delay(160)
+    serviceCatalog = services
+    return HttpResponse.json({ services, windows: TREND_WINDOW_NAMES, applies: 'from the next rollup' })
+  }),
+
+  http.post(api('/analytics/service-trends'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as ServiceTrendRequest
+    const step = TREND_WINDOW_SECONDS[body.window]
+    if (!step) return validationProblem('/window', 'window must be one of 5m, 1h, 1d')
+    const metric: TrendMetric = body.metric ?? 'unique_clients'
+    if (metric !== 'unique_clients' && metric !== 'queries')
+      return validationProblem('/metric', 'metric must be unique_clients or queries')
+    const { start, end } = resolve(body.time_range)
+    const points = Math.floor((end.getTime() - start.getTime()) / 1000 / step)
+    if (points > 2000)
+      return validationProblem(
+        '/time_range',
+        `that range holds ${points} ${body.window} windows, more than the 2000 a chart can show; ` +
+          'use a coarser window or a shorter range',
+      )
+    await delay(180)
+
+    const wanted = new Set(body.services ?? [])
+    // Only enabled services are recorded at all, so a disabled one simply has
+    // no series rather than an empty one.
+    const counted = serviceCatalog.filter((s) => s.enabled && (wanted.size === 0 || wanted.has(s.name)))
+    // Windows start on a step boundary, the way a rollup records them.
+    const first = Math.ceil(start.getTime() / 1000 / step) * step
+    const series = counted.map((service) => {
+      const profile = trendProfile(service)
+      let peak = 0
+      let peakAt = ''
+      const pts = []
+      for (let t = first; t * 1000 < end.getTime(); t += step) {
+        const at = new Date(t * 1000)
+        const value = trendValue(profile, at, body.window, metric)
+        pts.push({ at: at.toISOString(), value })
+        if (value > peak) {
+          peak = value
+          peakAt = at.toISOString()
+        }
+      }
+      return { service: service.name, label: service.label, points: pts, peak, peak_at: peakAt || undefined }
+    })
+    series.sort((a, b) => b.peak - a.peak || a.service.localeCompare(b.service))
+    const busiest = series[0]
+
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      window: body.window,
+      step_seconds: step,
+      metric,
+      series,
+      ...(busiest && busiest.peak > 0
+        ? {
+            peak: {
+              service: busiest.service,
+              label: busiest.label,
+              value: busiest.peak,
+              at: busiest.peak_at,
+            },
+          }
+        : { hint: 'Nothing has been recorded for this window yet.' }),
     })
   }),
 

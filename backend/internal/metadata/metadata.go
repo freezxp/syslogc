@@ -123,8 +123,17 @@ type Setting struct {
 	UpdatedAt time.Time
 }
 
-// SettingRetention is the key holding the desired retention period.
-const SettingRetention = "retention"
+// Setting keys.
+const (
+	// SettingRetention holds the desired retention period.
+	SettingRetention = "retention"
+	// SettingServiceCatalog holds the DNS service catalog the trend rollup
+	// counts against.
+	SettingServiceCatalog = "dns_service_catalog"
+	// SettingServiceTrendState holds how far each resolution of the trend
+	// rollup has been recorded.
+	SettingServiceTrendState = "dns_service_trend_state"
+)
 
 // ListAuditEvents filters the audit log. Times are exclusive of Before and
 // inclusive of Since; an empty filter field matches everything.

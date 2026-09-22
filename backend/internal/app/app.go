@@ -28,8 +28,10 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metadata/postgres"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
+	"github.com/freezxp/syslogc/backend/internal/metricstore"
 	"github.com/freezxp/syslogc/backend/internal/normalization"
 	"github.com/freezxp/syslogc/backend/internal/query"
+	"github.com/freezxp/syslogc/backend/internal/servicetrends"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 	"github.com/freezxp/syslogc/backend/internal/storage/victorialogs"
 )
@@ -61,6 +63,11 @@ type App struct {
 
 	saturatedSince atomic.Int64
 	retention      atomic.Pointer[retentionStatus]
+
+	// metrics store for measurements derived from the logs, and the rollup
+	// that fills it; both nil when analytics.metrics.url is not set.
+	metricStore *metricstore.Client
+	trends      *servicetrends.Recorder
 }
 
 type retentionStatus struct {
@@ -138,6 +145,10 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 	for _, p := range cfg.Server.HTTP.TrustedProxies {
 		prefix, _ := config.ParsePrefixOrAddr(p) // validated
 		opts.TrustedProxies = append(opts.TrustedProxies, prefix)
+	}
+
+	if err := a.wireAnalytics(ctx); err != nil {
+		return nil, err
 	}
 
 	if cfg.Node.HasRole(config.RoleIngest) {
@@ -320,12 +331,13 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 	})
 	deps := &api.APIDeps{
 		Auth: authSvc, Store: a.store, Query: querySvc, Storage: a.backend,
-		Retention:    func() any { return a.retention.Load() },
-		FileSources:  cfg.Ingestion.Sources,
-		Config:       *cfg,
-		CookieSecure: cfg.Auth.CookieSecure,
-		AuditAll:     cfg.Query.AuditAll,
-		WebUI:        webui.FS(),
+		ServiceTrends: a.serviceTrendReader(),
+		Retention:     func() any { return a.retention.Load() },
+		FileSources:   cfg.Ingestion.Sources,
+		Config:        *cfg,
+		CookieSecure:  cfg.Auth.CookieSecure,
+		AuditAll:      cfg.Query.AuditAll,
+		WebUI:         webui.FS(),
 	}
 	if len(a.forwarders) > 0 {
 		deps.Forwarders = a.forwarders.Statuses
@@ -348,6 +360,19 @@ func postgresDSN(c config.PostgresConfig) (string, error) {
 	data, err := os.ReadFile(c.DSNFile)
 	if err != nil {
 		return "", fmt.Errorf("metadata.postgres.dsn_file: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// readSecretFile reads a secret from a file, trimming the trailing newline
+// an editor leaves behind. An empty path yields an empty secret.
+func readSecretFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // operator-provided path
+	if err != nil {
+		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
 }
@@ -411,6 +436,9 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 	}
 	if a.store != nil {
 		go a.maintenance(bgCtx)
+	}
+	if a.trends != nil {
+		go a.recordServiceTrends(bgCtx)
 	}
 
 	serveErr := make(chan error, 1)
@@ -756,4 +784,106 @@ func (a *App) watchRetention(ctx context.Context) {
 			check()
 		}
 	}
+}
+
+// wireAnalytics connects the metrics store and the rollup that fills it.
+// Without a metrics store URL there is nothing to record into, and the
+// feature stays off.
+func (a *App) wireAnalytics(ctx context.Context) error {
+	cfg := a.cfg.Analytics
+	if cfg.Metrics.URL == "" {
+		return nil
+	}
+	password, err := readSecretFile(cfg.Metrics.BasicPasswordFile)
+	if err != nil {
+		return fmt.Errorf("analytics.metrics.basic_password_file: %w", err)
+	}
+	client, err := metricstore.New(metricstore.Config{
+		URL:           cfg.Metrics.URL,
+		Timeout:       cfg.Metrics.Timeout.D(),
+		BasicUsername: cfg.Metrics.BasicUsername,
+		BasicPassword: password,
+	})
+	if err != nil {
+		return err
+	}
+	a.metricStore = client
+	// Reachability is reported, not required: the rollup retries, and a
+	// metrics store that is down must not stop the node from ingesting.
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := client.Ping(pingCtx); err != nil {
+		a.log.Warn("the metrics store is not reachable yet", "url", cfg.Metrics.URL, "error", err)
+	}
+
+	st := cfg.ServiceTrends
+	if !st.Enabled || a.store == nil {
+		if st.Enabled {
+			a.log.Warn("service trends need a metadata database; the rollup is off")
+		}
+		return nil
+	}
+	recorder, err := servicetrends.NewRecorder(servicetrends.Options{
+		Querier: a.backend.Querier(),
+		Writer:  client,
+		Log:     a.log.With("component", "servicetrends"),
+		Catalog: func(ctx context.Context) (servicetrends.Catalog, error) {
+			return servicetrends.LoadCatalog(ctx, a.store)
+		},
+		LoadState: func(ctx context.Context) (servicetrends.State, error) { return servicetrends.LoadState(ctx, a.store) },
+		SaveState: func(ctx context.Context, s servicetrends.State) error {
+			return servicetrends.SaveState(ctx, a.store, s)
+		},
+		Base:        st.Interval.D(),
+		Backfill:    st.Backfill.D(),
+		DomainField: st.DomainField,
+		ClientField: st.ClientField,
+		Sources:     st.Sources,
+	})
+	if err != nil {
+		return err
+	}
+	a.trends = recorder
+	return nil
+}
+
+// recordServiceTrends runs the rollup on every base interval. The first run
+// happens immediately, which is also when a backfill is done.
+func (a *App) recordServiceTrends(ctx context.Context) {
+	interval := a.cfg.Analytics.ServiceTrends.Interval.D()
+	run := func() {
+		// A backfill can walk a lot of history, so it gets room; the rollup
+		// is idempotent, so a timeout only postpones work.
+		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		start := time.Now()
+		written, err := a.trends.Run(cctx)
+		switch {
+		case err != nil && cctx.Err() == nil:
+			a.log.Warn("the service trend rollup failed", "error", err)
+		case written > 0:
+			a.log.Info("service trends recorded", "samples", written, "took", time.Since(start).Round(time.Millisecond))
+		}
+	}
+	run()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			run()
+		}
+	}
+}
+
+// serviceTrendReader exposes the metrics store to the API, or nil when none
+// is configured. A typed nil in the interface would look configured, so the
+// nil is returned explicitly.
+func (a *App) serviceTrendReader() api.ServiceTrendReader {
+	if a.metricStore == nil {
+		return nil
+	}
+	return a.metricStore
 }

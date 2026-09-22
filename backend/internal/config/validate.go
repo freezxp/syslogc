@@ -54,6 +54,35 @@ func (c *Config) Validate() error {
 		add("log.format: must be json or text")
 	}
 
+	if a := c.Analytics; a.Metrics.URL != "" {
+		if err := validateURL(a.Metrics.URL); err != nil {
+			add("analytics.metrics.url: %v", err)
+		}
+		if a.Metrics.Timeout <= 0 {
+			add("analytics.metrics.timeout: must be positive")
+		}
+		st := a.ServiceTrends
+		switch {
+		case st.Interval < Duration(time.Minute):
+			add("analytics.service_trends.interval: must be at least 1m")
+		case st.Interval > Duration(time.Hour):
+			add("analytics.service_trends.interval: must be at most 1h")
+		case time.Hour%time.Duration(st.Interval) != 0:
+			add("analytics.service_trends.interval: must divide an hour evenly (1m, 5m, 15m, 30m, 1h)")
+		}
+		if st.Backfill < 0 {
+			add("analytics.service_trends.backfill: must not be negative")
+		}
+		if st.Enabled {
+			if st.DomainField == "" {
+				add("analytics.service_trends.domain_field: is required")
+			}
+			if st.ClientField == "" {
+				add("analytics.service_trends.client_field: is required")
+			}
+		}
+	}
+
 	if c.Storage.Type != "victorialogs" {
 		add("storage.type: unsupported storage %q (supported: victorialogs)", c.Storage.Type)
 	}

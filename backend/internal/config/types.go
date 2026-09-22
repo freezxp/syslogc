@@ -23,6 +23,39 @@ type Config struct {
 	Metadata   MetadataConfig   `koanf:"metadata"`
 	Auth       AuthConfig       `koanf:"auth"`
 	Query      QueryConfig      `koanf:"query"`
+	Analytics  AnalyticsConfig  `koanf:"analytics"`
+}
+
+// AnalyticsConfig configures measurements derived from the logs.
+type AnalyticsConfig struct {
+	Metrics       MetricsStoreConfig  `koanf:"metrics"`
+	ServiceTrends ServiceTrendsConfig `koanf:"service_trends"`
+}
+
+// MetricsStoreConfig points at the VictoriaMetrics instance that holds
+// derived measurements. An empty URL disables every rollup.
+type MetricsStoreConfig struct {
+	URL               string   `koanf:"url"`
+	Timeout           Duration `koanf:"timeout"`
+	BasicUsername     string   `koanf:"basic_username"`
+	BasicPasswordFile string   `koanf:"basic_password_file"`
+}
+
+// ServiceTrendsConfig configures the rollup that counts how many distinct
+// clients queried each service category.
+type ServiceTrendsConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// Interval is the finest resolution recorded, and how often the rollup
+	// runs. Hourly and daily points are recorded on their own boundaries.
+	Interval Duration `koanf:"interval"`
+	// Backfill is how far back history is filled in when a resolution has no
+	// data yet; zero records forward only.
+	Backfill Duration `koanf:"backfill"`
+	// DomainField and ClientField name the extracted fields the rollup reads.
+	DomainField string `koanf:"domain_field"`
+	ClientField string `koanf:"client_field"`
+	// Sources restricts the rollup to these source names; empty reads all.
+	Sources []string `koanf:"sources"`
 }
 
 type MetadataConfig struct {

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -481,4 +482,93 @@ func (b *Backend) Aggregate(ctx context.Context, q storage.AggregateQuery) ([]st
 // formatMillis renders a step for LogsQL's `_time:<step>` bucketing.
 func formatMillis(d time.Duration) string {
 	return strconv.FormatInt(d.Milliseconds(), 10) + "ms"
+}
+
+// CategoryCounts counts distinct values per category in a single pass.
+//
+// Each category becomes a conditional aggregation over the same scan:
+//
+//	<selection> | stats by (_time:5m)
+//	    count_uniq(<field>) if (<category 1>) as c0, count() if (<category 1>) as n0,
+//	    count_uniq(<field>) if (<category 2>) as c1, ...
+//
+// Column names are generated here (c0, n0, …) rather than taken from the
+// category names, so a category called `x") as y, count(` cannot reshape the
+// pipeline. The category filters themselves go through CompileFilter, the
+// same path as any other user filter.
+func (b *Backend) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	if err := q.Range.Validate(); err != nil {
+		return nil, err
+	}
+	if len(q.Categories) == 0 {
+		return []storage.CategoryRow{}, nil
+	}
+	if len(q.Categories) > storage.MaxCategories {
+		return nil, fmt.Errorf("victorialogs: %d categories exceeds the limit of %d",
+			len(q.Categories), storage.MaxCategories)
+	}
+	if q.DistinctField == "" {
+		return nil, errors.New("victorialogs: category counts need a distinct field")
+	}
+	f, pipes, err := buildSelection(q.Selection)
+	if err != nil {
+		return nil, err
+	}
+	if pipes != "" {
+		return nil, storage.ErrPipesNotAllowed
+	}
+
+	distinct := quote(storageField(q.DistinctField))
+	var sb strings.Builder
+	sb.WriteString(f)
+	sb.WriteString(" | stats")
+	if q.Step > 0 {
+		sb.WriteString(" by (_time:" + formatMillis(q.Step) + ")")
+	}
+	for i, c := range q.Categories {
+		cond := ""
+		if c.Filter != nil {
+			compiled, err := CompileFilter(c.Filter)
+			if err != nil {
+				return nil, fmt.Errorf("victorialogs: category %q: %w", c.Name, err)
+			}
+			cond = " if (" + compiled + ")"
+		}
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, " count_uniq(%s)%s as c%d, count()%s as n%d", distinct, cond, i, cond, i)
+	}
+
+	rows, err := b.query(ctx, q.Tenant, sb.String(), q.Range)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []storage.CategoryRow{}
+	for rows.Next() {
+		r := rows.Row()
+		var at time.Time
+		if q.Step > 0 {
+			ts, ok := r.Get("_time")
+			if !ok {
+				continue
+			}
+			at, err = time.Parse(time.RFC3339Nano, ts)
+			if err != nil {
+				return nil, fmt.Errorf("victorialogs: bucket timestamp %q: %w", ts, err)
+			}
+		}
+		for i, c := range q.Categories {
+			row := storage.CategoryRow{Time: at, Category: c.Name}
+			if v, ok := r.Get("c" + strconv.Itoa(i)); ok {
+				row.Distinct, _ = strconv.ParseFloat(v, 64)
+			}
+			if v, ok := r.Get("n" + strconv.Itoa(i)); ok {
+				row.Messages, _ = strconv.ParseFloat(v, 64)
+			}
+			out = append(out, row)
+		}
+	}
+	return out, rows.Err()
 }

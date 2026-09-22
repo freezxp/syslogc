@@ -391,6 +391,10 @@ switch can flag non-portable searches. Updates use optimistic concurrency
 | GET | `/api/v1/sources` | `sources:read` |
 | POST | `/api/v1/sources` | `sources:manage` |
 | POST | `/api/v1/sources/adopt` | `sources:manage` (copies a configuration-file source into the database; 404 unknown name, 409 already managed) |
+| GET | `/api/v1/sources/extract-presets` | `sources:read` (built-in extract rules, e.g. dnsdist/DNScollector) |
+| POST | `/api/v1/analytics/service-trends` | `logs:search` (recorded distinct-client series; `window` must be `5m`, `1h` or `1d`) |
+| GET | `/api/v1/analytics/services` | `logs:search` |
+| PUT | `/api/v1/analytics/services` | `analytics:manage` |
 | GET | `/api/v1/sources/{id}` | `sources:read` |
 | PUT | `/api/v1/sources/{id}` | `sources:manage` (DB-managed only; YAML sources → 409 `managed_by_config`) |
 | DELETE | `/api/v1/sources/{id}` | `sources:manage` |

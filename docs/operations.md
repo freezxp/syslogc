@@ -182,6 +182,90 @@ between the two. VictoriaLogs also deletes the oldest data when the disk
 passes `-retention.maxDiskUsagePercent` (85% in the stack), so watch free
 disk as well as the configured period.
 
+## Service trends
+
+Syslogc can answer "how many different clients used TikTok, and when" by
+rolling DNS query logs up into counts of distinct clients per service. The
+counts live in VictoriaMetrics rather than in the logs, so they stay
+available after the logs they came from have been deleted, and a year of
+them costs a few megabytes.
+
+A **service** is a named set of domains. The catalog ships with the usual
+suspects (Facebook/Instagram/WhatsApp, TikTok, YouTube, Netflix, X,
+Snapchat, Telegram, Spotify, Microsoft 365, Google) and is edited on the
+**Analytics** page by an operator or administrator. A domain matches itself
+and its subdomains, so `tiktok.com` covers `www.tiktok.com` without covering
+`nottiktok.com`.
+
+Membership is decided when the rollup runs, not when a log is stored. Adding
+a service therefore also changes what past windows would count, and history
+can be backfilled from logs stored long before the service was in the
+catalog — by default the last 7 days are filled in on first start.
+
+### Why there are three windows
+
+Distinct counts do not add up. The number of distinct clients in an hour is
+not the sum of the twelve five-minute counts inside it, because a client
+active all hour is one client, not twelve. Every resolution that should be
+chartable is therefore counted over its own window:
+
+| Window | Recorded | Good for |
+|---|---|---|
+| `5m` | every 5 minutes | the shape of a day, when a peak started |
+| `1h` | on the hour | a week at a glance, comparing hours of the day |
+| `1d` | at midnight UTC | months of history, how a service is growing |
+
+Asking for a window that was never recorded returns nothing: a stored count
+cannot be re-bucketed after the fact.
+
+### Getting the fields the rollup counts
+
+The rollup counts fields that an **extract rule** pulls out of the message,
+so a deployment whose DNS logs arrive unparsed records nothing. A dnsdist
+(and DNScollector) preset ships with Syslogc: open the source receiving the
+DNS logs, add the **dnsdist / DNScollector queries** preset under Extract
+rules, and save. `GET /api/v1/sources/extract-presets` returns the same rule
+for scripted setups.
+
+It turns a line like
+
+```
+2026-09-22T12:51:29.98450571Z dnsdist CLIENT_QUERY - 2001:f40:973::595 3039 INET6 UDP 78b report.appmetrica.yandex.net A -
+```
+
+into `dns.qname`, `dns.client_ip`, `dns.qtype`, `dns.transport` and the rest.
+When a trend chart comes back empty, the API says which of these is missing.
+
+If the source is defined in the configuration file, use **Manage in the UI**
+first (see [above](#moving-a-configuration-file-source-into-the-ui)) — that
+copies it into the database so extract rules can be edited without touching
+YAML on every node.
+
+### Settings
+
+```yaml
+analytics:
+  metrics:
+    url: http://victoriametrics:8428   # empty turns every rollup off
+  service_trends:
+    enabled: true
+    interval: 5m          # the finest window, and how often the rollup runs
+    backfill: 7d          # how much history to fill in on first start
+    domain_field: dns.qname
+    client_field: dns.client_ip
+    sources: []           # empty reads every source
+```
+
+The fields default to the ones the `dnsdist` extract rule produces (see
+[configuration](configuration.md#extracting-fields-from-the-message)); point
+them at whatever your DNS logs use. `SYSLOGC_METRICS_RETENTION` in `.env`
+sets how long the counts are kept (24 months by default) — it is separate
+from log retention, which is much shorter.
+
+Recording is idempotent: writing the same window twice replaces the sample
+rather than adding to it, so a restart, a re-run or an overlapping backfill
+cannot double-count.
+
 ## Monitoring
 
 Every node exposes Prometheus metrics on `/metrics` (no authentication; keep

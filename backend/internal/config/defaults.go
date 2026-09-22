@@ -42,7 +42,17 @@ func Default() Config {
 			CookieSecure:       true,
 			BootstrapAdmin:     BootstrapConfig{Username: "admin"},
 		},
-		Query:    QueryConfig{MaxTieGroup: 5000, MaxTailSessions: 200},
+		Query: QueryConfig{MaxTieGroup: 5000, MaxTailSessions: 200},
+		Analytics: AnalyticsConfig{
+			Metrics: MetricsStoreConfig{Timeout: Duration(30 * time.Second)},
+			ServiceTrends: ServiceTrendsConfig{
+				Enabled:     true,
+				Interval:    Duration(5 * time.Minute),
+				Backfill:    Duration(7 * 24 * time.Hour),
+				DomainField: "dns.qname",
+				ClientField: "dns.client_ip",
+			},
+		},
 		Shutdown: ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},
 	}
 }

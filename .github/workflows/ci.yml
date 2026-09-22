@@ -66,6 +66,10 @@ jobs:
         image: victoriametrics/victoria-logs:v1.52.0
         ports:
           - 9429:9428
+      victoriametrics:
+        image: victoriametrics/victoria-metrics:v1.108.1
+        ports:
+          - 8428:8428
       postgres:
         image: postgres:17.6-trixie
         env:
@@ -81,9 +85,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
-      - name: Wait for VictoriaLogs
+      - name: Wait for the storage services
         run: |
-          for url in http://127.0.0.1:9428/health http://127.0.0.1:9429/health; do
+          for url in http://127.0.0.1:9428/health http://127.0.0.1:9429/health http://127.0.0.1:8428/health; do
             for i in $(seq 1 30); do curl -fsS "$url" && break; sleep 1; done
             curl -fsS "$url" >/dev/null || exit 1
           done
@@ -92,6 +96,7 @@ jobs:
         env:
           TEST_VICTORIALOGS_URL: http://127.0.0.1:9428
           TEST_VICTORIALOGS_FORWARD_URL: http://127.0.0.1:9429
+          TEST_VICTORIAMETRICS_URL: http://127.0.0.1:8428
           TEST_POSTGRES_DSN: postgres://syslogc:ci-password@127.0.0.1:5432/syslogc?sslmode=disable
         run: go test -tags integration -race -count=1 -v ./tests/integration/
 

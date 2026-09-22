@@ -5,10 +5,14 @@ type S = components['schemas']
 
 export type Problem = S['Problem']
 export type ProblemError = NonNullable<Problem['errors']>[number]
-export type Permission = S['Permission']
+/**
+ * `analytics:manage` is newer than the generated schema (see the note in
+ * ./operations.ts), so it is spelled out until the spec catches up.
+ */
+export type Permission = S['Permission'] | 'analytics:manage'
 export type Role = S['Role']
 export type User = S['User']
-export type Session = S['Session']
+export type Session = Omit<S['Session'], 'permissions'> & { permissions: Permission[] }
 export type TimeRange = S['TimeRange']
 export type ResolvedRange = S['ResolvedRange']
 export type NativeQuery = S['NativeQuery']
@@ -42,6 +46,8 @@ export type IngestionRateResponse = S['IngestionRateResponse']
 export type SavedSearch = S['SavedSearch']
 export type SavedSearchInput = S['SavedSearchInput']
 export type ApiKey = S['ApiKey']
+/** What a key may be scoped to: the spec's list, which the session's may outgrow. */
+export type ApiKeyScope = ApiKey['scopes'][number]
 export type SystemHealth = S['SystemHealth']
 /** `forwarding` is not in the generated schema yet; see the note in ./operations.ts. */
 export type SystemIngestion = S['SystemIngestion'] & { forwarding?: ForwardTarget[] | null }
@@ -70,6 +76,13 @@ export type {
   RetentionDrift,
   RetentionUpdate,
   RetentionUpdateInput,
+  ServiceCatalog,
+  ServiceCatalogInput,
+  ServiceTrendPeak,
+  ServiceTrendPoint,
+  ServiceTrendRequest,
+  ServiceTrendResponse,
+  ServiceTrendSeries,
   SeriesGroup,
   SeriesRequest,
   SeriesResponse,
@@ -81,6 +94,9 @@ export type {
   SourceUDPConfig,
   SystemConfig,
   SystemRetention,
+  TrendMetric,
+  TrendService,
+  TrendWindow,
   UserCreateInput,
   UserUpdateInput,
 } from './operations'
