@@ -15,6 +15,8 @@ import type {
   AuditQuery,
   BreakdownResponse,
   DashboardOverview,
+  ExtractTestRequest,
+  ExtractTestResponse,
   FacetsResponse,
   FieldsResponse,
   FieldValuesResponse,
@@ -498,6 +500,14 @@ export function useDeleteSource() {
   return useMutation({
     mutationFn: (id: string) => unwrap(client.DELETE('/api/v1/sources/{id}', { params: { path: { id } } })),
     onSuccess: () => settleSources(qc),
+  })
+}
+
+/** Dry run of extract rules against sample lines; stores nothing. */
+export function useTestExtract() {
+  return useMutation({
+    mutationFn: (body: ExtractTestRequest) =>
+      unwrap(client.POST('/api/v1/sources/test-extract', { body })) as Promise<ExtractTestResponse>,
   })
 }
 

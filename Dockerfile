@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1
+# No `# syntax=` directive on purpose: it makes every build fetch a frontend
+# image from Docker Hub, which fails on a slow or firewalled network. The
+# builder's built-in Dockerfile frontend understands everything used here.
 
 # ---- web UI ----------------------------------------------------------------
 # Built once on the build machine's architecture: the output is static assets.

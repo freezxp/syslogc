@@ -28,6 +28,11 @@ five seconds, without restarting the node, on every node of the deployment:
 Nodes learn about changes through a PostgreSQL notification and re-check
 every five seconds anyway, so a dropped connection only delays the change.
 
+Extract rules (see [configuration](configuration.md#extracting-fields-from-the-message))
+can be edited on the Sources page too, with a panel that runs the rules
+against sample lines before you save, so a pattern can be checked against a
+real log line rather than against production traffic.
+
 Creating a source needs the `sources:manage` permission (operator or admin).
 Validation is the same as for the configuration file, so a rejected source
 tells you exactly which field is wrong. A source that cannot bind its address

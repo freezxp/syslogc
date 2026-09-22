@@ -235,16 +235,26 @@ if [[ "$OPEN_FIREWALL" == true ]] && command -v ufw >/dev/null && $SUDO ufw stat
 fi
 
 # ---- 6. start ----------------------------------------------------------------------
+# Registry hiccups are common, and a quiet first attempt hides why: retry
+# once with full output, then say what to check instead of exiting silently.
 if [[ "$PULL" == true ]]; then
   step "Pulling images"
-  docker_compose pull -q
+  if ! docker_compose pull -q; then
+    warn "pull failed; retrying with full output"
+    docker_compose pull ||
+      die "could not pull the images. Check network access to ghcr.io, or omit --pull to build locally."
+  fi
 else
   step "Building the image (first run takes a few minutes)"
-  docker_compose build -q
+  if ! docker_compose build -q; then
+    warn "build failed; retrying with full output"
+    docker_compose build ||
+      die "the image build failed. Check network access to the image registries (docker.io, ghcr.io) and disk space, then run ./deploy.sh again."
+  fi
 fi
 
 step "Starting the stack"
-docker_compose up -d --remove-orphans
+docker_compose up -d --remove-orphans || die "the stack did not start; see: docker compose logs"
 
 url="http://$(hostname -I | awk '{print $1}'):${PORT}"
 printf '    waiting for %s/ready ' "$url"

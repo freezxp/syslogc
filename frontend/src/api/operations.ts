@@ -26,6 +26,20 @@ export interface SourceTLSConfig {
   client_ca_file?: string
 }
 
+/**
+ * One extraction rule: an RE2 pattern whose named capture groups become log
+ * fields. A source's rules are tried in order and the first match wins.
+ */
+export interface ExtractRule {
+  /** Identifies the rule in metrics and errors; defaults to `rule-N` server-side. */
+  name?: string
+  /** Literal the message must contain before the pattern is tried. */
+  contains?: string
+  /** Prepended to every field the rule produces, e.g. "dns.". */
+  prefix?: string
+  regex: string
+}
+
 /** A source exactly as it appears under `ingestion.sources` in the YAML config. */
 export interface SourceConfig {
   name: string
@@ -49,6 +63,7 @@ export interface SourceConfig {
   idle_timeout?: string
   udp?: SourceUDPConfig
   tls?: SourceTLSConfig
+  extract?: ExtractRule[]
 }
 
 export type SourceOrigin = 'file' | 'database'
@@ -83,6 +98,26 @@ export interface SourceInput {
   enabled?: boolean
   /** Required on update; a mismatch answers 409. */
   version?: number
+}
+
+/** Dry run of extract rules; at most 10 samples of at most 8 KiB each. */
+export interface ExtractTestRequest {
+  rules: ExtractRule[]
+  samples: string[]
+}
+
+export interface ExtractTestResult {
+  sample: string
+  /** Name of the rule that matched, empty when none did. */
+  rule: string
+  fields?: Record<string, string>
+  /** Field names in the order the pattern produced them; use it for display. */
+  order?: string[]
+}
+
+export interface ExtractTestResponse {
+  /** Index-for-index with the request's `samples`. */
+  results: ExtractTestResult[]
 }
 
 // ---- users -----------------------------------------------------------------
@@ -314,6 +349,9 @@ export interface OperationsPaths {
   '/api/v1/sources': {
     get: Read<{ sources: ManagedSource[] }>
     post: Write<ManagedSource, SourceInput, NoParams, 201>
+  }
+  '/api/v1/sources/test-extract': {
+    post: Write<ExtractTestResponse, ExtractTestRequest>
   }
   '/api/v1/sources/{id}': {
     get: Read<ManagedSource, ById>

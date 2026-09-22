@@ -114,6 +114,26 @@ try {
   await page.getByLabel('Certificate file').waitFor()
   await shot('source-detail')
 
+  await page.goto(`${base}/sources`)
+  await page.getByTestId('source-name').filter({ hasText: 'branch-office' }).click()
+  await page.waitForURL(/\/sources\//)
+  await page.getByLabel('Pattern').first().waitFor()
+  await page.getByText('Extract fields').evaluate((el) => el.scrollIntoView({ block: 'start' }))
+  await shot('source-extract')
+
+  // One line the first rule claims and one nothing matches, so both result
+  // states are in the picture.
+  await page
+    .getByLabel('Sample lines')
+    .fill(
+      '2026-09-22T05:30:00.978892101Z dnsdist CLIENT_QUERY - 2001:db8:1:2::5 7248 INET6 UDP 81b siplb-1.ane2-prd.connectrcs.com A -\n' +
+        'Accepted publickey for deploy from 10.20.4.9 port 51234 ssh2',
+    )
+  await page.getByRole('button', { name: /run test/i }).click()
+  await page.getByTestId('extract-result').first().waitFor()
+  await page.getByText('Sample lines').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  await shot('source-extract-test')
+
   await page.goto(`${base}/users`)
   await page.getByText('Alice Chen').waitFor()
   await shot('users')

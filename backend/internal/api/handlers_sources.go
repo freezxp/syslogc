@@ -11,7 +11,9 @@ import (
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
+	"github.com/freezxp/syslogc/backend/internal/extract"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
+	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 )
 
@@ -236,4 +238,67 @@ func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		}
 	}
 	return &in, sc, nil
+}
+
+// maxExtractSamples bounds a dry run; it is an authoring aid, not an API for
+// bulk processing.
+const (
+	maxExtractSamples   = 10
+	maxExtractSampleLen = 8 << 10
+)
+
+type extractTestRequest struct {
+	Rules   []config.ExtractRule `json:"rules"`
+	Samples []string             `json:"samples"`
+}
+
+type extractTestResult struct {
+	Sample string `json:"sample"`
+	// Rule is the rule that matched, empty when none did.
+	Rule   string            `json:"rule"`
+	Fields map[string]string `json:"fields,omitempty"`
+	// Order lists the field names as the pattern produced them.
+	Order []string `json:"order,omitempty"`
+}
+
+// handleTestExtract runs extract rules against sample lines without storing
+// anything, so a pattern can be checked before it is saved to a source.
+func (s *Server) handleTestExtract(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
+	var req extractTestRequest
+	if err := decodeJSON(w, r, &req, true); err != nil {
+		return err
+	}
+	if len(req.Rules) == 0 {
+		return badRequest("validation_failed", "/rules", "at least one rule is required")
+	}
+	if len(req.Samples) == 0 || len(req.Samples) > maxExtractSamples {
+		return badRequest("validation_failed", "/samples", "between 1 and %d samples are required", maxExtractSamples)
+	}
+	rules := make([]extract.Config, 0, len(req.Rules))
+	for _, rule := range req.Rules {
+		rules = append(rules, extract.Config{Name: rule.Name, Contains: rule.Contains, Regex: rule.Regex, Prefix: rule.Prefix})
+	}
+	ex, err := extract.New(rules)
+	if err != nil {
+		return badRequest("validation_failed", "/rules", "%s", err.Error())
+	}
+
+	results := make([]extractTestResult, 0, len(req.Samples))
+	for _, sample := range req.Samples {
+		if len(sample) > maxExtractSampleLen {
+			return badRequest("validation_failed", "/samples", "a sample is longer than %d bytes", maxExtractSampleLen)
+		}
+		entry := &logentry.Entry{Message: sample}
+		out := extractTestResult{Sample: sample, Rule: ex.Apply(entry)}
+		if len(entry.Fields) > 0 {
+			out.Fields = make(map[string]string, len(entry.Fields))
+			for _, f := range entry.Fields {
+				out.Fields[f.Key] = f.Value
+				out.Order = append(out.Order, f.Key)
+			}
+		}
+		results = append(results, out)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	return nil
 }

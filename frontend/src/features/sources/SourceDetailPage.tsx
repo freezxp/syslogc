@@ -13,9 +13,11 @@ import { Dialog, DialogContent } from '@/components/ui/overlay'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
+import { ExtractRulesPanel, ExtractTestPanel } from './ExtractEditor'
 import {
   configToForm,
   DEFAULT_SOURCE_FORM,
+  emptySourceErrors,
   formToConfig,
   hasErrors,
   parseSourceRouteId,
@@ -92,7 +94,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
   const update = useUpdateSource()
   const remove = useDeleteSource()
   const [form, setForm] = useState<SourceFormState>(() => (source ? configToForm(source) : { ...DEFAULT_SOURCE_FORM }))
-  const [errors, setErrors] = useState<SourceErrors>({ fields: {}, general: [] })
+  const [errors, setErrors] = useState<SourceErrors>(emptySourceErrors)
   const [conflict, setConflict] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -104,15 +106,15 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
     e.preventDefault()
     const { config, errors: clientErrors } = formToConfig(form)
     if (hasErrors(clientErrors)) return setErrors(clientErrors)
-    setErrors({ fields: {}, general: [] })
+    setErrors(emptySourceErrors())
     setConflict(false)
     const onError = (err: unknown) => {
       if (err instanceof ApiError && err.status === 409) {
         setConflict(true)
-        setErrors({ fields: {}, general: [err.message] })
+        setErrors({ ...emptySourceErrors(), general: [err.message] })
         return
       }
-      setErrors(sourceProblemErrors(err instanceof ApiError ? err.problem : undefined, String(err)))
+      setErrors(sourceProblemErrors(err instanceof ApiError ? err.problem : undefined, String(err), form.extract))
     }
     if (source?.id) {
       update.mutate({ id: source.id, body: { config, enabled: form.enabled, version: source.version } }, { onError })
@@ -534,6 +536,15 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
             </div>
           </Panel>
         )}
+
+        <ExtractRulesPanel
+          rules={form.extract}
+          errors={errors.rules}
+          editable={editable}
+          onChange={(extract) => set('extract', extract)}
+        />
+        {/* A dry run only reads, so file sources can be checked here too. */}
+        {can('sources:manage') && <ExtractTestPanel form={form} />}
       </div>
 
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
@@ -554,7 +565,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
                   onSuccess: () => navigate({ to: '/sources' }),
                   onError: (err) => {
                     setConfirmDelete(false)
-                    setErrors({ fields: {}, general: [err.message] })
+                    setErrors({ ...emptySourceErrors(), general: [err.message] })
                   },
                 })
               }

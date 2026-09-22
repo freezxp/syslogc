@@ -7,8 +7,12 @@ import { buildExpr } from '@/features/explorer/filter-builder-logic'
 import { exportFilename } from '@/features/explorer/export'
 import {
   DEFAULT_SOURCE_FORM,
+  captureGroupNames,
   configToForm,
+  extractFieldNames,
+  extractRuleIndex,
   formToConfig,
+  newExtractRule,
   parseSourceRouteId,
   sourceExplorerSearch,
   sourceProblemErrors,
@@ -401,6 +405,128 @@ describe('source form', () => {
   it('links to the explorer filtered by source, quoting names that need it', () => {
     expect(sourceExplorerSearch('branch-office').q).toBe('source=branch-office')
     expect(sourceExplorerSearch('edge tls').q).toBe('source="edge tls"')
+  })
+})
+
+describe('extract rules', () => {
+  const form = (patch: Partial<SourceFormState> = {}): SourceFormState => ({ ...DEFAULT_SOURCE_FORM, ...patch })
+  const DNSDIST =
+    '^(?P<query_time>\\S+) dnsdist (?P<event>\\S+) \\S+ (?P<client_ip>\\S+) (?P<client_port>\\d+) ' +
+    '(?P<address_family>\\S+) (?P<transport>\\S+) (?P<query_bytes>\\S+) (?P<qname>\\S+) (?P<qtype>\\S+) (?P<policy>\\S+)$'
+
+  it('lists capture group names in pattern order', () => {
+    expect(captureGroupNames(DNSDIST)).toEqual([
+      'query_time',
+      'event',
+      'client_ip',
+      'client_port',
+      'address_family',
+      'transport',
+      'query_bytes',
+      'qname',
+      'qtype',
+      'policy',
+    ])
+    // Both Go spellings, and nothing for groups that name no field.
+    expect(captureGroupNames('(?<a>x)(?:y)(z)')).toEqual(['a'])
+    expect(captureGroupNames('')).toEqual([])
+  })
+
+  it('ignores parentheses that do not open a group', () => {
+    expect(captureGroupNames('\\(?P<lit>\\)')).toEqual([])
+    expect(captureGroupNames('[(?P<cls>]')).toEqual([])
+    expect(captureGroupNames('\\\\(?P<after_escaped_backslash>x)')).toEqual(['after_escaped_backslash'])
+    // A half-typed group must not crash or invent a name.
+    expect(captureGroupNames('(?P<unterminated')).toEqual([])
+    expect(captureGroupNames('(?P<>x)')).toEqual([])
+  })
+
+  it('shows produced fields behind the rule prefix', () => {
+    expect(extractFieldNames({ prefix: 'dns.', regex: '(?P<qname>\\S+) (?P<qtype>\\S+)' })).toEqual([
+      'dns.qname',
+      'dns.qtype',
+    ])
+    expect(extractFieldNames({ prefix: '', regex: '(?P<qname>\\S+)' })).toEqual(['qname'])
+  })
+
+  it('round-trips rules through the form, dropping blank optional parts', () => {
+    const extract = [
+      { name: 'dnsdist-query', contains: 'dnsdist', prefix: 'dns.', regex: DNSDIST },
+      { regex: '(?P<pid>\\d+)' },
+    ]
+    const config = { name: 'dns', type: 'syslog' as const, protocol: 'udp' as const, address: ':5514', extract }
+    const back = formToConfig(configToForm({ config, enabled: true }))
+    expect(back.config.extract).toEqual(extract)
+    expect(back.errors.rules).toEqual({})
+  })
+
+  it('omits extract entirely when there are no rules', () => {
+    expect(formToConfig(form({ name: 'a', address: ':514' })).config.extract).toBeUndefined()
+  })
+
+  it('refuses a rule with no pattern or no named group, keeping the row position', () => {
+    const e = formToConfig(
+      form({
+        name: 'a',
+        address: ':514',
+        extract: [
+          newExtractRule({ regex: '(?P<ok>x)' }),
+          newExtractRule({ regex: '  ' }),
+          newExtractRule({ regex: 'dnsdist (\\S+)' }),
+        ],
+      }),
+    ).errors
+    expect(e.rules[0]).toBeUndefined()
+    expect(e.rules[1]).toMatch(/pattern is required/i)
+    expect(e.rules[2]).toMatch(/named capture groups/)
+  })
+
+  it('finds the rule a server message names, by name or by position', () => {
+    const rules = [newExtractRule({ name: 'dnsdist-query' }), newExtractRule()]
+    expect(extractRuleIndex(rules, 'dnsdist-query')).toBe(0)
+    expect(extractRuleIndex(rules, 'rule-2')).toBe(1)
+    expect(extractRuleIndex(rules, 'rule-9')).toBeUndefined()
+    expect(extractRuleIndex(rules, 'gone')).toBeUndefined()
+  })
+
+  it('places server extract complaints on the rule that caused them', () => {
+    const rules = [newExtractRule({ name: 'dnsdist-query' }), newExtractRule()]
+    const problem: Problem = {
+      type: 'about:blank',
+      title: 'Validation failed',
+      status: 422,
+      code: 'validation_failed',
+      errors: [
+        {
+          pointer: '/config',
+          message:
+            'source: extract dnsdist-query: error parsing regexp: missing closing ): `(?P<a>`; ' +
+            'source: extract rule-2: the pattern has no named capture groups, so it produces no fields; ' +
+            'source: address: missing port',
+        },
+      ],
+    }
+    const e = sourceProblemErrors(problem, 'fallback', rules)
+    expect(e.rules[0]).toMatch(/missing closing/)
+    expect(e.rules[1]).toMatch(/no named capture groups/)
+    expect(e.fields.address).toMatch(/missing port/)
+    expect(e.general).toEqual([])
+  })
+
+  it('keeps an extract complaint general when no rule matches it', () => {
+    const e = sourceProblemErrors(
+      {
+        type: 'about:blank',
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        errors: [{ pointer: '/config', message: 'source: extract vanished: pattern longer than 4096 bytes' }],
+      } as Problem,
+      'fallback',
+      [newExtractRule({ name: 'other' })],
+    )
+    expect(e.general).toEqual(['extract vanished: pattern longer than 4096 bytes'])
+    expect(e.rules).toEqual({})
   })
 })
 

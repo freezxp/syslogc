@@ -1203,3 +1203,56 @@ func TestAnalytics(t *testing.T) {
 		t.Errorf("viewer native analytics: %d", resp.StatusCode)
 	}
 }
+
+func TestTestExtract(t *testing.T) {
+	e := newEnv(t)
+	ops, viewer := e.login("ops"), e.login("viewer")
+	dnsdist := `^(?P<query_time>\S+) dnsdist (?P<event>\S+) \S+ (?P<client_ip>\S+) (?P<client_port>\d+) ` +
+		`(?P<address_family>\S+) (?P<transport>\S+) (?P<query_bytes>\S+) (?P<qname>\S+) (?P<qtype>\S+) (?P<policy>\S+)$`
+	body := map[string]any{
+		"rules": []map[string]any{{"name": "dnsdist-query", "contains": "dnsdist", "prefix": "dns.", "regex": dnsdist}},
+		"samples": []string{
+			"2026-09-22T05:30:00.978892101Z dnsdist CLIENT_QUERY - 2001:db8:1:2::5 7248 INET6 UDP 81b siplb-1.example.com A -",
+			"an unrelated line",
+		},
+	}
+	resp, raw := ops.do("POST", "/api/v1/sources/test-extract", body, nil)
+	var got struct {
+		Results []struct {
+			Rule   string            `json:"rule"`
+			Fields map[string]string `json:"fields"`
+			Order  []string          `json:"order"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || resp.StatusCode != http.StatusOK || len(got.Results) != 2 {
+		t.Fatalf("test-extract: %d %s", resp.StatusCode, raw)
+	}
+	first := got.Results[0]
+	if first.Rule != "dnsdist-query" || first.Fields["dns.qname"] != "siplb-1.example.com" ||
+		first.Fields["dns.client_ip"] != "2001:db8:1:2::5" || len(first.Order) != 10 {
+		t.Errorf("first sample: %+v", first)
+	}
+	if got.Results[1].Rule != "" || len(got.Results[1].Fields) != 0 {
+		t.Errorf("unmatched sample reported a match: %+v", got.Results[1])
+	}
+
+	// Errors are reported where the author can act on them.
+	for _, tc := range []struct {
+		name string
+		in   map[string]any
+		want string
+	}{
+		{"no rules", map[string]any{"samples": []string{"x"}}, "at least one rule"},
+		{"no samples", map[string]any{"rules": []map[string]any{{"regex": `(?P<a>x)`}}}, "samples"},
+		{"unnamed groups", map[string]any{"rules": []map[string]any{{"regex": `dnsdist (\S+)`}}, "samples": []string{"x"}}, "named capture groups"},
+		{"invalid pattern", map[string]any{"rules": []map[string]any{{"regex": `(?P<a>`}}, "samples": []string{"x"}}, "error parsing regexp"},
+	} {
+		if resp, raw := ops.do("POST", "/api/v1/sources/test-extract", tc.in, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
+			!strings.Contains(string(raw), tc.want) {
+			t.Errorf("%s: %d %s", tc.name, resp.StatusCode, raw)
+		}
+	}
+	if resp, _ := viewer.do("POST", "/api/v1/sources/test-extract", body, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer testing patterns: %d", resp.StatusCode)
+	}
+}

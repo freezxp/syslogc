@@ -4,11 +4,73 @@
  * configuration file), plus mapping of server validation problems back onto
  * individual form fields.
  */
-import type { ManagedSource, Problem, SourceConfig, SourceState } from '@/api/types'
+import type { ExtractRule, ManagedSource, Problem, SourceConfig, SourceState } from '@/api/types'
 import { quote } from '@/lib/filter-text'
 import type { ExplorerSearch } from '@/lib/url-state'
 
 type Tls = NonNullable<SourceConfig['tls']>
+
+/**
+ * One extract rule while it is being edited. `key` only exists to keep React
+ * inputs attached to their rule across reordering and removal; it is never sent.
+ */
+export interface ExtractRuleForm {
+  key: string
+  name: string
+  contains: string
+  prefix: string
+  regex: string
+}
+
+let ruleKeySeq = 0
+
+export function newExtractRule(rule: Partial<Omit<ExtractRuleForm, 'key'>> = {}): ExtractRuleForm {
+  ruleKeySeq += 1
+  return { key: `rule-${ruleKeySeq}`, name: '', contains: '', prefix: '', regex: '', ...rule }
+}
+
+/**
+ * Names of the capture groups a pattern would produce, in order, found by
+ * scanning rather than compiling: the browser's regex engine differs from RE2
+ * and would reject patterns the server happily accepts (and vice versa), so the
+ * chips must not depend on `new RegExp` succeeding.
+ */
+export function captureGroupNames(regex: string): string[] {
+  const names: string[] = []
+  let inClass = false
+  for (let i = 0; i < regex.length; i++) {
+    const c = regex[i]
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (inClass) {
+      if (c === ']') inClass = false
+      continue
+    }
+    if (c === '[') {
+      inClass = true
+      continue
+    }
+    if (c !== '(' || regex[i + 1] !== '?') continue
+    // Go accepts both spellings of a named group; `(?<` is also the start of a
+    // lookbehind in other dialects, but RE2 has none, so it is unambiguous here.
+    const start = regex[i + 2] === 'P' && regex[i + 3] === '<' ? i + 4 : regex[i + 2] === '<' ? i + 3 : -1
+    if (start < 0) continue
+    const end = regex.indexOf('>', start)
+    if (end < 0) break
+    const name = regex.slice(start, end)
+    if (name && !names.includes(name)) names.push(name)
+    i = end
+  }
+  return names
+}
+
+/** The log fields a rule produces: its capture groups behind its prefix. */
+export function extractFieldNames(rule: Pick<ExtractRuleForm, 'prefix' | 'regex'>): string[] {
+  const prefix = rule.prefix.trim()
+  return captureGroupNames(rule.regex).map((n) => prefix + n)
+}
 
 export interface SourceFormState {
   name: string
@@ -36,6 +98,8 @@ export interface SourceFormState {
   tls_min_version: NonNullable<Tls['min_version']>
   tls_client_auth: NonNullable<Tls['client_auth']>
   tls_client_ca_file: string
+  /** Tried in order; the first rule that matches a message wins. */
+  extract: ExtractRuleForm[]
 }
 
 export type SourceFormField = keyof SourceFormState
@@ -65,6 +129,7 @@ export const DEFAULT_SOURCE_FORM: SourceFormState = {
   tls_min_version: '1.2',
   tls_client_auth: 'none',
   tls_client_ca_file: '',
+  extract: [],
 }
 
 /** Which parts of the editor apply to a given type and protocol. */
@@ -112,12 +177,21 @@ export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled'>):
     tls_min_version: c.tls?.min_version ?? '1.2',
     tls_client_auth: c.tls?.client_auth ?? 'none',
     tls_client_ca_file: c.tls?.client_ca_file ?? '',
+    extract: (c.extract ?? []).map((r) =>
+      newExtractRule({ name: r.name ?? '', contains: r.contains ?? '', prefix: r.prefix ?? '', regex: r.regex ?? '' }),
+    ),
   }
 }
 
 export interface SourceErrors {
   fields: Partial<Record<SourceFormField, string>>
+  /** Keyed by the rule's position in `SourceFormState.extract`. */
+  rules: Record<number, string>
   general: string[]
+}
+
+export function emptySourceErrors(): SourceErrors {
+  return { fields: {}, rules: {}, general: [] }
 }
 
 function lines(text: string): string[] {
@@ -159,7 +233,7 @@ function parseLabels(text: string, errors: SourceErrors): Record<string, string>
  * by hand. Client-side parse failures come back keyed by form field.
  */
 export function formToConfig(f: SourceFormState): { config: SourceConfig; errors: SourceErrors } {
-  const errors: SourceErrors = { fields: {}, general: [] }
+  const errors: SourceErrors = emptySourceErrors()
   const s = sourceSections(f)
   const config: SourceConfig = {
     name: f.name.trim(),
@@ -201,11 +275,33 @@ export function formToConfig(f: SourceFormState): { config: SourceConfig; errors
       client_ca_file: f.tls_client_ca_file.trim() || undefined,
     }
   }
+  const extract = extractRules(f.extract, errors)
+  if (extract.length) config.extract = extract
   return { config, errors }
 }
 
+/**
+ * Rules stay index-for-index with the form, so an error the server reports
+ * against `rule-N` lands on the row the author is looking at.
+ */
+function extractRules(forms: ExtractRuleForm[], errors: SourceErrors): ExtractRule[] {
+  return forms.map((r, i) => {
+    const regex = r.regex.trim()
+    if (!regex) errors.rules[i] = 'A pattern is required.'
+    else if (captureGroupNames(regex).length === 0)
+      errors.rules[i] = 'The pattern has no named capture groups, so it would produce no fields.'
+    const rule: ExtractRule = { regex }
+    if (r.name.trim()) rule.name = r.name.trim()
+    // `contains` is matched literally, so leading and trailing spaces are kept:
+    // they are how an author anchors a word inside a larger message.
+    if (r.contains.trim()) rule.contains = r.contains
+    if (r.prefix.trim()) rule.prefix = r.prefix.trim()
+    return rule
+  })
+}
+
 export function hasErrors(e: SourceErrors): boolean {
-  return e.general.length > 0 || Object.keys(e.fields).length > 0
+  return e.general.length > 0 || Object.keys(e.fields).length > 0 || Object.keys(e.rules).length > 0
 }
 
 const CONFIG_FIELD: Record<string, SourceFormField> = {
@@ -239,13 +335,31 @@ function addFieldError(errors: SourceErrors, field: SourceFormField, message: st
 }
 
 /**
+ * Position of the rule a server message names. Rules the author left unnamed
+ * are reported as `rule-N`, counting from 1 in the order they were sent.
+ */
+export function extractRuleIndex(rules: Pick<ExtractRuleForm, 'name'>[], id: string): number | undefined {
+  const named = rules.findIndex((r) => r.name.trim() === id)
+  if (named >= 0) return named
+  const n = /^rule-(\d+)$/.exec(id)
+  const i = n ? Number(n[1]) - 1 : -1
+  return i >= 0 && i < rules.length ? i : undefined
+}
+
+/**
  * Turns an RFC 9457 problem into per-field messages. The server validates a
  * source as a whole and answers with a single `/config` pointer whose detail
  * joins every complaint with "; ", each prefixed with the offending config key,
  * so the detail is split back apart to place messages next to their inputs.
+ * `rules` is the extract list as submitted, used to place `extract <rule>:`
+ * complaints on the row that caused them.
  */
-export function sourceProblemErrors(problem: Problem | undefined, fallback: string): SourceErrors {
-  const errors: SourceErrors = { fields: {}, general: [] }
+export function sourceProblemErrors(
+  problem: Problem | undefined,
+  fallback: string,
+  rules: Pick<ExtractRuleForm, 'name'>[] = [],
+): SourceErrors {
+  const errors: SourceErrors = emptySourceErrors()
   const entries = problem?.errors?.length
     ? problem.errors.map((e) => ({ pointer: e.pointer ?? '', message: e.message || (problem.detail ?? fallback) }))
     : [{ pointer: '', message: problem?.detail ?? fallback }]
@@ -260,6 +374,15 @@ export function sourceProblemErrors(problem: Problem | undefined, fallback: stri
     for (const clause of entry.message.split(/;\s*/)) {
       const text = clause.replace(/^source:\s*/, '').trim()
       if (!text) continue
+      const rule = /^extract (\S+?):\s*(.+)$/.exec(text)
+      if (rule?.[1] && rule[2]) {
+        const at = extractRuleIndex(rules, rule[1])
+        if (at !== undefined) {
+          const existing = errors.rules[at]
+          errors.rules[at] = existing ? `${existing} ${rule[2]}` : rule[2]
+          continue
+        }
+      }
       const key = /^([a-z_]+(?:\.[a-z_]+)?)/.exec(text)?.[1]
       const field = key ? CONFIG_FIELD[key] : undefined
       if (field) addFieldError(errors, field, text)
