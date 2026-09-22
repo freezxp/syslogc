@@ -46,6 +46,7 @@ import {
   encodeServiceTrends,
   peakSentence,
   rangeTooLong,
+  rangeTooShort,
   serviceFilterLabel,
   trendChartData,
   trendMetricIsAdditive,
@@ -853,6 +854,18 @@ describe('service trends', () => {
     expect(serviceFilterLabel(['tiktok'], labelOf)).toBe('TikTok')
     expect(serviceFilterLabel(['reddit'], labelOf)).toBe('reddit')
     expect(serviceFilterLabel(['tiktok', 'youtube'], labelOf)).toBe('2 services')
+  })
+  it('refuses a range that holds a single window, and says what to do', () => {
+    const start = new Date('2026-09-22T12:00:00Z')
+    const hour = { start, end: new Date('2026-09-22T13:00:00Z') }
+    // One hour at the 1h window is one point: a chart with a single dot.
+    expect(rangeTooShort(hour, '1h')).toMatch(/single point/)
+    // The same range says plenty at a finer window.
+    expect(rangeTooShort(hour, '5m')).toBeNull()
+    // Two windows is enough to draw a line.
+    expect(rangeTooShort({ start, end: new Date('2026-09-22T14:00:00Z') }, '1h')).toBeNull()
+    // A day holds one daily window, so it is refused too.
+    expect(rangeTooShort({ start, end: new Date('2026-09-23T12:00:00Z') }, '1d')).toMatch(/single point/)
   })
 })
 

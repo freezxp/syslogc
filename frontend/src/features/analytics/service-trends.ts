@@ -102,6 +102,19 @@ export function rangeTooLong(range: { start: Date; end: Date }, window: TrendWin
   )
 }
 
+/**
+ * Why a range is too narrow to say anything, or null when it is usable. One
+ * window draws a single dot, which reads as a broken chart rather than as the
+ * one measurement it is.
+ */
+export function rangeTooShort(range: { start: Date; end: Date }, window: TrendWindow): string | null {
+  if (trendPointCount(range, window) >= 2) return null
+  return (
+    `This range holds one ${windowLabel(window)} window at most, which is a single point. ` +
+    `Widen the range, or choose a finer window.`
+  )
+}
+
 /** "unique clients" and "DNS queries" read well in a sentence and in a title. */
 export function trendMetricLabel(metric: TrendMetric): string {
   return metric === 'queries' ? 'DNS queries' : 'unique clients'

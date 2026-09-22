@@ -36,9 +36,11 @@ import { AnalyticsHeader } from './AnalyticsHeader'
 import { ServiceCatalogPanel } from './ServiceCatalogEditor'
 import {
   decodeServiceTrends,
+  DEFAULT_TREND_RANGE,
   encodeServiceTrends,
   peakSentence,
   rangeTooLong,
+  rangeTooShort,
   serviceFilterLabel,
   trendChartData,
   trendMetricIsAdditive,
@@ -76,8 +78,11 @@ export function ServiceTrendsView() {
   // Asking for more points than the server will answer only earns a 422; say so
   // next to the control that caused it instead.
   const tooLong = range.value ? rangeTooLong(range.value, query.window) : null
+  // One window is a single dot, which reads as a broken chart rather than as
+  // the one measurement it is.
+  const tooShort = range.value && !tooLong ? rangeTooShort(range.value, query.window) : null
   const apiRange: TimeRange | null =
-    range.value && !tooLong
+    range.value && !tooLong && !tooShort
       ? { from: range.value.start.toISOString(), to: range.value.end.toISOString(), tz: search.tz }
       : null
 
@@ -100,7 +105,7 @@ export function ServiceTrendsView() {
   const notConfigured = trends.error instanceof ApiError && trends.error.code === 'not_configured'
   // Kept-around data from a previous window would answer a question nobody is
   // asking any more, so the callout goes quiet whenever the chart does.
-  const peak = tooLong || notConfigured ? undefined : trends.data?.peak
+  const peak = tooLong || tooShort || notConfigured ? undefined : trends.data?.peak
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -214,6 +219,22 @@ export function ServiceTrendsView() {
             >
               {tooLong ? (
                 <EmptyState title="Too many windows to chart" hint={tooLong} />
+              ) : tooShort ? (
+                <EmptyState
+                  title="Too short a range to chart"
+                  hint={
+                    <>
+                      <p>{tooShort}</p>
+                      <Button
+                        variant="default"
+                        className="mt-3"
+                        onClick={() => setSearch({ from: DEFAULT_TREND_RANGE.from, to: DEFAULT_TREND_RANGE.to })}
+                      >
+                        Show the last 24 hours
+                      </Button>
+                    </>
+                  }
+                />
               ) : notConfigured ? (
                 <EmptyState
                   title="Service trends are not recording"
