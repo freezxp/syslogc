@@ -43,12 +43,14 @@ type Extractor struct {
 	rules []Rule
 }
 
-// Config describes one rule before compilation.
+// Config describes one rule before compilation. The JSON names match the
+// rule as it is written in a source's configuration, because presets are
+// served in this shape and pasted straight into a source.
 type Config struct {
-	Name     string
-	Contains string
-	Regex    string
-	Prefix   string
+	Name     string `json:"name,omitempty"`
+	Contains string `json:"contains,omitempty"`
+	Regex    string `json:"regex"`
+	Prefix   string `json:"prefix,omitempty"`
 }
 
 // New compiles rules. Every rule must have at least one named capture group,

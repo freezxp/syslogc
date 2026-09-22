@@ -1,6 +1,8 @@
 package extract
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/freezxp/syslogc/backend/internal/logentry"
@@ -79,5 +81,29 @@ func TestDnsdistPresetHandlesAnIPv4Client(t *testing.T) {
 	got := fields(entry)
 	if got["dns.client_ip"] != "10.21.111.203" || got["dns.qname"] != "www.tiktok.com" || got["dns.qtype"] != "HTTPS" {
 		t.Errorf("fields = %v", got)
+	}
+}
+
+func TestPresetsSerialiseAsRulesAreWritten(t *testing.T) {
+	// The editor pastes a preset straight into a source, so the rule has to
+	// arrive under the names a source's extract rule uses.
+	//
+	// Asserted against the bytes, not by decoding them: Go matches field
+	// names case-insensitively, so a round trip through this package would
+	// accept "Regex" — while the browser, which is what reads this, would
+	// see undefined and fall over.
+	out, err := json.Marshal(Presets()[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"id":`, `"title":`, `"sample":`, `"rule":`, `"name":`, `"contains":`, `"regex":`, `"prefix":`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("%s is missing from the preset JSON:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{`"Regex"`, `"Name"`, `"Contains"`, `"Prefix"`} {
+		if strings.Contains(string(out), unwanted) {
+			t.Errorf("%s is serialised with a Go field name, which a browser cannot read:\n%s", unwanted, out)
+		}
 	}
 }

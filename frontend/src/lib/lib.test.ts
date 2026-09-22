@@ -869,6 +869,14 @@ describe('service trends', () => {
   })
 })
 
+describe('extract rules', () => {
+  it('survives a rule with no pattern yet', () => {
+    expect(captureGroupNames('')).toEqual([])
+    expect(captureGroupNames(undefined as unknown as string)).toEqual([])
+    expect(captureGroupNames('^(?P<qname>\\S+) (?P<qtype>\\S+)$')).toEqual(['qname', 'qtype'])
+  })
+})
+
 describe('service catalog', () => {
   const service = (patch: Partial<Omit<ServiceForm, 'key'>> = {}) => ({
     key: 'k',

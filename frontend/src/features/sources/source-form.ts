@@ -37,6 +37,9 @@ export function newExtractRule(rule: Partial<Omit<ExtractRuleForm, 'key'>> = {})
  */
 export function captureGroupNames(regex: string): string[] {
   const names: string[] = []
+  // A missing pattern is a rule someone has not written yet, not a reason to
+  // take the page down with it.
+  if (!regex) return names
   let inClass = false
   for (let i = 0; i < regex.length; i++) {
     const c = regex[i]

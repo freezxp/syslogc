@@ -107,6 +107,16 @@ export interface SourceInput {
   version?: number
 }
 
+/** A ready-made extract rule for a log format people commonly have. */
+export interface ExtractPreset {
+  id: string
+  title: string
+  description: string
+  rule: ExtractRule
+  /** A line the rule matches, for the test panel. */
+  sample: string
+}
+
 /** Dry run of extract rules; at most 10 samples of at most 8 KiB each. */
 export interface ExtractTestRequest {
   rules: ExtractRule[]
@@ -469,6 +479,9 @@ export interface OperationsPaths {
   }
   '/api/v1/sources/adopt': {
     post: Write<ManagedSource, AdoptSourceInput, NoParams, 201>
+  }
+  '/api/v1/sources/extract-presets': {
+    get: Read<{ presets: ExtractPreset[] }>
   }
   '/api/v1/sources/test-extract': {
     post: Write<ExtractTestResponse, ExtractTestRequest>

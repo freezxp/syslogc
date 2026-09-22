@@ -3,15 +3,22 @@
  * message into real fields, so the two things an author needs are the pattern's
  * field names while typing and the fields a real line would actually produce.
  */
-import { ArrowDown, ArrowUp, Play, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Play, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useTestExtract } from '@/api/hooks'
+import { useExtractPresets, useTestExtract } from '@/api/hooks'
 import type { ExtractTestResult } from '@/api/types'
 import { Panel, StatusDot } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
 import { Input, Label, Textarea } from '@/components/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/overlay'
 
 import {
   extractFieldNames,
@@ -23,6 +30,45 @@ import {
 
 /** The server refuses more, and a dry run is an authoring aid, not a batch job. */
 const MAX_SAMPLES = 10
+
+/**
+ * Known formats as one-click rules. Writing the regular expression for
+ * dnsdist by hand is the step that stops people turning DNS trends on, and
+ * the server ships the rule it expects.
+ */
+function PresetMenu({ onPick }: { onPick: (rule: Omit<ExtractRuleForm, 'key'>) => void }) {
+  const presets = useExtractPresets()
+  if (!presets.data?.presets.length) return null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost">
+          <Wand2 /> Use a preset
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-96">
+        <DropdownMenuLabel>Built-in rules</DropdownMenuLabel>
+        {presets.data.presets.map((p) => (
+          <DropdownMenuItem
+            key={p.id}
+            className="flex-col items-start gap-0.5"
+            onSelect={() =>
+              onPick({
+                name: p.rule.name ?? p.id,
+                contains: p.rule.contains ?? '',
+                prefix: p.rule.prefix ?? '',
+                regex: p.rule.regex,
+              })
+            }
+          >
+            <span className="font-medium">{p.title}</span>
+            <span className="text-xs whitespace-normal text-subtle">{p.description}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 export function ExtractRulesPanel({
   rules,
@@ -49,9 +95,12 @@ export function ExtractRulesPanel({
       className="md:col-span-2"
       actions={
         editable && (
-          <Button size="sm" onClick={() => onChange([...rules, newExtractRule()])}>
-            <Plus /> Add rule
-          </Button>
+          <div className="flex items-center gap-2">
+            <PresetMenu onPick={(rule) => onChange([...rules, newExtractRule(rule)])} />
+            <Button size="sm" onClick={() => onChange([...rules, newExtractRule()])}>
+              <Plus /> Add rule
+            </Button>
+          </div>
         )
       }
     >

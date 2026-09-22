@@ -65,6 +65,7 @@ export type {
   BreakdownRequest,
   BreakdownResponse,
   BreakdownRow,
+  ExtractPreset,
   ExtractRule,
   ExtractTestRequest,
   ExtractTestResponse,

@@ -1503,6 +1503,30 @@ export const handlers = [
     managedSources = [...managedSources, s]
     return HttpResponse.json(s, { status: 201 })
   }),
+  http.get(api('/sources/extract-presets'), () =>
+    HttpResponse.json({
+      presets: [
+        {
+          id: 'dnsdist',
+          title: 'dnsdist / DNScollector queries',
+          description:
+            'Pulls the queried name, client address, transport and query type out of dnsdist client-query lines. ' +
+            'Required for DNS service trends, which count distinct clients per service.',
+          rule: {
+            name: 'dnsdist-query',
+            contains: 'dnsdist',
+            prefix: 'dns.',
+            regex:
+              '^(?P<query_time>\\S+) dnsdist (?P<event>\\S+) \\S+ (?P<client_ip>\\S+) (?P<client_port>\\d+) ' +
+              '(?P<address_family>\\S+) (?P<transport>\\S+) (?P<query_bytes>\\S+) (?P<qname>\\S+) (?P<qtype>\\S+) (?P<policy>\\S+)$',
+          },
+          sample:
+            '2026-09-22T12:51:29.98450571Z dnsdist CLIENT_QUERY - 2001:f40:973::595 3039 INET6 UDP 78b ' +
+            'report.appmetrica.yandex.net A -',
+        },
+      ],
+    }),
+  ),
   http.post(api('/sources/test-extract'), async ({ request }) => {
     const body = (await request.json()) as ExtractTestRequest
     return requireAuth() ?? testExtract(body)

@@ -16,6 +16,7 @@ import type {
   AuditQuery,
   BreakdownResponse,
   DashboardOverview,
+  ExtractPreset,
   ExtractTestRequest,
   ExtractTestResponse,
   FacetsResponse,
@@ -606,6 +607,16 @@ export function useDeleteSource() {
   return useMutation({
     mutationFn: (id: string) => unwrap(client.DELETE('/api/v1/sources/{id}', { params: { path: { id } } })),
     onSuccess: () => settleSources(qc),
+  })
+}
+
+/** Built-in extract rules for common log formats. */
+export function useExtractPresets() {
+  return useQuery({
+    queryKey: ['extract-presets'],
+    staleTime: 60 * 60_000,
+    queryFn: ({ signal }) =>
+      unwrap(client.GET('/api/v1/sources/extract-presets', { signal })) as Promise<{ presets: ExtractPreset[] }>,
   })
 }
 
