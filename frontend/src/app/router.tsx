@@ -13,7 +13,6 @@ import { fetchSession, sessionKey } from '@/api/hooks'
 import { ApiError } from '@/api/client'
 import type { Session } from '@/api/types'
 import { LoginPage } from '@/features/auth/LoginPage'
-import { DEFAULT_TREND_RANGE } from '@/features/analytics/service-trends'
 import {
   analyticsSearchSchema,
   auditSearchSchema,
@@ -100,16 +99,9 @@ const analyticsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/analytics',
   validateSearch: analyticsSearchSchema,
-  beforeLoad: ({ context, location, search }) => {
+  beforeLoad: ({ context }) => {
     // Both analytics endpoints need logs:search; send viewers without it somewhere useful.
     if (!context.session.permissions.includes('logs:search')) throw redirect({ to: '/dashboard' })
-    // An hour holds a single point of the trends view's default window, so a
-    // link that names the view but no range gets a day rather than a chart
-    // with one dot on it. A range written in the link is always kept, which
-    // is why the raw query string is what decides.
-    if (search.view === 'trends' && !/[?&]from=/.test(location.searchStr)) {
-      throw redirect({ to: '/analytics', search: { ...search, ...DEFAULT_TREND_RANGE }, replace: true })
-    }
   },
   component: lazyRouteComponent(() => import('@/features/analytics/AnalyticsPage'), 'AnalyticsPage'),
 })
