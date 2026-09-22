@@ -339,11 +339,10 @@ func (s *Server) handleSystemConfig(w http.ResponseWriter, r *http.Request, _ *a
 // enforces retention, and it only reads its setting at startup.
 func (s *Server) handleSystemRetention(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
 	body := map[string]any{
-		"configured": s.opts.API.Config.Retention.Period.String(),
-		"backend":    s.opts.API.Storage.Name(),
-		"editable":   s.opts.API.Store != nil,
-		"instructions": "Retention is enforced by the storage backend, which reads its setting at startup. " +
-			"After changing it here, run ./deploy.sh on the server to restart the stack with the new period.",
+		"configured":   s.opts.API.Config.Retention.Period.String(),
+		"backend":      s.opts.API.Storage.Name(),
+		"editable":     s.opts.API.Store != nil,
+		"instructions": retentionInstructions,
 	}
 	if s.opts.API.Store != nil {
 		desired, err := retentionSetting(r.Context(), s.opts.API.Store)
@@ -375,6 +374,11 @@ func (s *Server) forwardingStatus() []forwarding.Status {
 	}
 	return s.opts.API.Forwarders()
 }
+
+// retentionInstructions explains why a change needs a restart. Both the read
+// and the write endpoint return it, so the UI never shows two versions.
+const retentionInstructions = "Retention is enforced by the storage backend, which reads its setting at " +
+	"startup. After changing it here, run ./deploy.sh on the server to restart the stack with the new period."
 
 // retentionSetting returns the stored desired retention, or "" when unset.
 func retentionSetting(ctx context.Context, store metadata.Store) (string, error) {
@@ -433,7 +437,7 @@ func (s *Server) handleSetRetention(w http.ResponseWriter, r *http.Request, p *a
 	s.audit(r, p, "retention.update", "success", map[string]any{"period": period.String(), "previous": current})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"desired": period.String(), "configured": current, "restart_required": period.String() != current,
-		"instructions": "Run ./deploy.sh on the server to restart the stack with the new period.",
+		"instructions": retentionInstructions,
 	})
 	return nil
 }

@@ -249,10 +249,20 @@ force_env() {
 # start-up flag, Syslogc's configuration, and what an administrator set in
 # the UI. The flag wins when given; otherwise the stored setting is applied,
 # so a change made in the UI takes effect on this restart.
+# psql_settings runs a statement against the metadata database, quietly.
+psql_settings() {
+  $SUDO docker compose exec -T postgres psql -U syslogc -tAc "$1" 2>/dev/null
+}
+
 if [[ "$RETENTION_SET" == true ]]; then
   force_env SYSLOGC_RETENTION "$RETENTION"
-elif stored="$($SUDO docker compose exec -T postgres psql -U syslogc -tAc \
-  "select value->>'period' from settings where key = 'retention'" 2>/dev/null | tr -d '[:space:]')" &&
+  # The stored setting is what the server adopts at startup, so the flag
+  # updates it too; otherwise the backend and the server would disagree.
+  if psql_settings "insert into settings (key, value) values ('retention', jsonb_build_object('period', '$RETENTION'))
+      on conflict (key) do update set value = excluded.value, updated_at = now()" >/dev/null; then
+    ok "retention $RETENTION (also saved as the setting shown in the web UI)"
+  fi
+elif stored="$(psql_settings "select value->>'period' from settings where key = 'retention'" | tr -d '[:space:]')" &&
   [[ -n "$stored" ]]; then
   if ! grep -qx "SYSLOGC_RETENTION=$stored" .env; then
     force_env SYSLOGC_RETENTION "$stored"
