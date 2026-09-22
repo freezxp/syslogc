@@ -31,6 +31,9 @@ logger --server 127.0.0.1 --udp --port 514 "Test syslog message"
 Open the URL it prints, sign in as `admin`, and search for `Test`. Re-running
 `./deploy.sh` is safe; `./deploy.sh --status` and `--stop` do what they say.
 
+Upgrade later with `./deploy.sh --upgrade`, which backs up metadata, rebuilds
+and restarts.
+
 Useful flags: `--domain logs.example.com` (behind a reverse proxy),
 `--retention 90d`, `--monitoring` (Prometheus and Grafana), `--forward URL`
 (mirror logs to another instance), `--port` and `--bind`.

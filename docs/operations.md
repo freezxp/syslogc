@@ -215,12 +215,24 @@ guess, not a backup.
 ## Upgrades
 
 ```bash
+./deploy.sh --upgrade
+```
+
+It refuses to run with uncommitted changes, fast-forwards the checkout,
+prints what changed, takes a metadata backup (startup runs migrations), then
+rebuilds and restarts with the same overlays and settings. `--no-backup`
+skips the backup; `--pull` takes a published image instead of building.
+
+By hand, the same thing is:
+
+```bash
 git pull
+deploy/backup/backup.sh ./backups
 docker compose up -d --build      # or pull a published image tag
 ```
 
 Database migrations run automatically at startup, under an advisory lock, so
-rolling several API nodes at once is safe. Take a metadata backup first.
+rolling several API nodes at once is safe.
 Shutdown drains the ingest queue (`shutdown.timeout`, 30 s by default) before
 the process exits; anything still queued is counted as
 `dropped{reason="shutdown"}`.

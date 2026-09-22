@@ -32,6 +32,7 @@ It never overwrites settings already in `.env`, so re-running it is safe.
 | `--retention 90d` | How long logs are kept (sets both Syslogc and VictoriaLogs) |
 | `--monitoring` | Also run Prometheus and Grafana |
 | `--forward URL` | Mirror stored logs to another VictoriaLogs instance |
+| `--upgrade` | Fetch new commits, back up metadata, rebuild and restart |
 | `--status`, `--stop` | What is running; stop it (data is kept) |
 
 ## Docker Compose by hand
