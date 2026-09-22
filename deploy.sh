@@ -19,6 +19,7 @@ cd "$REPO_DIR"
 BIND="0.0.0.0"
 PORT="8080"
 RETENTION="30d"
+RETENTION_SET=false
 DOMAIN=""
 PROXY_IP=""
 MONITORING=false
@@ -61,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     --proxy-ip) PROXY_IP="${2:?--proxy-ip needs an address}"; shift 2 ;;
     --bind) BIND="${2:?--bind needs an address}"; shift 2 ;;
     --port) PORT="${2:?--port needs a port}"; shift 2 ;;
-    --retention) RETENTION="${2:?--retention needs a period}"; shift 2 ;;
+    --retention) RETENTION="${2:?--retention needs a period}"; RETENTION_SET=true; shift 2 ;;
     --monitoring) MONITORING=true; shift ;;
     --forward) FORWARD_URL="${2:?--forward needs a URL}"; shift 2 ;;
     --pull) PULL=true; shift ;;
@@ -236,7 +237,29 @@ set_env() {
   fi
   printf '%s=%s\n' "$key" "$value" >> .env
 }
+# force_env replaces a value, for settings that must win over what is there.
+force_env() {
+  sed -i "/^$1=/d" .env
+  printf '%s=%s\n' "$1" "$2" >> .env
+}
+
 [[ -f .env ]] || printf '# Syslogc deployment settings (written by deploy.sh).\n' > .env
+
+# Retention lives in three places that must agree: the storage backend's
+# start-up flag, Syslogc's configuration, and what an administrator set in
+# the UI. The flag wins when given; otherwise the stored setting is applied,
+# so a change made in the UI takes effect on this restart.
+if [[ "$RETENTION_SET" == true ]]; then
+  force_env SYSLOGC_RETENTION "$RETENTION"
+elif stored="$($SUDO docker compose exec -T postgres psql -U syslogc -tAc \
+  "select value->>'period' from settings where key = 'retention'" 2>/dev/null | tr -d '[:space:]')" &&
+  [[ -n "$stored" ]]; then
+  if ! grep -qx "SYSLOGC_RETENTION=$stored" .env; then
+    force_env SYSLOGC_RETENTION "$stored"
+    ok "applying retention $stored set in the web UI"
+  fi
+fi
+
 set_env SYSLOGC_HTTP_BIND "$BIND"
 set_env SYSLOGC_HTTP_PORT "$PORT"
 set_env SYSLOGC_RETENTION "$RETENTION"

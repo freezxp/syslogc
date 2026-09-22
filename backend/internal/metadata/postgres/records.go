@@ -274,3 +274,22 @@ func nullTime(t time.Time) any {
 	}
 	return t
 }
+
+// ---- settings ---------------------------------------------------------
+
+func (s *Store) Setting(ctx context.Context, key string) (*metadata.Setting, error) {
+	var out metadata.Setting
+	err := s.pool.QueryRow(ctx, "SELECT key, value, updated_by, updated_at FROM settings WHERE key = $1", key).
+		Scan(&out.Key, &out.Value, &out.UpdatedBy, &out.UpdatedAt)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	return &out, nil
+}
+
+func (s *Store) SetSetting(ctx context.Context, in *metadata.Setting) error {
+	return s.pool.QueryRow(ctx, `INSERT INTO settings (key, value, updated_by, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = now()
+		RETURNING updated_at`, in.Key, in.Value, in.UpdatedBy).Scan(&in.UpdatedAt)
+}

@@ -92,7 +92,6 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 		return nil, err
 	}
 	a.backend = backend
-	a.retention.Store(&retentionStatus{Configured: cfg.Retention.Period.String(), Status: "unknown"})
 
 	dsn, err := postgresDSN(cfg.Metadata.Postgres)
 	if err != nil {
@@ -104,7 +103,18 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 			return nil, err
 		}
 		a.store = store
+		// A retention set in the UI is stored in the database and becomes
+		// effective here, at startup: the storage backend reads its own
+		// retention when it starts, so both take effect on the same restart.
+		if period, err := storedRetention(ctx, store); err != nil {
+			log.Warn("could not read the stored retention setting; using the configured value", "error", err)
+		} else if period > 0 && period != cfg.Retention.Period {
+			log.Info("retention from the database overrides the configuration file",
+				"stored", period.String(), "file", cfg.Retention.Period.String())
+			cfg.Retention.Period = period
+		}
 	}
+	a.retention.Store(&retentionStatus{Configured: cfg.Retention.Period.String(), Status: "unknown"})
 
 	checks := []api.ReadinessCheck{{Name: "storage", Check: backend.Ping}}
 	if a.store != nil {
@@ -463,6 +473,29 @@ func (a *App) closeResources() {
 	if a.store != nil {
 		a.store.Close()
 	}
+}
+
+// storedRetention returns the retention an administrator set in the UI, or 0
+// when none is stored.
+func storedRetention(ctx context.Context, store metadata.Store) (config.Duration, error) {
+	setting, err := store.Setting(ctx, metadata.SettingRetention)
+	if errors.Is(err, metadata.ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	var v struct {
+		Period string `json:"period"`
+	}
+	if err := json.Unmarshal(setting.Value, &v); err != nil {
+		return 0, err
+	}
+	var period config.Duration
+	if err := period.UnmarshalText([]byte(v.Period)); err != nil {
+		return 0, fmt.Errorf("stored retention %q: %w", v.Period, err)
+	}
+	return period, nil
 }
 
 // sourceReconcileInterval bounds how long a source change takes to apply
