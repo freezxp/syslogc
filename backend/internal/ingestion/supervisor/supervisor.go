@@ -135,15 +135,25 @@ func (s *Supervisor) Reconcile(ctx context.Context, sources []Desired) {
 		if !known {
 			continue
 		}
-		if sameBind(prev.Source, d.Source) || !d.Source.IsEnabled() {
+		if sameBind(prev.Source, d.Source) || s.boundTo(d.Source) || !d.Source.IsEnabled() {
 			s.stopSource(ctx, d.Source.Name, prev.Source)
 		} else {
 			stopAfter = append(stopAfter, prev.Source)
 		}
 	}
 	s.apply(changed)
+	// Only give up the old listener once its replacement is actually
+	// serving. If the new one could not bind, keeping the old one is far
+	// better than leaving the source dead, and restoring the previous
+	// definition makes the next reconcile try again.
 	for _, prev := range stopAfter {
-		s.stopSource(ctx, prev.Name, prev)
+		if st, ok := s.status[prev.Name]; ok && st.State == StateRunning {
+			s.stopSource(ctx, prev.Name, prev)
+			continue
+		}
+		s.log.Warn("keeping the running listener: its replacement did not start",
+			"source", prev.Name, "error", s.status[prev.Name].Error)
+		s.desired[prev.Name] = Desired{Source: prev, Origin: s.desired[prev.Name].Origin}
 	}
 	s.log.Info("sources reconciled", "changed", len(changed), "sources", len(sources))
 }
@@ -151,6 +161,19 @@ func (s *Supervisor) Reconcile(ctx context.Context, sources []Desired) {
 // sameBind reports whether two definitions listen on the same address.
 func sameBind(a, b config.Source) bool {
 	return a.Type == b.Type && a.Protocol == b.Protocol && a.Address == b.Address
+}
+
+// boundTo reports whether the source's listener is already bound to the
+// address the new definition asks for. A source configured with port 0 and
+// then pinned to the port it was given reads as a changed address, but it is
+// the same socket: binding it a second time would fail.
+func (s *Supervisor) boundTo(sc config.Source) bool {
+	r, ok := s.running[sc.Name]
+	if !ok || r.settings.Config.Type != sc.Type || r.settings.Config.Protocol != sc.Protocol {
+		return false
+	}
+	addr := r.listener.Addr()
+	return addr != nil && addr.String() == sc.Address
 }
 
 // stopSource stops one running source. The caller holds the lock.

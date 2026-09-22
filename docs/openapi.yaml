@@ -554,6 +554,29 @@ paths:
         "409": {$ref: "#/components/responses/Problem"}
         "422": {$ref: "#/components/responses/Problem"}
 
+  /api/v1/sources/adopt:
+    post:
+      tags: [sources]
+      summary: Copy a configuration-file source into the database
+      description: |
+        Makes a read-only source from `ingestion.sources` editable here. The
+        copy keeps the source's name and settings, and the file entry is
+        ignored while it exists; deleting the copy hands control back to the
+        file. The listener is not interrupted. Requires `sources:manage`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string, description: Name of the configuration-file source}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/Source"}}}}
+        "404": {$ref: "#/components/responses/Problem"}
+        "409": {$ref: "#/components/responses/Problem"}
+
   /api/v1/sources/test-extract:
     post:
       tags: [sources]
@@ -962,6 +985,11 @@ components:
           type: string
           enum: [file, database]
           description: "`file` sources are read-only and win any name or address conflict."
+        adopted:
+          type: boolean
+          description: >-
+            True when this database source replaces a configuration-file source
+            of the same name, which stays in the file but is ignored.
         status: {$ref: "#/components/schemas/SourceStatusDetail"}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}

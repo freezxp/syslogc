@@ -18,10 +18,13 @@ import (
 )
 
 type sourceJSONBody struct {
-	ID        *uuid.UUID         `json:"id,omitempty"`
-	Config    config.Source      `json:"config"`
-	Enabled   bool               `json:"enabled"`
-	Origin    string             `json:"origin"`
+	ID      *uuid.UUID    `json:"id,omitempty"`
+	Config  config.Source `json:"config"`
+	Enabled bool          `json:"enabled"`
+	Origin  string        `json:"origin"`
+	// Adopted marks a source copied from the configuration file, whose entry
+	// there is now ignored.
+	Adopted   bool               `json:"adopted,omitempty"`
 	Status    *supervisor.Status `json:"status,omitempty"`
 	CreatedAt *time.Time         `json:"created_at,omitempty"`
 	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
@@ -42,7 +45,7 @@ func managedSource(m metadata.Source, status map[string]supervisor.Status) (sour
 	}
 	sc.Name = m.Name
 	body := sourceJSONBody{ID: &m.ID, Config: sc, Enabled: m.Enabled, Origin: supervisor.OriginDatabase,
-		CreatedAt: &m.CreatedAt, UpdatedAt: &m.UpdatedAt, Version: m.Version}
+		Adopted: m.Adopted, CreatedAt: &m.CreatedAt, UpdatedAt: &m.UpdatedAt, Version: m.Version}
 	if st, ok := status[m.Name]; ok {
 		body.Status = &st
 	}
@@ -64,25 +67,37 @@ func (s *Server) sourceStatuses() map[string]supervisor.Status {
 func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
 	status := s.sourceStatuses()
 	out := []sourceJSONBody{}
+	var managed []metadata.Source
+	if s.opts.API.Store != nil {
+		var err error
+		if managed, err = s.opts.API.Store.ListSources(r.Context(), p.Tenant); err != nil {
+			return err
+		}
+	}
+	// A configuration-file entry that has been adopted is no longer used, so
+	// listing it next to the copy that replaced it would be confusing.
+	adopted := map[string]bool{}
+	for _, m := range managed {
+		if m.Adopted {
+			adopted[strings.ToLower(m.Name)] = true
+		}
+	}
 	for _, sc := range s.opts.API.FileSources {
+		if adopted[strings.ToLower(sc.Name)] {
+			continue
+		}
 		body := sourceJSONBody{Config: sc, Enabled: sc.IsEnabled(), Origin: supervisor.OriginFile}
 		if st, ok := status[sc.Name]; ok {
 			body.Status = &st
 		}
 		out = append(out, body)
 	}
-	if s.opts.API.Store != nil {
-		managed, err := s.opts.API.Store.ListSources(r.Context(), p.Tenant)
+	for _, m := range managed {
+		body, err := managedSource(m, status)
 		if err != nil {
 			return err
 		}
-		for _, m := range managed {
-			body, err := managedSource(m, status)
-			if err != nil {
-				return err
-			}
-			out = append(out, body)
-		}
+		out = append(out, body)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sources": out})
 	return nil
@@ -102,7 +117,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request, p *auth
 }
 
 func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
-	in, sc, err := s.decodeSource(w, r, p, uuid.Nil)
+	in, sc, err := s.decodeSource(w, r, p, nil)
 	if err != nil {
 		return err
 	}
@@ -132,7 +147,7 @@ func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request, p *a
 	if err != nil {
 		return err
 	}
-	in, sc, err := s.decodeSource(w, r, p, m.ID)
+	in, sc, err := s.decodeSource(w, r, p, m)
 	if err != nil {
 		return err
 	}
@@ -195,7 +210,7 @@ func (s *Server) loadSource(r *http.Request, p *auth.Principal) (*metadata.Sourc
 
 // decodeSource validates a create or update body against the file sources and
 // the other managed sources.
-func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Principal, self uuid.UUID) (*sourceInput, config.Source, error) {
+func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Principal, self *metadata.Source) (*sourceInput, config.Source, error) {
 	var in sourceInput
 	if s.opts.API.Store == nil {
 		return nil, config.Source{}, errStatus(http.StatusNotFound, "not_found", "source management requires a metadata database")
@@ -216,6 +231,11 @@ func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		return nil, sc, badRequest("validation_failed", "/config/tenant", "tenant must be %q", p.Tenant)
 	}
 	for _, other := range s.opts.API.FileSources {
+		// An adopted source replaces its configuration-file entry, so that
+		// entry is not something it can collide with.
+		if self != nil && self.Adopted && strings.EqualFold(other.Name, self.Name) {
+			continue
+		}
 		if reason := sc.ConflictsWith(other); reason != "" {
 			return nil, sc, badRequest("validation_failed", "/config", "conflicts with a source from the configuration file: %s", reason)
 		}
@@ -225,7 +245,7 @@ func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		return nil, sc, err
 	}
 	for _, m := range managed {
-		if m.ID == self {
+		if self != nil && m.ID == self.ID {
 			continue
 		}
 		other, err := managedSource(m, nil)
@@ -300,5 +320,63 @@ func (s *Server) handleTestExtract(w http.ResponseWriter, r *http.Request, _ *au
 		results = append(results, out)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	return nil
+}
+
+// handleAdoptSource copies a configuration-file source into the database so
+// it can be edited here. The file entry stays where it is but stops being
+// used, and deleting the copy hands control back to it.
+func (s *Server) handleAdoptSource(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
+	if s.opts.API.Store == nil {
+		return errStatus(http.StatusNotFound, "not_configured", "source management requires a metadata database")
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &req, true); err != nil {
+		return err
+	}
+	var file *config.Source
+	for i, sc := range s.opts.API.FileSources {
+		if strings.EqualFold(sc.Name, req.Name) {
+			file = &s.opts.API.FileSources[i]
+			break
+		}
+	}
+	if file == nil {
+		return errStatus(http.StatusNotFound, "not_found", "no source named %q in the configuration file", req.Name)
+	}
+	managed, err := s.opts.API.Store.ListSources(r.Context(), p.Tenant)
+	if err != nil {
+		return err
+	}
+	for _, m := range managed {
+		if strings.EqualFold(m.Name, file.Name) {
+			return errStatus(http.StatusConflict, "conflict", "%q is already managed here", file.Name)
+		}
+	}
+
+	sc := *file
+	if err := config.PrepareSource(&sc); err != nil {
+		return badRequest("validation_failed", "/name", "the configuration-file source is invalid: %v", err)
+	}
+	raw, err := json.Marshal(sc)
+	if err != nil {
+		return err
+	}
+	m := &metadata.Source{Tenant: p.Tenant, Name: sc.Name, Config: raw, Enabled: sc.IsEnabled(),
+		Adopted: true, CreatedBy: &p.UserID}
+	if err := s.opts.API.Store.CreateSource(r.Context(), m); err != nil {
+		if errors.Is(err, metadata.ErrConflict) {
+			return errStatus(http.StatusConflict, "conflict", "%q is already managed here", sc.Name)
+		}
+		return err
+	}
+	s.audit(r, p, "sources.adopt", "success", map[string]any{"source": sc.Name, "id": m.ID})
+	body, err := managedSource(*m, s.sourceStatuses())
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusCreated, body)
 	return nil
 }

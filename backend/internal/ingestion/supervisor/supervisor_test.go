@@ -176,3 +176,60 @@ func TestSupervisorReconcile(t *testing.T) {
 		t.Error("http source still registered after removal")
 	}
 }
+
+func TestReconcileKeepsTheOldListenerWhenTheNewOneFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Something else already holds the address the source is moved to.
+	busy, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+
+	s := New(nopSink{}, metrics.New("t", "t"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.Start([]config.Source{sourceConfig("moving", "udp", "127.0.0.1:0", true)})
+	before := udpPort(t, s, "moving")
+
+	moved := Desired{Source: sourceConfig("moving", "udp", busy.LocalAddr().String(), true), Origin: OriginFile}
+	s.Reconcile(ctx, []Desired{moved})
+
+	if s.Addr("moving") == nil {
+		t.Fatal("the source was left with no listener after a failed rebind")
+	}
+	if got := udpPort(t, s, "moving"); got != before {
+		t.Errorf("listener moved to %d although the new address was unusable", got)
+	}
+
+	// The next reconcile to a usable address succeeds, so the failure is not
+	// remembered as the desired state.
+	ok := Desired{Source: sourceConfig("moving", "udp", "127.0.0.1:0", true), Origin: OriginFile}
+	ok.Source.MaxMessageBytes = 2048
+	s.Reconcile(ctx, []Desired{ok})
+	if s.Addr("moving") == nil {
+		t.Error("source not running after a later successful reconcile")
+	}
+}
+
+func TestReconcilePinsASourceToThePortItAlreadyHolds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s := New(nopSink{}, metrics.New("t", "t"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s.Start([]config.Source{sourceConfig("pinned", "udp", "127.0.0.1:0", true)})
+	addr := s.Addr("pinned").String()
+
+	// Rewriting ":0" as the port that was handed out is the same socket, so
+	// the listener must release it before rebinding rather than fight itself.
+	pinned := sourceConfig("pinned", "udp", addr, true)
+	pinned.MaxMessageBytes = 4096
+	s.Reconcile(ctx, []Desired{{Source: pinned, Origin: OriginFile}})
+
+	if got := s.Addr("pinned"); got == nil || got.String() != addr {
+		t.Fatalf("addr = %v, want the source still bound to %s", got, addr)
+	}
+	for _, st := range s.Statuses() {
+		if st.Name == "pinned" && st.State != StateRunning {
+			t.Fatalf("state = %s (%s), want running", st.State, st.Error)
+		}
+	}
+}

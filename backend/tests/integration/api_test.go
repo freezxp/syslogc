@@ -541,3 +541,118 @@ func TestAnalyticsAgainstVictoriaLogs(t *testing.T) {
 		t.Errorf("native pipes in analytics: %d %s", resp.StatusCode, body)
 	}
 }
+
+// TestAdoptedSourceReplacesTheFileEntry covers taking over a
+// configuration-file source: the copy becomes editable, its changes reach the
+// running listener, and deleting it hands control back to the file.
+func TestAdoptedSourceReplacesTheFileEntry(t *testing.T) {
+	a := startApp(t, nil)
+	c := login(t, a)
+	id := runID()
+
+	resp, body := c.post(t, "/api/v1/sources/adopt", map[string]string{"name": "it-udp"})
+	var adopted struct {
+		ID      string `json:"id"`
+		Version int    `json:"version"`
+		Adopted bool   `json:"adopted"`
+	}
+	if err := json.Unmarshal(body, &adopted); err != nil || resp.StatusCode != http.StatusCreated || !adopted.Adopted {
+		t.Fatalf("adopt: %d %s", resp.StatusCode, body)
+	}
+
+	// The listener keeps running under the adopted definition: one source,
+	// from the database, still bound.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		_, body := c.do(t, "GET", "/api/v1/sources", nil, nil)
+		var list struct {
+			Sources []struct {
+				Origin string `json:"origin"`
+				Config struct {
+					Name string `json:"name"`
+				} `json:"config"`
+				Status *struct {
+					State string `json:"state"`
+				} `json:"status"`
+			} `json:"sources"`
+		}
+		_ = json.Unmarshal(body, &list)
+		n, running := 0, false
+		for _, s := range list.Sources {
+			if s.Config.Name == "it-udp" {
+				n++
+				running = s.Origin == "database" && s.Status != nil && s.Status.State == "running"
+			}
+		}
+		if n == 1 && running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("adopted source did not take over: %s", body)
+		}
+		time.Sleep(time.Second)
+	}
+
+	// An extract rule added to the adopted source reaches the listener. The
+	// address is pinned to the one already bound, so the rebind keeps the
+	// port the test sends to.
+	addr := waitForAddr(t, a, "it-udp")
+	update := map[string]any{"version": adopted.Version, "config": map[string]any{
+		"name": "it-udp", "type": "syslog", "protocol": "udp", "address": addr,
+		"extract": []map[string]any{{"name": "dnsdist", "contains": "dnsdist", "prefix": "dns.",
+			"regex": `^\S+ dnsdist (?P<event>\S+) \S+ (?P<client_ip>\S+)`}}}}
+	if resp, body := c.do(t, "PUT", "/api/v1/sources/"+adopted.ID, jsonBody(update),
+		map[string]string{"Content-Type": "application/json"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("update adopted source: %d %s", resp.StatusCode, body)
+	}
+
+	host := "adopt-" + id
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		conn, err := net.Dial("udp", addr)
+		if err == nil {
+			fmt.Fprintf(conn, "<30>1 - %s dnsdist 0 - - 2026-09-22T05:30:00Z dnsdist CLIENT_QUERY - 10.0.0.7 123", host)
+			conn.Close()
+		}
+		_, body := c.post(t, "/api/v1/logs/search", map[string]any{
+			"time_range": map[string]string{"from": "now-15m", "to": "now+1m"},
+			"filter":     map[string]any{"op": "eq", "field": "hostname", "value": host}, "limit": 1})
+		if strings.Contains(string(body), `"dns.client_ip":"10.0.0.7"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("extract rule from the adopted source never applied: %s", body)
+		}
+		time.Sleep(time.Second)
+	}
+
+	// Deleting the copy restores the configuration-file source.
+	if resp, _ := c.do(t, "DELETE", "/api/v1/sources/"+adopted.ID, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Fatal("delete failed")
+	}
+	deadline = time.Now().Add(20 * time.Second)
+	for {
+		_, body := c.do(t, "GET", "/api/v1/sources", nil, nil)
+		if strings.Contains(string(body), `"name":"it-udp"`) && strings.Contains(string(body), `"origin":"file"`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("file source did not come back: %s", body)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// waitForAddr returns a source's bound address, waiting out the moment a
+// reconcile has stopped the listener and not yet started it again.
+func waitForAddr(t *testing.T, a *app.App, name string) string {
+	t.Helper()
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); {
+		if addr := a.Supervisor().Addr(name); addr != nil {
+			return addr.String()
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("source %s never reported a bound address", name)
+	return ""
+}

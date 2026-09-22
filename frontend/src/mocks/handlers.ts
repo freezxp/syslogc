@@ -1171,10 +1171,36 @@ export const handlers = [
       }),
   ),
 
-  http.get(
-    api('/sources'),
-    () => requireAuth() ?? HttpResponse.json({ sources: [...FILE_SOURCES, ...managedSources] }),
-  ),
+  http.get(api('/sources'), () => {
+    // A file source that has been adopted is replaced by its copy.
+    const adopted = new Set(managedSources.filter((s) => s.adopted).map((s) => s.config.name))
+    const file = FILE_SOURCES.filter((s) => !adopted.has(s.config.name))
+    return requireAuth() ?? HttpResponse.json({ sources: [...file, ...managedSources] })
+  }),
+  http.post(api('/sources/adopt'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const { name } = (await request.json()) as { name: string }
+    const file = FILE_SOURCES.find((s) => s.config.name === name)
+    if (!file) return problem(404, 'not_found', 'Not found', `no source named "${name}" in the configuration file`)
+    if (managedSources.some((s) => s.config.name === name)) {
+      return problem(409, 'conflict', 'Conflict', `"${name}" is already managed here`)
+    }
+    const now = new Date().toISOString()
+    const s: ManagedSource = {
+      id: crypto.randomUUID(),
+      config: file.config,
+      enabled: file.enabled,
+      origin: 'database',
+      adopted: true,
+      status: file.status ? { ...file.status, origin: 'database' } : undefined,
+      created_at: now,
+      updated_at: now,
+      version: 1,
+    }
+    managedSources = [...managedSources, s]
+    return HttpResponse.json(s, { status: 201 })
+  }),
   http.post(api('/sources/test-extract'), async ({ request }) => {
     const body = (await request.json()) as ExtractTestRequest
     return requireAuth() ?? testExtract(body)

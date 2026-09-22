@@ -1,9 +1,9 @@
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { AlertTriangle, ArrowLeft, FileLock2, Search, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, FileLock2, PencilLine, Search, Trash2 } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useCreateSource, useDeleteSource, useSource, useSources, useUpdateSource } from '@/api/hooks'
+import { useAdoptSource, useCreateSource, useDeleteSource, useSource, useSources, useUpdateSource } from '@/api/hooks'
 import type { ManagedSource } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { ErrorPanel, Panel, Skeleton, StatusDot } from '@/components/data/common'
@@ -91,6 +91,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
   const navigate = useNavigate()
   const tz = useTimezone()
   const create = useCreateSource()
+  const adopt = useAdoptSource()
   const update = useUpdateSource()
   const remove = useDeleteSource()
   const [form, setForm] = useState<SourceFormState>(() => (source ? configToForm(source) : { ...DEFAULT_SOURCE_FORM }))
@@ -181,8 +182,36 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
 
       {readOnly && (
         <Banner tone="muted" icon={<FileLock2 className="mt-0.5 size-4 shrink-0" />} title="Read-only">
-          This source comes from the configuration file (<code className="mono">ingestion.sources</code>). Edit the file
-          and restart Syslogc to change it.
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p>
+              This source comes from the configuration file (<code className="mono">ingestion.sources</code>). Edit the
+              file and restart Syslogc to change it, or copy it here to manage it in the UI.
+            </p>
+            {can('sources:manage') && source && (
+              <Button
+                variant="default"
+                disabled={adopt.isPending}
+                onClick={() =>
+                  adopt.mutate(source.config.name, {
+                    onSuccess: (s) => navigate({ to: '/sources/$id', params: { id: s.id! }, replace: true }),
+                    onError: (err) => setErrors({ ...emptySourceErrors(), general: [String(err)] }),
+                  })
+                }
+              >
+                <PencilLine /> Manage in the UI
+              </Button>
+            )}
+          </div>
+        </Banner>
+      )}
+      {source?.adopted && (
+        <Banner
+          tone="muted"
+          icon={<FileLock2 className="mt-0.5 size-4 shrink-0" />}
+          title="Copied from the configuration file"
+        >
+          The entry of the same name under <code className="mono">ingestion.sources</code> is ignored while this copy
+          exists. Delete this source to hand control back to the file.
         </Banner>
       )}
       {conflict && (

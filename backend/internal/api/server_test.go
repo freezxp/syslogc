@@ -1311,3 +1311,59 @@ func TestSetRetention(t *testing.T) {
 		t.Errorf("retention change not audited: %s", body)
 	}
 }
+
+func TestAdoptSource(t *testing.T) {
+	e := newEnv(t)
+	ops, viewer := e.login("ops"), e.login("viewer")
+
+	if resp, _ := viewer.do("POST", "/api/v1/sources/adopt", map[string]string{"name": "syslog-udp"}, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer adopting: %d", resp.StatusCode)
+	}
+	if resp, body := ops.do("POST", "/api/v1/sources/adopt", map[string]string{"name": "nope"}, nil); resp.StatusCode != http.StatusNotFound ||
+		!strings.Contains(string(body), "configuration file") {
+		t.Errorf("unknown source: %d %s", resp.StatusCode, body)
+	}
+
+	resp, body := ops.do("POST", "/api/v1/sources/adopt", map[string]string{"name": "syslog-udp"}, nil)
+	var adopted struct {
+		ID      string `json:"id"`
+		Origin  string `json:"origin"`
+		Adopted bool   `json:"adopted"`
+		Version int    `json:"version"`
+		Config  struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &adopted); err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("adopt: %d %s", resp.StatusCode, body)
+	}
+	if !adopted.Adopted || adopted.Origin != "database" || adopted.Config.Name != "syslog-udp" || adopted.Config.Address != ":5514" {
+		t.Fatalf("adopted copy: %+v", adopted)
+	}
+
+	// Adopting twice is refused, and the listing no longer shows the file copy.
+	if resp, _ := ops.do("POST", "/api/v1/sources/adopt", map[string]string{"name": "syslog-udp"}, nil); resp.StatusCode != http.StatusConflict {
+		t.Errorf("second adopt: %d", resp.StatusCode)
+	}
+
+	// The adopted copy can be edited, including its extract rules, without
+	// colliding with the configuration-file entry it replaced.
+	update := map[string]any{"version": adopted.Version, "config": map[string]any{
+		"name": "syslog-udp", "type": "syslog", "protocol": "udp", "address": ":5514",
+		"extract": []map[string]any{{"name": "dnsdist", "contains": "dnsdist", "prefix": "dns.",
+			"regex": `^\S+ dnsdist (?P<event>\S+)`}}}}
+	if resp, body := ops.do("PUT", "/api/v1/sources/"+adopted.ID, update, nil); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), `"dns."`) {
+		t.Fatalf("editing an adopted source: %d %s", resp.StatusCode, body)
+	}
+
+	// Deleting it hands control back to the configuration file.
+	if resp, _ := ops.do("DELETE", "/api/v1/sources/"+adopted.ID, nil, nil); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("delete: %d", resp.StatusCode)
+	}
+	if resp, body := ops.do("GET", "/api/v1/sources", nil, nil); resp.StatusCode != http.StatusOK ||
+		!strings.Contains(string(body), `"origin":"file"`) {
+		t.Errorf("after delete the file source should be listed again: %d %s", resp.StatusCode, body)
+	}
+}

@@ -11,11 +11,11 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 )
 
-const sourceColumns = `id, tenant_id, name, config, enabled, created_by, created_at, updated_at, version`
+const sourceColumns = `id, tenant_id, name, config, enabled, adopted, created_by, created_at, updated_at, version`
 
 func scanSource(row pgx.Row) (*metadata.Source, error) {
 	var s metadata.Source
-	if err := row.Scan(&s.ID, &s.Tenant, &s.Name, &s.Config, &s.Enabled, &s.CreatedBy,
+	if err := row.Scan(&s.ID, &s.Tenant, &s.Name, &s.Config, &s.Enabled, &s.Adopted, &s.CreatedBy,
 		&s.CreatedAt, &s.UpdatedAt, &s.Version); err != nil {
 		return nil, mapErr(err)
 	}
@@ -28,9 +28,9 @@ func (s *Store) CreateSource(ctx context.Context, src *metadata.Source) error {
 	}
 	now := time.Now().UTC()
 	src.CreatedAt, src.UpdatedAt, src.Version = now, now, 1
-	_, err := s.pool.Exec(ctx, `INSERT INTO sources (id, tenant_id, name, config, enabled, created_by,
-		created_at, updated_at, version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1)`,
-		src.ID, src.Tenant, src.Name, src.Config, src.Enabled, src.CreatedBy, now, now)
+	_, err := s.pool.Exec(ctx, `INSERT INTO sources (id, tenant_id, name, config, enabled, adopted, created_by,
+		created_at, updated_at, version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1)`,
+		src.ID, src.Tenant, src.Name, src.Config, src.Enabled, src.Adopted, src.CreatedBy, now, now)
 	return mapErr(err)
 }
 
