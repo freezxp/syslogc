@@ -18,6 +18,7 @@ backend/internal/api/webui/dist/*
 # Deployment-specific overrides written by deploy.sh
 *.local.yaml
 .forwarding-enabled
+.deployed-commit
 
 # Backups written by ./deploy.sh --upgrade
 backups/

@@ -137,10 +137,18 @@ case "$ACTION" in
     git merge --ff-only --quiet "@{u}" || die "the local branch has diverged from its remote; resolve that first"
     after="$(git rev-parse --short HEAD)"
     if [[ "$before" == "$after" ]]; then
-      ok "already at $after; nothing to upgrade"
-      exit 0
+      # The checkout can already be current — someone pulled by hand — while
+      # the containers still run the previous build, so compare against what
+      # was last deployed rather than against the fetch.
+      deployed="$(cat .deployed-commit 2>/dev/null || true)"
+      if [[ "$deployed" == "$after" ]]; then
+        ok "already at $after and running it; nothing to upgrade"
+        exit 0
+      fi
+      ok "already at $after, but the running containers are from ${deployed:-an unknown commit}; redeploying"
+    else
+      ok "$before → $after"
     fi
-    ok "$before → $after"
     git --no-pager log --oneline --no-decorate "$before..$after" | head -10 | sed 's/^/      /'
 
     # Migrations run at startup, so take the cheap backup first.
@@ -341,6 +349,10 @@ if [[ "$ready" != true ]]; then
   die "the stack did not become ready; see: docker compose logs syslogc"
 fi
 ok "ready"
+
+# Record what is running, so --upgrade can tell a current checkout from a
+# current deployment.
+git rev-parse --short HEAD > .deployed-commit 2>/dev/null || true
 
 # ---- 7. what to do next ----------------------------------------------------------
 password="$(docker_compose logs --no-color syslogc 2>/dev/null | sed -n 's/.*Password: \([^ ]*\).*/\1/p' | tail -1)"
