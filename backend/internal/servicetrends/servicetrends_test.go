@@ -757,3 +757,89 @@ func (s *slowQuerier) CategoryCounts(ctx context.Context, _ storage.CategoryQuer
 		return nil, ctx.Err()
 	}
 }
+
+// budgetQuerier answers only queries that cover at most `affordable` buckets,
+// the way storage behaves when a range is too large to count in time.
+type budgetQuerier struct {
+	fakeQuerier
+	affordable int
+	timeouts   int
+	widest     int
+}
+
+func (b *budgetQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	buckets := int(q.Range.End.Sub(q.Range.Start) / q.Step)
+	if buckets > b.widest {
+		b.widest = buckets
+	}
+	if buckets > b.affordable {
+		b.timeouts++
+		return nil, context.DeadlineExceeded
+	}
+	return b.fakeQuerier.CategoryCounts(ctx, q)
+}
+
+func TestARollupAsksForLessWhenAQueryCannotFinish(t *testing.T) {
+	// A deployment counting hundreds of thousands of clients a minute cannot
+	// answer a query covering hours of logs; it can answer one covering a
+	// few buckets.
+	now := time.Date(2026, 9, 23, 2, 30, 0, 0, time.UTC)
+	q := &budgetQuerier{affordable: 3}
+	w := &fakeWriter{}
+	r, state := testRecorder(t, q, w, now, 6*time.Hour)
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the rollup gave up instead of asking for less: %v", err)
+	}
+	if q.timeouts == 0 {
+		t.Fatal("the test did not exercise a query that outran its budget")
+	}
+	if (*state)["5m"].IsZero() {
+		t.Error("no progress was made")
+	}
+	// It converged on a size the storage can answer, rather than stopping.
+	fine := 0
+	for _, got := range q.queries {
+		if got.Step == 5*time.Minute {
+			if n := int(got.Range.End.Sub(got.Range.Start) / got.Step); n > q.affordable {
+				t.Errorf("a query covering %d buckets was still attempted after shrinking", n)
+			}
+			fine++
+		}
+	}
+	if fine < 2 {
+		t.Errorf("%d fine-window queries, want the range split across several", fine)
+	}
+
+	// The learned size is kept, so the next run does not time its way down
+	// again.
+	before := q.timeouts
+	r2, _ := testRecorder(t, q, w, now.Add(10*time.Minute), 6*time.Hour)
+	r2.buckets = r.buckets
+	r2.opts.LoadState = func(context.Context) (State, error) { return *state, nil }
+	if _, err := r2.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if q.timeouts != before {
+		t.Errorf("the second run timed out %d more times; the learned size was not kept", q.timeouts-before)
+	}
+}
+
+func TestOneQueryNeverScansMoreThanItsSpanLimit(t *testing.T) {
+	// The first query of a long backfill is the dangerous one: without a
+	// span limit it would cover a day of logs at the finest resolution.
+	now := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	q := &fakeQuerier{}
+	r, _ := testRecorder(t, q, &fakeWriter{}, now, 7*24*time.Hour)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range q.queries {
+		span := got.Range.End.Sub(got.Range.Start)
+		// A window longer than the limit is still queried whole: a bucket
+		// cannot be split.
+		if span > maxQuerySpan && span > got.Step {
+			t.Errorf("a %s query scanned %s, over the %s limit", WindowName(got.Step), span, maxQuerySpan)
+		}
+	}
+}

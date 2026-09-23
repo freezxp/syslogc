@@ -37,9 +37,18 @@ const (
 	ScopeMain = "main"
 )
 
-// maxBucketsPerQuery bounds how many buckets one rollup query covers, so a
-// long backfill is done in steps instead of one enormous request.
-const maxBucketsPerQuery = 288
+// Limits on how much one rollup query covers.
+const (
+	// maxBucketsPerQuery bounds how many buckets one query returns, so a
+	// long backfill is done in steps instead of one enormous request.
+	maxBucketsPerQuery = 288
+	// maxQuerySpan bounds how much *time* one query scans, which is what
+	// actually costs: 288 five-minute buckets is a day of logs, and on a
+	// deployment counting hundreds of thousands of clients a minute that
+	// cannot finish. A window longer than this is still queried whole,
+	// because a bucket cannot be split.
+	maxQuerySpan = 2 * time.Hour
+)
 
 // Querier is the part of the log store the recorder needs.
 type Querier interface {
@@ -95,6 +104,9 @@ type Recorder struct {
 	// counted does not consume every run. It is in memory on purpose: a
 	// restart is a reason to try again.
 	retryAfter map[string]time.Time
+	// buckets is how much of each window a single query covers, learned from
+	// what this deployment's storage can actually answer in time.
+	buckets map[string]int
 }
 
 // NewRecorder validates opts.
@@ -268,8 +280,9 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 
 	written := 0
 	var recorded time.Time
+	buckets := r.bucketsPerQuery(step)
 	for start := from; start.Before(end); {
-		stop := start.Add(step * maxBucketsPerQuery)
+		stop := start.Add(step * time.Duration(buckets))
 		if stop.After(end) {
 			stop = end
 		}
@@ -288,6 +301,17 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		})
 		cancel()
 		if err != nil {
+			// A query that outran its budget is asking for less at a time,
+			// not for giving up: the same range is tried again over half as
+			// many buckets, and the smaller size is kept for the rest of
+			// this run and the runs after it.
+			if errors.Is(err, context.DeadlineExceeded) && buckets > 1 {
+				buckets /= 2
+				r.learnBuckets(step, buckets)
+				r.opts.Log.Info("a rollup query outran its budget; asking for less at a time",
+					"window", WindowName(step), "buckets_per_query", buckets)
+				continue
+			}
 			return written, recorded, fmt.Errorf("counting %s windows from %s: %w",
 				WindowName(step), start.Format(time.RFC3339), err)
 		}
@@ -323,6 +347,30 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		start = stop
 	}
 	return written, recorded, nil
+}
+
+// bucketsPerQuery is how many buckets to ask for at once: the size learned
+// from earlier queries, or as much as the span limit allows.
+func (r *Recorder) bucketsPerQuery(step time.Duration) int {
+	if n, ok := r.buckets[WindowName(step)]; ok && n > 0 {
+		return n
+	}
+	n := maxBucketsPerQuery
+	if step > 0 {
+		if bySpan := int(maxQuerySpan / step); bySpan < n {
+			n = bySpan
+		}
+	}
+	return max(n, 1)
+}
+
+// learnBuckets remembers a size that worked, so the next run starts there
+// instead of timing its way down again.
+func (r *Recorder) learnBuckets(step time.Duration, n int) {
+	if r.buckets == nil {
+		r.buckets = map[string]int{}
+	}
+	r.buckets[WindowName(step)] = max(n, 1)
 }
 
 // sourceFilter restricts the rollup to the configured sources.
