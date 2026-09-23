@@ -283,6 +283,13 @@ elif stored="$(psql_settings "select value->>'period' from settings where key = 
   fi
 fi
 
+# A configuration file of your own survives upgrades, because it is not the
+# tracked one: deploy.sh only has to point the stack at it.
+if [[ -f deploy/compose/syslogc.local.yaml ]]; then
+  force_env SYSLOGC_CONFIG "./deploy/compose/syslogc.local.yaml"
+  ok "using deploy/compose/syslogc.local.yaml"
+fi
+
 set_env SYSLOGC_HTTP_BIND "$BIND"
 set_env SYSLOGC_HTTP_PORT "$PORT"
 set_env SYSLOGC_RETENTION "$RETENTION"

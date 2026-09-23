@@ -1,6 +1,8 @@
 # Compose configuration with log forwarding enabled.
-# Used by docker-compose.forwarding.yml; identical to syslogc.yaml plus
-# the forwarding section at the end.
+# Used by docker-compose.forwarding.yml, which mounts this INSTEAD of
+# syslogc.yaml — so the two files are the same configuration and a setting
+# added to one belongs in the other. This one has the forwarding section at
+# the end.
 node:
   roles: [all]
 
@@ -19,6 +21,7 @@ storage:
     select_url: http://victorialogs:9428
     stream_fields: [source, hostname, app_name]
     compression: none
+    query_timeout: 60s
 
 ingestion:
   queue:
@@ -68,6 +71,21 @@ ingestion:
       tls:
         cert_file: /etc/syslogc/tls/server.crt
         key_file: /etc/syslogc/tls/server.key
+
+# Measurements derived from the logs. They outlive log retention, so a trend
+# stays readable after the logs behind it are gone. See
+# docs/operations.md#service-trends.
+analytics:
+  service_trends:
+    enabled: true
+    interval: 5m                # the finest window; hourly and daily follow
+    backfill: 7d                # history to fill in on first start
+    domain_field: dns.qname     # produced by the dnsdist extract preset
+    client_field: dns.client_ip
+    query_timeout: 2m           # room for one window; see storage.query_timeout
+    # A busy deployment should name the source carrying DNS, so the rollup
+    # stops reading everything else:
+    # sources: [syslog-tcp]
 
 retention:
   period: 30d                   # keep equal to VictoriaLogs -retentionPeriod

@@ -50,7 +50,11 @@ services:
       # Where rolled-up measurements are stored; empty disables the rollups.
       SYSLOGC_ANALYTICS_METRICS_URL: ${SYSLOGC_METRICS_URL-http://victoriametrics:8428}
     volumes:
-      - ./deploy/compose/syslogc.yaml:/etc/syslogc/syslogc.yaml:ro
+      # Settings of your own belong in a copy that upgrades do not touch:
+      #   cp deploy/compose/syslogc.yaml deploy/compose/syslogc.local.yaml
+      # and set SYSLOGC_CONFIG in .env. *.local.yaml is not tracked, so
+      # ./deploy.sh --upgrade keeps working.
+      - ${SYSLOGC_CONFIG:-./deploy/compose/syslogc.yaml}:/etc/syslogc/syslogc.yaml:ro
       - secrets:/secrets:ro
     read_only: true
     cap_drop: [ALL]
