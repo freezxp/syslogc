@@ -765,6 +765,9 @@ type budgetQuerier struct {
 	affordable int
 	timeouts   int
 	widest     int
+	// storageError stands in for the query limits storage enforces itself,
+	// which arrive as an error of its own rather than as a deadline.
+	storageError error
 }
 
 func (b *budgetQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
@@ -774,6 +777,9 @@ func (b *budgetQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQu
 	}
 	if buckets > b.affordable {
 		b.timeouts++
+		if b.storageError != nil {
+			return nil, b.storageError
+		}
 		return nil, context.DeadlineExceeded
 	}
 	return b.fakeQuerier.CategoryCounts(ctx, q)
@@ -841,5 +847,36 @@ func TestOneQueryNeverScansMoreThanItsSpanLimit(t *testing.T) {
 		if span > maxQuerySpan && span > got.Step {
 			t.Errorf("a %s query scanned %s, over the %s limit", WindowName(got.Step), span, maxQuerySpan)
 		}
+	}
+}
+
+func TestARollupShrinksWhenTheStorageRefusesTheQuery(t *testing.T) {
+	// VictoriaLogs enforces its own -search.maxQueryDuration and answers
+	// with an error of its own; nothing about it looks like a timeout here,
+	// and waiting for a deadline that never comes is how a rollup stalls.
+	now := time.Date(2026, 9, 23, 2, 30, 0, 0, time.UTC)
+	q := &budgetQuerier{
+		affordable:   3,
+		storageError: errors.New("victorialogs: query returned 503: cannot execute query: timeout exceeded"),
+	}
+	r, state := testRecorder(t, q, &fakeWriter{}, now, 6*time.Hour)
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the rollup gave up on an error it could have shrunk past: %v", err)
+	}
+	if (*state)["5m"].IsZero() {
+		t.Error("no progress was made")
+	}
+}
+
+func TestARollupStopsShrinkingOnAnErrorSmallerQueriesCannotFix(t *testing.T) {
+	// A query that fails for its own reasons is not worth halving to death.
+	now := time.Date(2026, 9, 23, 2, 30, 0, 0, time.UTC)
+	q := &failingQuerier{failStep: 5 * time.Minute}
+	r, _ := testRecorder(t, q, &fakeWriter{}, now, 6*time.Hour)
+	if _, err := r.Run(context.Background()); err == nil {
+		t.Fatal("a query that always fails was not reported")
+	}
+	if q.attempts > maxShrinkAttempts+1 {
+		t.Errorf("%d attempts, want it to stop after %d", q.attempts, maxShrinkAttempts+1)
 	}
 }

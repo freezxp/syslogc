@@ -42,6 +42,10 @@ const (
 	// maxBucketsPerQuery bounds how many buckets one query returns, so a
 	// long backfill is done in steps instead of one enormous request.
 	maxBucketsPerQuery = 288
+	// maxShrinkAttempts bounds how often one run halves its query size
+	// before accepting that the window cannot be recorded, so a query that
+	// fails for some other reason is not retried all the way down.
+	maxShrinkAttempts = 6
 	// maxQuerySpan bounds how much *time* one query scans, which is what
 	// actually costs: 288 five-minute buckets is a day of logs, and on a
 	// deployment counting hundreds of thousands of clients a minute that
@@ -196,12 +200,12 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 			// recorded, or the one that fell behind would never catch up.
 			upto = earliest(upto, uptoMain)
 			if err != nil {
-				r.backOff(window, step, now)
+				r.backOff(window, step, now, err)
 			}
 		}
 		errs = appendNonNil(errs, wrapWindow(window, errAll))
 		if errAll != nil {
-			r.backOff(window, step, now)
+			r.backOff(window, step, now, errAll)
 		} else if len(mainCategories) == 0 {
 			delete(r.retryAfter, window)
 		}
@@ -223,13 +227,14 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 // backOff holds a failing resolution back until a quarter of its window has
 // passed — a daily window is retried every six hours, a five-minute one on
 // the next run.
-func (r *Recorder) backOff(window string, step time.Duration, now time.Time) {
+func (r *Recorder) backOff(window string, step time.Duration, now time.Time, cause error) {
 	if r.retryAfter == nil {
 		r.retryAfter = map[string]time.Time{}
 	}
 	r.retryAfter[window] = now.Add(step / 4)
 	r.opts.Log.Warn("a service trend window could not be recorded; holding it back",
-		"window", window, "retrying_after", r.retryAfter[window].Format(time.RFC3339))
+		"window", window, "retrying_after", r.retryAfter[window].Format(time.RFC3339),
+		"buckets_per_query", r.bucketsPerQuery(step), "error", cause)
 }
 
 func wrapWindow(window string, err error) error {
@@ -281,6 +286,7 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 	written := 0
 	var recorded time.Time
 	buckets := r.bucketsPerQuery(step)
+	shrinks := 0
 	for start := from; start.Before(end); {
 		stop := start.Add(step * time.Duration(buckets))
 		if stop.After(end) {
@@ -301,15 +307,18 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		})
 		cancel()
 		if err != nil {
-			// A query that outran its budget is asking for less at a time,
-			// not for giving up: the same range is tried again over half as
-			// many buckets, and the smaller size is kept for the rest of
-			// this run and the runs after it.
-			if errors.Is(err, context.DeadlineExceeded) && buckets > 1 {
+			// A failed query is asking for less at a time, not for giving
+			// up. The cause is not always a deadline of ours: the storage
+			// enforces its own query limits and refuses with an error of its
+			// own, which looks nothing like a timeout. Any failure is worth
+			// one smaller attempt while there is still room to halve.
+			if buckets > 1 && shrinks < maxShrinkAttempts {
 				buckets /= 2
+				shrinks++
 				r.learnBuckets(step, buckets)
-				r.opts.Log.Info("a rollup query outran its budget; asking for less at a time",
-					"window", WindowName(step), "buckets_per_query", buckets)
+				r.opts.Log.Info("a service trend query failed; asking for less at a time",
+					"window", WindowName(step), "buckets_per_query", buckets,
+					"span", (step * time.Duration(buckets)).String(), "error", err.Error())
 				continue
 			}
 			return written, recorded, fmt.Errorf("counting %s windows from %s: %w",
