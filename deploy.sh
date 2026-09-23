@@ -135,6 +135,17 @@ case "$ACTION" in
     step "Upgrading"
     if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
       git status --short --untracked-files=no
+      # Editing a shipped configuration file is the likely reason, and the
+      # fix is to keep those settings in a copy upgrades do not touch rather
+      # than to lose them.
+      for shipped in deploy/compose/syslogc.yaml deploy/compose/syslogc-forwarding.yaml; do
+        if ! git diff --quiet -- "$shipped" 2>/dev/null; then
+          local_copy="${shipped%.yaml}.local.yaml"
+          warn "settings of your own belong in ${local_copy}, which upgrades leave alone:"
+          printf '      cp %s %s\n      git checkout -- %s\n      ./deploy.sh --upgrade\n' \
+            "$shipped" "$local_copy" "$shipped"
+        fi
+      done
       die "there are uncommitted changes; commit or stash them, then upgrade"
     fi
     before="$(git rev-parse --short HEAD)"
