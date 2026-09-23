@@ -299,6 +299,13 @@ fi
 if [[ -f deploy/compose/syslogc.local.yaml ]]; then
   force_env SYSLOGC_CONFIG "./deploy/compose/syslogc.local.yaml"
   ok "using deploy/compose/syslogc.local.yaml"
+  # Forwarding mounts its own configuration file over this one, so settings
+  # put here would be silently ignored while it is on.
+  if [[ -n "$FORWARD_URL" || -f .forwarding-enabled ]]; then
+    warn "forwarding is on, and it mounts its own configuration instead:"
+    printf '      your settings belong in deploy/compose/syslogc-forwarding.local.yaml\n'
+    printf '      (or turn forwarding off: rm .forwarding-enabled)\n'
+  fi
 fi
 
 set_env SYSLOGC_HTTP_BIND "$BIND"
