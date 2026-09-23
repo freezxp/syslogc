@@ -524,3 +524,47 @@ func TestCategoryCountsMatchesDomainsAsPhrases(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestAQueryHonoursTheCallersDeadline(t *testing.T) {
+	var sent []string
+	b := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		sent = append(sent, r.PostForm.Get("timeout"))
+		_, _ = io.WriteString(w, "")
+	}, "none")
+
+	start := time.Date(2026, 9, 23, 2, 0, 0, 0, time.UTC)
+	sel := storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(time.Hour)}}
+
+	// Without a deadline the configured timeout applies, as before.
+	rows, err := b.Search(context.Background(), storage.SearchQuery{Selection: sel, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rows.Close()
+	if len(sent) != 1 || sent[0] == "" {
+		t.Fatalf("timeouts sent = %v, want the configured one", sent)
+	}
+	configured := sent[0]
+
+	// A caller that wants longer than the default gets it: the rollup gives
+	// an expensive window more room than a person waiting on a search, and
+	// telling storage 60s regardless is how that window never completes.
+	ctx, cancel := context.WithTimeout(context.Background(), 17*time.Minute)
+	defer cancel()
+	rows, err = b.Search(ctx, storage.SearchQuery{Selection: sel, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rows.Close()
+	if len(sent) != 2 {
+		t.Fatal("the second query was not sent")
+	}
+	got, err := time.ParseDuration(sent[1])
+	if err != nil {
+		t.Fatalf("timeout %q: %v", sent[1], err)
+	}
+	if got < 16*time.Minute {
+		t.Errorf("timeout sent = %s (configured %s), want the caller's remaining budget", got, configured)
+	}
+}

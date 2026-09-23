@@ -99,7 +99,7 @@ func (b *Backend) Hits(ctx context.Context, q storage.HitsQuery) ([]storage.Hits
 	if pipes != "" {
 		return nil, storage.ErrPipesNotAllowed
 	}
-	form := b.baseForm(f, q.Range)
+	form := b.baseForm(f, q.Range, b.queryBudget(ctx))
 	form.Set("step", strconv.FormatInt(q.Step.Milliseconds(), 10)+"ms")
 	if q.Offset != 0 {
 		form.Set("offset", strconv.FormatInt(q.Offset.Milliseconds(), 10)+"ms")
@@ -219,7 +219,7 @@ func (b *Backend) FieldNames(ctx context.Context, sel storage.Selection) ([]stor
 			Hits  int64  `json:"hits"`
 		} `json:"values"`
 	}
-	if err := b.postJSON(ctx, sel.Tenant, "/select/logsql/field_names", b.baseForm(f, sel.Range), &resp); err != nil {
+	if err := b.postJSON(ctx, sel.Tenant, "/select/logsql/field_names", b.baseForm(f, sel.Range, b.queryBudget(ctx)), &resp); err != nil {
 		return nil, err
 	}
 	out := make([]storage.FieldInfo, 0, len(resp.Values))
@@ -254,27 +254,44 @@ func (b *Backend) Tail(ctx context.Context, q storage.TailQuery) (storage.Rows, 
 	return &rows{body: resp.Body, scanner: sc, cancel: cancel}, nil
 }
 
-func (b *Backend) baseForm(logsql string, r storage.TimeRange) url.Values {
+// queryBudget is how long this query may take.
+//
+// A caller that set its own deadline has decided already — the rollup gives
+// an expensive window more room than a person waiting on a search would get
+// — so the configured timeout is the default, not a ceiling.
+func (b *Backend) queryBudget(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			return remaining
+		}
+	}
+	return b.cfg.QueryTimeout
+}
+
+func (b *Backend) baseForm(logsql string, r storage.TimeRange, budget time.Duration) url.Values {
 	form := url.Values{}
 	form.Set("query", logsql)
 	form.Set("start", r.Start.UTC().Format(time.RFC3339Nano))
 	// VictoriaLogs' start/end args form the half-open interval [start, end)
 	// at nanosecond precision (verified against v1.52), matching TimeRange.
 	form.Set("end", r.End.UTC().Format(time.RFC3339Nano))
-	if b.cfg.QueryTimeout > 0 {
-		form.Set("timeout", b.cfg.QueryTimeout.String())
+	if budget > 0 {
+		// VictoriaLogs stops the query itself at this point and says so,
+		// which is a far better failure than a connection dropped mid-answer.
+		form.Set("timeout", budget.String())
 	}
 	return form
 }
 
 func (b *Backend) query(ctx context.Context, tenant, logsql string, r storage.TimeRange) (storage.Rows, error) {
+	budget := b.queryBudget(ctx)
 	var cancel context.CancelFunc
-	if b.cfg.QueryTimeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, b.cfg.QueryTimeout+5*time.Second)
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && budget > 0 {
+		ctx, cancel = context.WithTimeout(ctx, budget+5*time.Second)
 	} else {
 		ctx, cancel = context.WithCancel(ctx)
 	}
-	resp, err := b.do(ctx, tenant, "/select/logsql/query", b.baseForm(logsql, r)) //nolint:bodyclose // closed by rows.Close
+	resp, err := b.do(ctx, tenant, "/select/logsql/query", b.baseForm(logsql, r, budget)) //nolint:bodyclose // closed by rows.Close
 	if err != nil {
 		cancel()
 		return nil, err
@@ -285,7 +302,7 @@ func (b *Backend) query(ctx context.Context, tenant, logsql string, r storage.Ti
 }
 
 func (b *Backend) postJSON(ctx context.Context, tenant, path string, form url.Values, dst any) error {
-	if b.cfg.QueryTimeout > 0 {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && b.cfg.QueryTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, b.cfg.QueryTimeout+5*time.Second)
 		defer cancel()

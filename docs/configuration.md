@@ -302,7 +302,7 @@ Counts how many distinct clients queried each service in the catalog (see
 | `domain_field` | `dns.qname` | Field holding the queried name. |
 | `client_field` | `dns.client_ip` | Field holding the client address that is counted. |
 | `sources` | `[]` | Restricts the rollup to these sources; empty reads all of them. Naming the source that carries DNS keeps the rollup from scanning everything else, which matters on a busy deployment. |
-| `query_timeout` | `2m` | Bounds one rollup query. A window that cannot be counted within it is skipped, held back for a quarter of its own length, and retried — so an expensive daily count never stops the five-minute ones. |
+| `query_timeout` | `2m` | Bounds one rollup query, and is what VictoriaLogs is told to allow — it overrides `storage.victorialogs.query_timeout` for the rollup, so an expensive window can have more room than a person waiting on a search. A window that cannot be counted within it is skipped, held back for a quarter of its own length, and retried — so an expensive daily count never stops the five-minute ones. |
 
 ## Secrets for Docker Compose
 
