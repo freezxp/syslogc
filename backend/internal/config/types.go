@@ -56,6 +56,10 @@ type ServiceTrendsConfig struct {
 	ClientField string `koanf:"client_field"`
 	// Sources restricts the rollup to these source names; empty reads all.
 	Sources []string `koanf:"sources"`
+	// QueryTimeout bounds one rollup query. A window that cannot be counted
+	// within it — a day of a very busy deployment, say — is skipped and
+	// retried later rather than holding up the others.
+	QueryTimeout Duration `koanf:"query_timeout"`
 }
 
 type MetadataConfig struct {

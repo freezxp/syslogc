@@ -46,11 +46,12 @@ func Default() Config {
 		Analytics: AnalyticsConfig{
 			Metrics: MetricsStoreConfig{Timeout: Duration(30 * time.Second)},
 			ServiceTrends: ServiceTrendsConfig{
-				Enabled:     true,
-				Interval:    Duration(5 * time.Minute),
-				Backfill:    Duration(7 * 24 * time.Hour),
-				DomainField: "dns.qname",
-				ClientField: "dns.client_ip",
+				Enabled:      true,
+				Interval:     Duration(5 * time.Minute),
+				Backfill:     Duration(7 * 24 * time.Hour),
+				DomainField:  "dns.qname",
+				ClientField:  "dns.client_ip",
+				QueryTimeout: Duration(2 * time.Minute),
 			},
 		},
 		Shutdown: ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},

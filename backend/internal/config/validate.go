@@ -70,6 +70,9 @@ func (c *Config) Validate() error {
 		case time.Hour%time.Duration(st.Interval) != 0:
 			add("analytics.service_trends.interval: must divide an hour evenly (1m, 5m, 15m, 30m, 1h)")
 		}
+		if st.QueryTimeout <= 0 {
+			add("analytics.service_trends.query_timeout: must be positive")
+		}
 		if st.Backfill < 0 {
 			add("analytics.service_trends.backfill: must not be negative")
 		}

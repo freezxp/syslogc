@@ -834,11 +834,12 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		SaveState: func(ctx context.Context, s servicetrends.State) error {
 			return servicetrends.SaveState(ctx, a.store, s)
 		},
-		Base:        st.Interval.D(),
-		Backfill:    st.Backfill.D(),
-		DomainField: st.DomainField,
-		ClientField: st.ClientField,
-		Sources:     st.Sources,
+		Base:         st.Interval.D(),
+		Backfill:     st.Backfill.D(),
+		DomainField:  st.DomainField,
+		ClientField:  st.ClientField,
+		Sources:      st.Sources,
+		QueryTimeout: st.QueryTimeout.D(),
 	})
 	if err != nil {
 		return err
@@ -852,9 +853,10 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 func (a *App) recordServiceTrends(ctx context.Context) {
 	interval := a.cfg.Analytics.ServiceTrends.Interval.D()
 	run := func() {
-		// A backfill can walk a lot of history, so it gets room; the rollup
-		// is idempotent, so a timeout only postpones work.
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		// A backfill can walk a lot of history, so it gets room; each query
+		// inside is bounded separately, and the rollup is idempotent, so a
+		// timeout only postpones work.
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
 		start := time.Now()
 		written, err := a.trends.Run(cctx)

@@ -2,6 +2,7 @@ package servicetrends
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -80,6 +81,9 @@ type Options struct {
 	ClientField string
 	// Sources restricts the rollup to these source names; empty reads all.
 	Sources []string
+	// QueryTimeout bounds one rollup query (default 2m). A window that
+	// cannot be counted within it is skipped and retried later.
+	QueryTimeout time.Duration
 	// Now is the clock, for tests.
 	Now func() time.Time
 }
@@ -87,6 +91,10 @@ type Options struct {
 // Recorder rolls log data up into the metrics store.
 type Recorder struct {
 	opts Options
+	// retryAfter holds back resolutions that failed, so one that cannot be
+	// counted does not consume every run. It is in memory on purpose: a
+	// restart is a reason to try again.
+	retryAfter map[string]time.Time
 }
 
 // NewRecorder validates opts.
@@ -103,6 +111,9 @@ func NewRecorder(opts Options) (*Recorder, error) {
 	}
 	if opts.Base <= 0 {
 		opts.Base = 5 * time.Minute
+	}
+	if opts.QueryTimeout <= 0 {
+		opts.QueryTimeout = 2 * time.Minute
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
@@ -151,30 +162,88 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 
 	now := r.opts.Now().UTC()
 	written := 0
+	var errs []error
 	for _, step := range r.Resolutions() {
-		from := state[WindowName(step)]
+		window := WindowName(step)
+		// A resolution that keeps failing is retried on its own schedule
+		// rather than on every run: a daily window that cannot be counted
+		// must not spend the rollup's time every five minutes.
+		if until, waiting := r.retryAfter[window]; waiting && now.Before(until) {
+			continue
+		}
+		from := state[window]
+
 		n, upto, err := r.record(ctx, categories, ScopeAll, step, from, now)
 		written += n
-		if err != nil {
-			return written, err
-		}
+		errAll := err
 		if len(mainCategories) > 0 {
-			n, _, err := r.record(ctx, mainCategories, ScopeMain, step, from, now)
+			n, uptoMain, err := r.record(ctx, mainCategories, ScopeMain, step, from, now)
 			written += n
+			errs = appendNonNil(errs, wrapWindow(window, err))
+			// Both scopes must have covered a window before it counts as
+			// recorded, or the one that fell behind would never catch up.
+			upto = earliest(upto, uptoMain)
 			if err != nil {
-				return written, err
+				r.backOff(window, step, now)
 			}
 		}
+		errs = appendNonNil(errs, wrapWindow(window, errAll))
+		if errAll != nil {
+			r.backOff(window, step, now)
+		} else if len(mainCategories) == 0 {
+			delete(r.retryAfter, window)
+		}
+		// Progress is kept even when a later window failed: the alternative
+		// is starting from the same place next time, so the range to cover
+		// grows with every run until nothing finishes at all.
 		if !upto.IsZero() {
-			state[WindowName(step)] = upto
+			state[window] = upto
 		}
 	}
 	if r.opts.SaveState != nil && written > 0 {
 		if err := r.opts.SaveState(ctx, state); err != nil {
-			return written, fmt.Errorf("saving the rollup state: %w", err)
+			errs = append(errs, fmt.Errorf("saving the rollup state: %w", err))
 		}
 	}
-	return written, nil
+	return written, errors.Join(errs...)
+}
+
+// backOff holds a failing resolution back until a quarter of its window has
+// passed — a daily window is retried every six hours, a five-minute one on
+// the next run.
+func (r *Recorder) backOff(window string, step time.Duration, now time.Time) {
+	if r.retryAfter == nil {
+		r.retryAfter = map[string]time.Time{}
+	}
+	r.retryAfter[window] = now.Add(step / 4)
+	r.opts.Log.Warn("a service trend window could not be recorded; holding it back",
+		"window", window, "retrying_after", r.retryAfter[window].Format(time.RFC3339))
+}
+
+func wrapWindow(window string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s windows: %w", window, err)
+}
+
+func appendNonNil(errs []error, err error) []error {
+	if err == nil {
+		return errs
+	}
+	return append(errs, err)
+}
+
+// earliest is the later-of-two progress markers both passes have reached; a
+// pass that made none holds the pair back.
+func earliest(a, b time.Time) time.Time {
+	if a.IsZero() || b.IsZero() {
+		return time.Time{}
+	}
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // record writes every complete window of one resolution between `from` and
@@ -204,7 +273,10 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		if stop.After(end) {
 			stop = end
 		}
-		rows, err := r.opts.Querier.CategoryCounts(ctx, storage.CategoryQuery{
+		// One query is bounded on its own, so a window that cannot be counted
+		// inside the budget is given up on instead of taking the run with it.
+		qctx, cancel := context.WithTimeout(ctx, r.opts.QueryTimeout)
+		rows, err := r.opts.Querier.CategoryCounts(qctx, storage.CategoryQuery{
 			Selection: storage.Selection{
 				Tenant: r.opts.Tenant,
 				Range:  storage.TimeRange{Start: start, End: stop},
@@ -214,6 +286,7 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 			DistinctField: r.opts.ClientField,
 			Step:          step,
 		})
+		cancel()
 		if err != nil {
 			return written, recorded, fmt.Errorf("counting %s windows from %s: %w",
 				WindowName(step), start.Format(time.RFC3339), err)

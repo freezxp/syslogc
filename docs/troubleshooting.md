@@ -152,6 +152,23 @@ The chain, in the order the check walks it:
 An empty chart in the UI carries the same diagnosis in a sentence, so the
 script is only needed when you want the whole chain at once.
 
+### Counts stop at a certain time and never resume
+
+Look for the window that is failing:
+
+```bash
+docker compose logs syslogc | grep -i "service trend"
+```
+
+Counting distinct clients over a whole day is far more work than over five
+minutes, so on a busy deployment the daily window is the one that struggles,
+and it first runs just after midnight UTC. A window that cannot be counted
+within `query_timeout` is skipped and held back — the finer windows carry on
+— but if the daily one never completes you have two options: give it room
+with a larger `analytics.service_trends.query_timeout`, or cut the work with
+`analytics.service_trends.sources`, which stops the rollup reading log
+sources that carry no DNS at all.
+
 ## Useful commands
 
 ```bash

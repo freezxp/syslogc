@@ -640,3 +640,120 @@ func TestDefaultCatalogMainDomainsAreASubsetAndMeaningful(t *testing.T) {
 		}
 	}
 }
+
+// failingQuerier answers normally except for the resolutions named, which is
+// how an expensive daily window behaves on a busy deployment.
+type failingQuerier struct {
+	fakeQuerier
+	failStep time.Duration
+	attempts int
+}
+
+func (f *failingQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	if q.Step == f.failStep {
+		f.attempts++
+		return nil, context.DeadlineExceeded
+	}
+	return f.fakeQuerier.CategoryCounts(ctx, q)
+}
+
+func TestAWindowThatCannotBeCountedDoesNotStopTheOthers(t *testing.T) {
+	// The daily window is the expensive one: counting distinct clients over
+	// a whole day is far more work than over five minutes.
+	now := time.Date(2026, 9, 23, 0, 5, 0, 0, time.UTC)
+	q := &failingQuerier{failStep: ResolutionDay}
+	w := &fakeWriter{}
+	r, state := testRecorder(t, q, w, now, 48*time.Hour)
+
+	written, err := r.Run(context.Background())
+	if err == nil {
+		t.Fatal("the failing window was not reported")
+	}
+	if !strings.Contains(err.Error(), "1d windows") {
+		t.Errorf("err = %v, want it to name the window that failed", err)
+	}
+	if written == 0 {
+		t.Fatal("nothing was recorded, although only the daily window failed")
+	}
+	windows := map[string]bool{}
+	for _, s := range w.samples {
+		windows[s.Labels["window"]] = true
+	}
+	if !windows["5m"] || !windows["1h"] {
+		t.Errorf("recorded windows %v, want the healthy ones to carry on", windows)
+	}
+
+	// Progress is saved despite the failure. Without this the next run
+	// starts from the same place, so the range grows every five minutes
+	// until nothing finishes — which is how the rollup stops for good.
+	if (*state)["5m"].IsZero() {
+		t.Error("no progress was saved, so the next run would redo this one")
+	}
+
+	// A second run a few minutes later records only what is new, and does
+	// not spend itself retrying the window that just failed.
+	before := len(w.samples)
+	attempts := q.attempts
+	r2, _ := testRecorder(t, q, w, now.Add(6*time.Minute), 48*time.Hour)
+	r2.opts.LoadState = func(context.Context) (State, error) { return *state, nil }
+	r2.retryAfter = r.retryAfter
+	if _, err := r2.Run(context.Background()); err != nil {
+		t.Errorf("the second run failed: %v", err)
+	}
+	if q.attempts != attempts {
+		t.Errorf("the failing window was retried after %v, want it held back", 6*time.Minute)
+	}
+	newSamples := len(w.samples) - before
+	if newSamples == 0 || newSamples > 8 {
+		t.Errorf("the second run wrote %d samples, want only the new five-minute window", newSamples)
+	}
+}
+
+func TestAFailingWindowIsRetriedOnItsOwnSchedule(t *testing.T) {
+	now := time.Date(2026, 9, 23, 0, 5, 0, 0, time.UTC)
+	q := &failingQuerier{failStep: ResolutionDay}
+	r, state := testRecorder(t, q, &fakeWriter{}, now, 48*time.Hour)
+	if _, err := r.Run(context.Background()); err == nil {
+		t.Fatal("expected the daily window to fail")
+	}
+	first := q.attempts
+
+	// Six hours later — a quarter of a day — it is tried again.
+	r2, _ := testRecorder(t, q, &fakeWriter{}, now.Add(6*time.Hour+time.Minute), 48*time.Hour)
+	r2.opts.LoadState = func(context.Context) (State, error) { return *state, nil }
+	r2.retryAfter = r.retryAfter
+	_, _ = r2.Run(context.Background())
+	if q.attempts <= first {
+		t.Error("the failing window was never retried")
+	}
+}
+
+func TestQueryTimeoutBoundsOneWindow(t *testing.T) {
+	now := time.Date(2026, 9, 23, 0, 5, 0, 0, time.UTC)
+	slow := &slowQuerier{delay: 300 * time.Millisecond}
+	r, _ := testRecorder(t, slow, &fakeWriter{}, now, time.Hour)
+	r.opts.QueryTimeout = 50 * time.Millisecond
+	if _, err := r.Run(context.Background()); err == nil {
+		t.Fatal("a query that outran its budget was not reported")
+	}
+	if !slow.deadlineSeen {
+		t.Error("the query was not given a deadline of its own")
+	}
+}
+
+type slowQuerier struct {
+	delay        time.Duration
+	deadlineSeen bool
+}
+
+func (s *slowQuerier) CategoryCounts(ctx context.Context, _ storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	if _, ok := ctx.Deadline(); ok {
+		s.deadlineSeen = true
+	}
+	select {
+	case <-time.After(s.delay):
+		return nil, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
