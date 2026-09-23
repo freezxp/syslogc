@@ -298,7 +298,7 @@ Counts how many distinct clients queried each service in the catalog (see
 |---|---|---|
 | `enabled` | `true` | Needs `analytics.metrics.url` and a metadata database; off without either. |
 | `interval` | `5m` | The finest window recorded, and how often the rollup runs. Must divide an hour evenly. Hourly and daily windows are recorded as well, each counted over its own window because distinct counts do not add up. |
-| `backfill` | `7d` | How much history to fill in when a resolution has nothing recorded yet. `0` records forward only. |
+| `backfill` | `7d` | How much history to fill in when a resolution has nothing recorded yet. `0` records forward only. Trimmed to `retention.period` at startup: counting windows whose logs have been deleted finds nothing. |
 | `domain_field` | `dns.qname` | Field holding the queried name. |
 | `client_field` | `dns.client_ip` | Field holding the client address that is counted. |
 | `sources` | `[]` | Restricts the rollup to these sources; empty reads all of them. Naming the source that carries DNS keeps the rollup from scanning everything else, which matters on a busy deployment. |

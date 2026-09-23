@@ -823,6 +823,15 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		}
 		return nil
 	}
+	// Backfilling further than the logs are kept scans for data that was
+	// deleted: the windows come back empty and nothing is recorded, so it
+	// costs work and buys nothing.
+	backfill := st.Backfill.D()
+	if keep := a.cfg.Retention.Period.D(); keep > 0 && backfill > keep {
+		a.log.Info("service trend backfill trimmed to the retention period",
+			"configured", backfill.String(), "retention", keep.String())
+		backfill = keep
+	}
 	recorder, err := servicetrends.NewRecorder(servicetrends.Options{
 		Querier: a.backend.Querier(),
 		Writer:  client,
@@ -835,7 +844,7 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 			return servicetrends.SaveState(ctx, a.store, s)
 		},
 		Base:         st.Interval.D(),
-		Backfill:     st.Backfill.D(),
+		Backfill:     backfill,
 		DomainField:  st.DomainField,
 		ClientField:  st.ClientField,
 		Sources:      st.Sources,
