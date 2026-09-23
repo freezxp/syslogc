@@ -102,6 +102,48 @@ if peak:
         peak.get("label") or peak["service"], int(peak["value"]), peak["at"][11:16]))
 ' && ok "counts are being recorded" || bad "no counts yet — the rollup records a window once it has fully elapsed, so allow one interval (5 minutes by default)"
 
+# --- 5. is it still recording, right now? -------------------------------------
+step "5. Freshness"
+for w in 5m 1h 1d; do
+  api POST /api/v1/analytics/service-trends \
+    "{\"time_range\":{\"from\":\"now-3d\",\"to\":\"now\"},\"window\":\"$w\"}" |
+    W="$w" python3 -c '
+import sys, json, os, datetime
+w = os.environ["W"]
+d = json.load(sys.stdin)
+latest = None
+for s in d.get("series", []):
+    for p in s["points"]:
+        if p["value"] > 0 and (latest is None or p["at"] > latest):
+            latest = p["at"]
+if latest is None:
+    print("    %-3s nothing recorded in the last three days" % w)
+    sys.exit(3)
+at = datetime.datetime.fromisoformat(latest.replace("Z", "+00:00"))
+age = (datetime.datetime.now(datetime.timezone.utc) - at).total_seconds()
+stale = {"5m": 900, "1h": 7200, "1d": 172800}[w]
+print("    %-3s newest count %s (%d minutes ago)%s" % (
+    w, at.strftime("%Y-%m-%d %H:%M UTC"), age / 60, "" if age < stale else "  <- stale"))
+sys.exit(0 if age < stale else 3)
+' || warn "the $w window is not keeping up — see the rollup log line below"
+done
+printf '    %s\n' "rollup log: docker compose logs syslogc | grep -i 'service trend' | tail"
+
+# --- 6. is ingestion itself healthy? ------------------------------------------
+step "6. Sources"
+api GET /api/v1/system/ingestion | python3 -c '
+import sys, json
+for s in json.load(sys.stdin).get("sources", []):
+    dropped = s.get("dropped") or {}
+    total = sum(dropped.values())
+    print("    %-14s %-5s received %-12d dropped %-8d parse errors %-8d connections %d" % (
+        s["name"], s.get("protocol", ""), s.get("received", 0), total,
+        s.get("parse_errors", 0), s.get("active_connections", 0)))
+    if total:
+        print("        dropped:", dropped)
+'
+ok "counters above: dropped should stay 0; one connection means one reader"
+
 step "Result"
 if [[ "$FAILED" == 0 ]]; then
   ok "DNS service trends are working"
