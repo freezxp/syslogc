@@ -267,6 +267,21 @@ first (see [above](#moving-a-configuration-file-source-into-the-ui)) — that
 copies it into the database so extract rules can be edited without touching
 YAML on every node.
 
+### Watching that it keeps up
+
+A rollup that stops loses data permanently once the logs behind it age out,
+so `/metrics` carries how long ago anything was recorded:
+
+| Metric | Meaning |
+|---|---|
+| `syslogc_service_trend_seconds_since_recorded` | Seconds since the newest window was recorded. It is computed when read, so it keeps growing while the rollup is stopped; absent until the first window is written. |
+| `syslogc_service_trend_window_failures_total` | Windows this node could not count, usually a query too large for the storage to answer. |
+
+The shipped alert rules fire when nothing has been recorded for two hours,
+which is a dozen missed five-minute windows and far short of any sensible log
+retention. `./scripts/check-dns-trends.sh` reports the same thing without a
+monitoring stack.
+
 ### Settings
 
 ```yaml

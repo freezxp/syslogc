@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/metricstore"
@@ -111,6 +112,54 @@ type Recorder struct {
 	// buckets is how much of each window a single query covers, learned from
 	// what this deployment's storage can actually answer in time.
 	buckets map[string]int
+
+	// mu guards what monitoring reads while a rollup writes it.
+	mu sync.Mutex
+	// recorded is the end of the newest window written for each resolution,
+	// and failures counts the runs that could not write one. Both are read
+	// at scrape time, from another goroutine.
+	recorded map[string]time.Time
+	failures map[string]int
+}
+
+// WindowStatus is what monitoring needs to know about one resolution.
+type WindowStatus struct {
+	// Window is the resolution, "5m" and so on.
+	Window string
+	// Recorded is the end of the newest window written, zero when none has
+	// been written since this node started.
+	Recorded time.Time
+	// Failures counts the windows this node could not record. On a
+	// deployment whose logs are kept for days, a rollup that stops for
+	// longer than that loses the data for good.
+	Failures int
+}
+
+// Status reports what has been recorded, for metrics and health.
+func (r *Recorder) Status() []WindowStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]WindowStatus, 0, len(r.Resolutions()))
+	for _, step := range r.Resolutions() {
+		w := WindowName(step)
+		out = append(out, WindowStatus{Window: w, Recorded: r.recorded[w], Failures: r.failures[w]})
+	}
+	return out
+}
+
+func (r *Recorder) note(window string, recorded time.Time, failed bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.recorded == nil {
+		r.recorded = map[string]time.Time{}
+		r.failures = map[string]int{}
+	}
+	if !recorded.IsZero() && recorded.After(r.recorded[window]) {
+		r.recorded[window] = recorded
+	}
+	if failed {
+		r.failures[window]++
+	}
 }
 
 // NewRecorder validates opts.
@@ -215,6 +264,7 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 		if !upto.IsZero() {
 			state[window] = upto
 		}
+		r.note(window, upto, errAll != nil)
 	}
 	if r.opts.SaveState != nil && written > 0 {
 		if err := r.opts.SaveState(ctx, state); err != nil {

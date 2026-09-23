@@ -884,3 +884,44 @@ func TestARollupStopsShrinkingOnAnErrorSmallerQueriesCannotFix(t *testing.T) {
 		t.Errorf("%d attempts, want it to stop after %d", q.attempts, maxShrinkAttempts+1)
 	}
 }
+
+func TestStatusReportsWhatMonitoringNeeds(t *testing.T) {
+	now := time.Date(2026, 9, 23, 13, 7, 0, 0, time.UTC)
+	q, w := &fakeQuerier{}, &fakeWriter{}
+	r, _ := testRecorder(t, q, w, now, 48*time.Hour)
+
+	// Nothing recorded yet: the age is unknown rather than zero, which is
+	// the difference between "not started" and "up to date".
+	for _, s := range r.Status() {
+		if !s.Recorded.IsZero() || s.Failures != 0 {
+			t.Errorf("before the first run: %+v", s)
+		}
+	}
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	byWindow := map[string]WindowStatus{}
+	for _, s := range r.Status() {
+		byWindow[s.Window] = s
+	}
+	if got := byWindow["5m"]; got.Recorded.IsZero() {
+		t.Error("the five-minute window reports nothing recorded after a successful run")
+	} else if !got.Recorded.Equal(now.Truncate(5 * time.Minute)) {
+		t.Errorf("recorded = %s, want the end of the last complete window", got.Recorded)
+	}
+
+	// A failing window is counted, which is what an alert watches.
+	failing := &failingQuerier{failStep: ResolutionDay}
+	r2, _ := testRecorder(t, failing, w, now.Add(time.Hour), 48*time.Hour)
+	_, _ = r2.Run(context.Background())
+	var dayFailures int
+	for _, s := range r2.Status() {
+		if s.Window == "1d" {
+			dayFailures = s.Failures
+		}
+	}
+	if dayFailures == 0 {
+		t.Error("a window that could not be recorded was not counted")
+	}
+}

@@ -103,3 +103,30 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: Over 5% of API requests fail on {{ $labels.instance }}
+
+  - name: syslogc-analytics
+    rules:
+      # Trends are counted from logs, so a rollup that stops for longer than
+      # the logs are kept loses that period permanently. Two hours is a dozen
+      # missed five-minute windows: long enough not to fire on one slow run,
+      # far short of any sensible log retention.
+      - alert: SyslogcServiceTrendsStopped
+        expr: syslogc_service_trend_seconds_since_recorded > 7200
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: DNS service trends stopped recording on {{ $labels.instance }}
+          description: >-
+            Nothing recorded for {{ printf "%.0f" $value }} s. The counts come
+            from logs, so whatever is missed is lost once those logs age out.
+            See docs/troubleshooting.md#counts-stop-at-a-certain-time-and-never-resume.
+
+      - alert: SyslogcServiceTrendWindowsFailing
+        expr: increase(syslogc_service_trend_window_failures_total[1h]) > 3
+        for: 10m
+        labels: {severity: info}
+        annotations:
+          summary: Service trend windows are failing on {{ $labels.instance }}
+          description: >-
+            {{ printf "%.0f" $value }} windows could not be counted in the last
+            hour, usually a query too large for the storage to answer.

@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/freezxp/syslogc/backend/internal/api"
 	"github.com/freezxp/syslogc/backend/internal/api/webui"
@@ -854,7 +857,52 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		return err
 	}
 	a.trends = recorder
+	a.exportTrendFreshness(recorder)
 	return nil
+}
+
+// exportTrendFreshness publishes how long ago each window was recorded.
+//
+// The age is computed when the metric is read, not when a rollup finishes,
+// so it keeps growing if the rollup stops — a gauge that is only written on
+// success reports the last good value for ever and alerts on nothing. Where
+// logs are kept for days, a rollup that stops for longer loses that data
+// permanently, so this is the alert worth having.
+func (a *App) exportTrendFreshness(recorder *servicetrends.Recorder) {
+	a.metrics.Registry.MustRegister(prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace: "syslogc",
+			Name:      "service_trend_seconds_since_recorded",
+			Help: "Seconds since the newest service trend window was recorded, " +
+				"across all resolutions. Absent until the first window is written.",
+		},
+		func() float64 {
+			newest := time.Time{}
+			for _, w := range recorder.Status() {
+				if w.Recorded.After(newest) {
+					newest = w.Recorded
+				}
+			}
+			if newest.IsZero() {
+				return math.NaN()
+			}
+			return time.Since(newest).Seconds()
+		},
+	))
+	a.metrics.Registry.MustRegister(prometheus.NewCounterFunc(
+		prometheus.CounterOpts{
+			Namespace: "syslogc",
+			Name:      "service_trend_window_failures_total",
+			Help:      "Service trend windows this node could not record.",
+		},
+		func() float64 {
+			total := 0
+			for _, w := range recorder.Status() {
+				total += w.Failures
+			}
+			return float64(total)
+		},
+	))
 }
 
 // recordServiceTrends runs the rollup on every base interval. The first run
