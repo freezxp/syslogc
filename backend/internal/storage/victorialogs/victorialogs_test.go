@@ -477,3 +477,50 @@ func unquoted(q string) string {
 	}
 	return b.String()
 }
+
+func TestCategoryCountsMatchesDomainsAsPhrases(t *testing.T) {
+	var query string
+	b := newTestBackend(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		query = r.PostForm.Get("query")
+		_, _ = io.WriteString(w, `{"c0":"7","n0":"9"}`+"\n")
+	}, "none")
+
+	start := time.Date(2026, 9, 23, 2, 0, 0, 0, time.UTC)
+	rows, err := b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection:     storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(time.Hour)}},
+		DistinctField: "dns.client_ip",
+		Categories: []storage.Category{{
+			Name: "tiktok", Field: "dns.qname",
+			// A hostile value is data, not syntax.
+			Phrases: []string{"tiktok.com", `evil" or *`},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A phrase, not a regular expression: the backend answers it from its
+	// index instead of testing every row.
+	if !strings.Contains(query, `if ("dns.qname":"tiktok.com" OR `) {
+		t.Errorf("query = %s", query)
+	}
+	if strings.Contains(query, ":~") {
+		t.Errorf("a phrase category compiled to a regular expression: %s", query)
+	}
+	if strings.Contains(query, `evil" or *`) {
+		t.Errorf("the phrase escaped its quotes: %s", query)
+	}
+	if len(rows) != 1 || rows[0].Distinct != 7 {
+		t.Errorf("rows = %+v", rows)
+	}
+
+	// Phrases need a field to match against.
+	_, err = b.CategoryCounts(context.Background(), storage.CategoryQuery{
+		Selection:     storage.Selection{Range: storage.TimeRange{Start: start, End: start.Add(time.Hour)}},
+		DistinctField: "dns.client_ip",
+		Categories:    []storage.Category{{Name: "x", Phrases: []string{"a.com"}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "need a field") {
+		t.Errorf("err = %v", err)
+	}
+}

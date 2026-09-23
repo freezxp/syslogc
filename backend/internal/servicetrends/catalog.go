@@ -220,7 +220,25 @@ func (c Catalog) Categories(domainField string) []storage.Category {
 	services := c.Enabled()
 	out := make([]storage.Category, 0, len(services))
 	for _, s := range services {
-		out = append(out, storage.Category{Name: s.Name, Filter: s.Filter(domainField)})
+		out = append(out, storage.Category{Name: s.Name, Field: domainField, Phrases: phrases(s.Domains)})
+	}
+	return out
+}
+
+// phrases normalises domains for matching. A domain name is a phrase: the
+// backend matches it against the words of a query name, so "tiktok.com"
+// covers www.tiktok.com without covering nottiktok.com, and answers from an
+// index rather than by testing every row.
+func phrases(domains []string) []string {
+	out := make([]string, 0, len(domains))
+	seen := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		d = normalDomain(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
 	}
 	return out
 }
@@ -233,7 +251,7 @@ func (c Catalog) MainCategories(domainField string) []storage.Category {
 		if len(s.MainDomains) == 0 {
 			continue
 		}
-		out = append(out, storage.Category{Name: s.Name, Filter: domainFilter(domainField, s.MainDomains)})
+		out = append(out, storage.Category{Name: s.Name, Field: domainField, Phrases: phrases(s.MainDomains)})
 	}
 	return out
 }

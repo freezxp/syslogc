@@ -143,8 +143,18 @@ type Category struct {
 	// Name identifies the category in the results.
 	Name string
 	// Filter selects the messages that belong to it. A nil filter matches
-	// everything in the selection.
+	// everything in the selection, unless Phrases is set.
 	Filter *filter.Expr
+	// Field and Phrases select by phrase instead, which is what a domain
+	// name is: "tiktok.com" matches www.tiktok.com and api.tiktok.com but
+	// not nottiktok.com, and — unlike a substring or a regular expression —
+	// the backend can answer it from its index. A category counting
+	// hundreds of domains is otherwise hundreds of expressions evaluated
+	// against every row.
+	//
+	// Phrases take precedence over Filter when both are set.
+	Field   string
+	Phrases []string
 }
 
 // CategoryRow is one category's counts in one time bucket.

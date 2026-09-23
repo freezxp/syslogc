@@ -527,7 +527,23 @@ func (b *Backend) CategoryCounts(ctx context.Context, q storage.CategoryQuery) (
 	}
 	for i, c := range q.Categories {
 		cond := ""
-		if c.Filter != nil {
+		switch {
+		case len(c.Phrases) > 0:
+			if c.Field == "" {
+				return nil, fmt.Errorf("victorialogs: category %q: phrases need a field", c.Name)
+			}
+			field := quote(storageField(c.Field))
+			var terms strings.Builder
+			for j, p := range c.Phrases {
+				if j > 0 {
+					terms.WriteString(" OR ")
+				}
+				// quote escapes the value, so a phrase is data however it
+				// was typed.
+				terms.WriteString(field + ":" + quote(p))
+			}
+			cond = " if (" + terms.String() + ")"
+		case c.Filter != nil:
 			compiled, err := CompileFilter(c.Filter)
 			if err != nil {
 				return nil, fmt.Errorf("victorialogs: category %q: %w", c.Name, err)

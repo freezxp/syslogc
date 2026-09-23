@@ -396,6 +396,10 @@ func TestSourceFilterRestrictsTheRollup(t *testing.T) {
 	if got == nil || got.Op != filter.In || got.Field != "source" || got.Values[0] != "syslog-udp" {
 		t.Errorf("filter = %+v", got)
 	}
+	// The categories themselves are phrases, which the backend can index.
+	if c := q.queries[0].Categories[0]; len(c.Phrases) == 0 || c.Field != "dns.qname" {
+		t.Errorf("category = %+v, want domains as phrases on the domain field", c)
+	}
 }
 
 func TestBackfillSplitsOversizedWrites(t *testing.T) {
@@ -595,8 +599,8 @@ func TestRunRecordsBothScopes(t *testing.T) {
 	if mainQuery == nil {
 		t.Fatal("no main-domain query was made")
 	}
-	if n := len(mainQuery.Categories[0].Filter.Args); n != 2 {
-		t.Errorf("main filter has %d arms, want the one domain's two", n)
+	if got := mainQuery.Categories[0].Phrases; len(got) != 1 || got[0] != "tiktok.com" {
+		t.Errorf("main phrases = %v, want only the main domain", got)
 	}
 }
 
