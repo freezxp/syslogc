@@ -1,0 +1,11 @@
+[Unit]
+Description=Summarise recent DNS traffic every morning
+
+[Timer]
+# Early enough to read over coffee, late enough to cover the night.
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

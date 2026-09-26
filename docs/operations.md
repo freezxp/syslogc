@@ -307,6 +307,61 @@ Recording is idempotent: writing the same window twice replaces the sample
 rather than adding to it, so a restart, a re-run or an overlapping backfill
 cannot double-count.
 
+## Summarising traffic with a local model
+
+`scripts/dns-analyse.py` asks a model running on your own hardware what is
+notable in recent DNS traffic. Nothing leaves the network: the API is read
+over HTTP and the model runs wherever `OLLAMA_URL` points.
+
+The model is never shown raw logs. It is given a digest built from the
+aggregation endpoints — the busiest query names with both their query counts
+and their distinct-client counts, the busiest clients, the mix of query types
+— so a summary costs the same whether the window held a thousand messages or
+ten million, and the counts are what carry the signal anyway. Distinct
+clients next to query counts is what separates one noisy host from a service
+everybody uses.
+
+### Setting it up
+
+```bash
+sudo cp deploy/llm/dns-analyse.conf /etc/syslogc-llm.conf     # then edit it
+sudo install -m 755 scripts/dns-analyse.py /usr/local/bin/dns-analyse
+```
+
+Create an API key under **Settings → API Keys** with `logs:search` and
+`system:view` — it needs nothing else, and cannot ingest, export or change
+anything — then write it where the configuration says:
+
+```bash
+printf %s '<the key>' | sudo tee /etc/syslogc-llm.key >/dev/null
+sudo chmod 600 /etc/syslogc-llm.key
+```
+
+| Setting | Meaning |
+|---|---|
+| `SYSLOGC_URL` | Where the API is. |
+| `SYSLOGC_KEY_FILE` | The key file, read at 0600 rather than passed in the environment, which `ps` would show. |
+| `OLLAMA_URL` | Where the model runs — this host, or a machine with a GPU. |
+| `OLLAMA_MODEL` | Which model, e.g. `qwen3:8b`. An 8-billion-parameter model quantised to 4 bits needs about 6 GB of video memory. |
+| `WINDOW` | How much traffic to read, e.g. `now-1h`. |
+
+Any of them can be overridden for one run: `WINDOW=now-15m dns-analyse`.
+`--digest-only` prints what the model would be given, without asking it,
+which is the quickest way to see whether the fields are being extracted.
+
+For a summary every morning, the unit and timer beside the configuration
+read the same file:
+
+```bash
+sudo cp deploy/llm/dns-analyse.{service,timer} /etc/systemd/system/
+sudo systemctl enable --now dns-analyse.timer
+journalctl -u dns-analyse            # where the summaries land
+```
+
+A word on what to expect: an 8B model reads the shape of the traffic well
+and is honest about quiet periods, but its suggestions are broad. Treat it
+as a reader that never gets bored, not as an analyst.
+
 ## Monitoring
 
 Every node exposes Prometheus metrics on `/metrics` (no authentication; keep

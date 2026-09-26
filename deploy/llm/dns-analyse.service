@@ -1,0 +1,22 @@
+[Unit]
+Description=Summarise recent DNS traffic with a local model
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/syslogc-llm.conf
+ExecStart=/usr/local/bin/dns-analyse
+# The digest goes to the journal: read it with `journalctl -u dns-analyse`.
+StandardOutput=journal
+# The model holds the GPU for the length of a run and nothing else should be
+# waiting on it, so a run that hangs is killed rather than left.
+TimeoutStartSec=20min
+# It only reads.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
