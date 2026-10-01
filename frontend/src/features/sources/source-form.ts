@@ -646,6 +646,33 @@ export function acmeStatus(acme: SourceACMEStatus | undefined): AcmeStatus {
   return { state: 'pending', label: 'no certificate yet', tone: 'idle' }
 }
 
+/**
+ * What keeping the original text buys and costs, said where the choice is
+ * made. Writing an extract rule means matching against the text as it
+ * arrived, so a source whose originals are discarded gives you nothing to
+ * write the rule against — which is the moment people discover this setting,
+ * usually by finding "Copy raw" greyed out.
+ */
+export function rawMessageHint(policy: SourceFormState['raw_message'], hasExtractRules: boolean): string {
+  switch (policy) {
+    case 'always':
+      return (
+        'Every message is stored exactly as it arrived, alongside the parsed fields. ' +
+        'This is what you need while writing extract rules, and it roughly doubles what this source costs to store.'
+      )
+    case 'never':
+      return hasExtractRules
+        ? 'Originals are discarded, so there is nothing to check an extract rule against when one stops matching. ' +
+            'Keep them always while you are working on the rules.'
+        : 'Originals are discarded. Nothing can be recovered from a message that parsed into the wrong fields.'
+    default:
+      return (
+        'Originals are kept only for messages that failed to parse. ' +
+        'Choose "always" while writing extract rules or mapping attributes — it is what you test them against.'
+      )
+  }
+}
+
 export function sourceStateTone(state: SourceState | undefined): 'ok' | 'warn' | 'fail' | 'idle' {
   switch (state) {
     case 'running':

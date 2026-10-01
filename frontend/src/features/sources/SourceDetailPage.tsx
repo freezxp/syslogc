@@ -23,6 +23,7 @@ import {
   formToConfig,
   hasErrors,
   parseSourceRouteId,
+  rawMessageHint,
   sourceExplorerSearch,
   sourceProblemErrors,
   sourceSections,
@@ -355,16 +356,21 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
                 onChange={(e) => set('timezone', e.target.value)}
               />
             </Field>
-            <Field id="src-raw" label="Keep raw message" {...field('raw_message')}>
+            <Field
+              id="src-raw"
+              label="Keep the original text"
+              hint={rawMessageHint(form.raw_message, form.extract.length > 0)}
+              {...field('raw_message')}
+            >
               <NativeSelect
                 id="src-raw"
                 value={form.raw_message}
                 disabled={!editable}
                 onChange={(e) => set('raw_message', e.target.value as SourceFormState['raw_message'])}
               >
-                <option value="always">always</option>
-                <option value="on_error">on_error</option>
-                <option value="never">never</option>
+                <option value="always">Always — every message as it arrived</option>
+                <option value="on_error">Only when parsing fails</option>
+                <option value="never">Never</option>
               </NativeSelect>
             </Field>
             <Field id="src-hostname" label="Hostname fallback" {...field('hostname_fallback')}>

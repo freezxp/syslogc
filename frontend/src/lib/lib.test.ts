@@ -23,6 +23,7 @@ import {
   sourceSections,
   tlsMode,
   type SourceFormState,
+  rawMessageHint,
 } from '@/features/sources/source-form'
 import {
   computeDeltas,
@@ -445,6 +446,21 @@ describe('source form', () => {
   it('links to the explorer filtered by source, quoting names that need it', () => {
     expect(sourceExplorerSearch('branch-office').q).toBe('source=branch-office')
     expect(sourceExplorerSearch('edge tls').q).toBe('source="edge tls"')
+  })
+})
+
+describe('raw message policy', () => {
+  it('says what keeping the original text is for, and what it costs', () => {
+    // The storage cost is the reason not to leave it on everywhere, so it
+    // has to be said where the choice is made.
+    expect(rawMessageHint('always', false)).toMatch(/doubles/)
+    expect(rawMessageHint('always', false)).toMatch(/extract rules/)
+    // The default points at the setting people actually want while mapping
+    // attributes, which is the moment they come looking.
+    expect(rawMessageHint('on_error', false)).toMatch(/writing extract rules or mapping attributes/)
+    // Discarding originals matters more once rules depend on them.
+    expect(rawMessageHint('never', true)).toMatch(/nothing to check an extract rule against/)
+    expect(rawMessageHint('never', false)).not.toMatch(/extract rule against/)
   })
 })
 
