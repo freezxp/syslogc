@@ -324,11 +324,18 @@ func validateSource(p string, s Source) []error {
 		// put a file, so insisting on paths would leave it no way in.
 		pasted := strings.TrimSpace(s.TLS.Cert) != ""
 		files := s.TLS.CertFile != "" && s.TLS.KeyFile != ""
+		acme := s.TLS.ACME.Enabled
 		switch {
+		case acme && len(s.TLS.ACME.Domains) == 0:
+			add("tls.acme.domains: at least one hostname is required to ask for a certificate")
+		case acme && !s.TLS.ACME.AcceptTerms:
+			add("tls.acme.accept_terms must be set: asking a certificate authority for a certificate " +
+				"accepts its subscriber agreement, https://letsencrypt.org/repository/")
 		case pasted && strings.TrimSpace(s.TLS.Key) == "":
 			add("tls.key is required alongside tls.cert")
-		case !pasted && !files:
-			add("a tls source needs a certificate: set tls.cert and tls.key, or tls.cert_file and tls.key_file")
+		case !acme && !pasted && !files:
+			add("a tls source needs a certificate: turn on tls.acme, set tls.cert and tls.key, " +
+				"or set tls.cert_file and tls.key_file")
 		}
 		if s.TLS.MinVersion != "1.2" && s.TLS.MinVersion != "1.3" {
 			add("tls.min_version must be 1.2 or 1.3")

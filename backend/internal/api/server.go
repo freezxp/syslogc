@@ -18,6 +18,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/freezxp/syslogc/backend/internal/acme"
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/forwarding"
@@ -63,6 +64,9 @@ type APIDeps struct {
 	Config config.Config
 	// Queue returns ingest queue occupancy; nil without the ingest role.
 	Queue func() QueueInfo
+	// Certificates returns the state of certificates obtained from a
+	// certificate authority; nil when no source asks for one.
+	Certificates func() []acme.Status
 	// Forwarders returns forward target statuses; nil when none are configured.
 	Forwarders   func() []forwarding.Status
 	CookieSecure bool

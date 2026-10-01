@@ -308,6 +308,28 @@ type TLSConfig struct {
 	ClientAuth   string `koanf:"client_auth" json:"client_auth,omitempty"` // none | request | require_and_verify
 	ClientCAFile string `koanf:"client_ca_file" json:"client_ca_file,omitempty"`
 	ClientCA     string `koanf:"client_ca" json:"client_ca,omitempty"`
+	// ACME obtains the certificate from Let's Encrypt instead, which is the
+	// easiest way in when the host has a public name: there is nothing to
+	// paste and nothing to renew by hand.
+	ACME ACMEConfig `koanf:"acme" json:"acme,omitzero"`
+}
+
+// ACMEConfig asks a certificate authority for the certificate.
+type ACMEConfig struct {
+	Enabled bool     `koanf:"enabled" json:"enabled,omitempty"`
+	Domains []string `koanf:"domains" json:"domains,omitempty"`
+	// Email receives the authority's expiry warnings.
+	Email string `koanf:"email" json:"email,omitempty"`
+	// Staging asks the test authority, whose certificates nothing trusts and
+	// whose limits forgive. Start here: the real authority allows five
+	// failures an hour and a deployment that is not ready will use them.
+	Staging bool `koanf:"staging" json:"staging,omitempty"`
+	// AcceptTerms records agreement to the subscriber agreement at
+	// https://letsencrypt.org/repository/ and must be set.
+	AcceptTerms bool `koanf:"accept_terms" json:"accept_terms,omitempty"`
+	// SkipPreflight asks even when this host cannot reach its own name on
+	// port 80 — for a firewall that admits the authority and not us.
+	SkipPreflight bool `koanf:"skip_preflight" json:"skip_preflight,omitempty"`
 }
 
 // ForwardingConfig mirrors stored logs to other instances.

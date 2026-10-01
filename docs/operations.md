@@ -58,6 +58,56 @@ restored from an older backup.
 Deleting a source stops its listener. Logs already stored keep their
 `source` field, so searches over past data still work.
 
+### Giving a TLS source a certificate
+
+Three ways, in the order of how little work they are:
+
+**Ask Let's Encrypt.** The host needs a public name that resolves to it and
+port 80 reachable from the internet; nothing is renewed by hand.
+
+```yaml
+tls:
+  acme:
+    enabled: true
+    domains: [syslog.example.com]
+    email: you@example.com     # where expiry warnings go
+    staging: true              # start here
+    accept_terms: true         # https://letsencrypt.org/repository/
+```
+
+Publish port 80 in the Compose file. Only the challenge path is served on
+it; everything else is refused.
+
+**Paste the certificate.** For a certificate from elsewhere — an internal
+authority, a wildcard you already hold. Paste the PEM into the source's TLS
+fields in the UI. It is stored with the source and the private key is never
+returned, so a key that goes in cannot be read back out.
+
+**Name files on the server.** `cert_file` and `key_file`, for a host where
+cert-manager or certbot writes and renews them. The files are watched, so a
+renewal is picked up without a restart. This is the only one that needs a
+path inside the server's filesystem — in the Compose deployment that means
+mounting a volume, which is why it is not the easy option.
+
+#### Starting with the staging authority
+
+Leave `staging: true` until a certificate arrives. Let's Encrypt allows
+**five failed validations per hostname per hour**, so a deployment whose DNS
+or firewall is not ready does not merely fail — it cannot retry for the rest
+of the hour. Staging has no such teeth, and its certificates prove the
+challenge works; nothing trusts them, so switch to `staging: false` once one
+appears, and the real certificate is fetched within minutes.
+
+Syslogc checks that each name resolves and that port 80 answers before
+asking, and refuses to ask when it does not — that check costs nothing,
+where a failed validation costs one of the five. Where port 80 is reachable
+from the authority but not from this host, `skip_preflight: true` asks
+anyway.
+
+`GET /api/v1/system/health` reports every certificate: which names, whether
+they came from staging, when each was obtained, and why the last attempt
+failed.
+
 ## Users and access
 
 Accounts are local to Syslogc (see [security](security.md) for the model).

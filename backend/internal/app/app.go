@@ -69,6 +69,8 @@ type App struct {
 
 	// metrics store for measurements derived from the logs, and the rollup
 	// that fills it; both nil when analytics.metrics.url is not set.
+	// acme obtains certificates for sources that ask an authority for one.
+	acme        *certificateAuthority
 	metricStore *metricstore.Client
 	trends      *servicetrends.Recorder
 }
@@ -159,6 +161,8 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 			return nil, err
 		}
 		a.wireIngest()
+		// After the supervisor exists: it is what asks for a certificate.
+		a.wireACME()
 		checks = append(checks,
 			api.ReadinessCheck{Name: "sources", Check: func(context.Context) error {
 				if !a.supervisor.Ready() {
@@ -335,6 +339,7 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 	deps := &api.APIDeps{
 		Auth: authSvc, Store: a.store, Query: querySvc, Storage: a.backend,
 		ServiceTrends: a.serviceTrendReader(),
+		Certificates:  a.certificateStatuses,
 		Retention:     func() any { return a.retention.Load() },
 		FileSources:   cfg.Ingestion.Sources,
 		Config:        *cfg,
@@ -459,6 +464,11 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 		runErr = fmt.Errorf("http server: %w", err)
 	}
 	stopBackground()
+	if a.acme != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		a.acme.stop(ctx)
+		cancel()
+	}
 	a.shutdown()
 	return runErr
 }

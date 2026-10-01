@@ -5,6 +5,7 @@ package supervisor
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
@@ -52,11 +53,28 @@ type Supervisor struct {
 	metrics *metrics.Metrics
 	log     *slog.Logger
 
+	// certs builds a certificate manager for a source that asks an authority
+	// for its certificate; nil when no metadata database is configured.
+	certs func(config.Source) (CertificateManager, error)
+
 	mu         sync.RWMutex
 	running    map[string]*running
 	desired    map[string]Desired
 	status     map[string]Status
 	httpSource *source.Settings
+}
+
+// CertificateManager serves a certificate obtained from an authority.
+type CertificateManager interface {
+	GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
+}
+
+// UseCertificateManager sets how a source backed by a certificate authority
+// gets its certificate.
+func (s *Supervisor) UseCertificateManager(f func(config.Source) (CertificateManager, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.certs = f
 }
 
 // HTTPSource returns the enabled http_json source, or nil.
@@ -264,7 +282,19 @@ func (s *Supervisor) start(sc config.Source) (*running, error) {
 	case config.ProtocolTCP:
 		l = listener.NewTCP(settings, s.sink, s.log, nil)
 	case config.ProtocolTLS:
-		tlsCfg, err := listener.NewTLSConfig(sc.TLS, s.log.With("source", sc.Name))
+		var getCert listener.GetCertificateFunc
+		if sc.TLS.ACME.Enabled {
+			if s.certs == nil {
+				return nil, errors.New("this source asks a certificate authority for its certificate, " +
+					"which needs a metadata database to keep the certificate in")
+			}
+			m, err := s.certs(sc)
+			if err != nil {
+				return nil, err
+			}
+			getCert = m.GetCertificate
+		}
+		tlsCfg, err := listener.NewTLSConfigWith(sc.TLS, getCert, s.log.With("source", sc.Name))
 		if err != nil {
 			return nil, err
 		}

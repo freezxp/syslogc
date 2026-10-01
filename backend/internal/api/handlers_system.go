@@ -242,6 +242,13 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request, _ *a
 	if s.opts.API.Sources != nil {
 		body["sources"] = s.opts.API.Sources()
 	}
+	// A certificate that could not be obtained is why a TLS source is not
+	// serving, so it belongs with the rest of what is wrong.
+	if s.opts.API.Certificates != nil {
+		if certs := s.opts.API.Certificates(); len(certs) > 0 {
+			body["certificates"] = certs
+		}
+	}
 	writeJSON(w, http.StatusOK, body)
 	return nil
 }

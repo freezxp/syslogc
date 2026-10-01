@@ -18,7 +18,28 @@ const certCheckInterval = 10 * time.Second
 
 // NewTLSConfig builds a server TLS configuration for a syslog TLS source.
 // Certificates are reloaded when the files change, without a restart.
+// GetCertificateFunc serves a certificate for a connection. A source using
+// ACME is given one of these; everything else loads its own material.
+type GetCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
 func NewTLSConfig(c config.TLSConfig, log *slog.Logger) (*tls.Config, error) {
+	return NewTLSConfigWith(c, nil, log)
+}
+
+// NewTLSConfigWith builds the configuration, taking its certificate from
+// getCert when one is given — which is how a source backed by a certificate
+// authority gets one without any material of its own.
+func NewTLSConfigWith(c config.TLSConfig, getCert GetCertificateFunc, log *slog.Logger) (*tls.Config, error) {
+	if getCert != nil {
+		cfg := &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: getCert}
+		if c.MinVersion == "1.3" {
+			cfg.MinVersion = tls.VersionTLS13
+		}
+		if err := applyClientAuth(cfg, c); err != nil {
+			return nil, err
+		}
+		return cfg, nil
+	}
 	material := certs.Material{CertFile: c.CertFile, KeyFile: c.KeyFile, Cert: c.Cert, Key: c.Key}
 	reloader, err := newCertReloader(material, log)
 	if err != nil {
@@ -31,6 +52,15 @@ func NewTLSConfig(c config.TLSConfig, log *slog.Logger) (*tls.Config, error) {
 	if c.MinVersion == "1.3" {
 		cfg.MinVersion = tls.VersionTLS13
 	}
+	if err := applyClientAuth(cfg, c); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// applyClientAuth sets whether senders must present a certificate of their
+// own, and whose certificates are accepted.
+func applyClientAuth(cfg *tls.Config, c config.TLSConfig) error {
 	switch c.ClientAuth {
 	case "request":
 		cfg.ClientAuth = tls.RequestClientCert
@@ -39,12 +69,12 @@ func NewTLSConfig(c config.TLSConfig, log *slog.Logger) (*tls.Config, error) {
 	}
 	pool, err := certs.ClientCAs(c.ClientCA, c.ClientCAFile)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if pool != nil {
 		cfg.ClientCAs = pool
 	}
-	return cfg, nil
+	return nil
 }
 
 type certReloader struct {
