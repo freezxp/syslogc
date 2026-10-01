@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,7 +27,45 @@ type certificateAuthority struct {
 
 	mu       sync.Mutex
 	managers map[string]*acme.Manager
+	handlers []http.Handler
 	server   *http.Server
+}
+
+// serveChallenge offers the request to each manager until one recognises the
+// token. A manager that does not own it answers 403 or 404, so trying the
+// next is what lets several sets of domains share one port.
+func (ca *certificateAuthority) serveChallenge(w http.ResponseWriter, r *http.Request) {
+	ca.mu.Lock()
+	handlers := append([]http.Handler(nil), ca.handlers...)
+	ca.mu.Unlock()
+	for _, h := range handlers {
+		rec := &challengeRecorder{header: http.Header{}}
+		h.ServeHTTP(rec, r)
+		if rec.status == 0 || rec.status < 300 {
+			for k, v := range rec.header {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(cmp.Or(rec.status, http.StatusOK))
+			_, _ = w.Write(rec.body)
+			return
+		}
+	}
+	http.Error(w, "this port serves certificate challenges only", http.StatusNotFound)
+}
+
+// challengeRecorder captures one manager's answer so an unsuccessful one can
+// be discarded in favour of the next manager's.
+type challengeRecorder struct {
+	header http.Header
+	status int
+	body   []byte
+}
+
+func (c *challengeRecorder) Header() http.Header { return c.header }
+func (c *challengeRecorder) WriteHeader(s int)   { c.status = s }
+func (c *challengeRecorder) Write(b []byte) (int, error) {
+	c.body = append(c.body, b...)
+	return len(b), nil
 }
 
 // wireACME lets sources ask an authority for their certificates. It starts
@@ -66,7 +105,12 @@ func (ca *certificateAuthority) manager(sc config.Source) (supervisor.Certificat
 	if err != nil {
 		return nil, err
 	}
-	if err := ca.startChallengeServer(m); err != nil {
+	// Every manager must be told it may use HTTP-01, and every manager's
+	// challenges must be answerable — the authority picks which to ask for.
+	// Registering only the first would leave a second set of domains able to
+	// offer nothing but TLS-ALPN, which this deployment does not serve.
+	ca.handlers = append(ca.handlers, m.HTTPHandler())
+	if err := ca.startChallengeServer(); err != nil {
 		return nil, err
 	}
 	ca.managers[key] = m
@@ -89,7 +133,9 @@ func (ca *certificateAuthority) manager(sc config.Source) (supervisor.Certificat
 }
 
 // startChallengeServer opens port 80 for the authority's challenges, once.
-func (ca *certificateAuthority) startChallengeServer(m *acme.Manager) error {
+// The handler consults every manager, because a token belongs to whichever
+// one asked for it.
+func (ca *certificateAuthority) startChallengeServer() error {
 	if ca.server != nil {
 		return nil
 	}
@@ -100,7 +146,7 @@ func (ca *certificateAuthority) startChallengeServer(m *acme.Manager) error {
 			"The container must publish it, and nothing else may hold it", acme.ChallengePort, err)
 	}
 	ca.server = &http.Server{
-		Handler:           m.HTTPHandler(),
+		Handler:           http.HandlerFunc(ca.serveChallenge),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}

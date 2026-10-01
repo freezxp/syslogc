@@ -18,6 +18,8 @@ cd "$REPO_DIR"
 # ---- options ----------------------------------------------------------------
 BIND="0.0.0.0"
 PORT="8080"
+TLS_PORT="6514"
+ACME=false
 RETENTION="30d"
 RETENTION_SET=false
 METRICS_RETENTION="24"
@@ -42,6 +44,10 @@ Options:
                        throttling see real client IPs.
   --bind ADDR          Address to publish the web UI on (default 0.0.0.0).
   --port PORT          Host port for the web UI (default 8080).
+  --tls-port PORT      Host port for syslog over TLS (default 6514).
+  --acme               Publish port 80 so Let's Encrypt can verify this host.
+                       Needed by a TLS source that asks for its own
+                       certificate; leave it off otherwise.
   --retention PERIOD   How long logs are kept, e.g. 90d (default 30d).
   --metrics-retention MONTHS
                        How long derived counts, such as service trends, are
@@ -66,6 +72,8 @@ while [[ $# -gt 0 ]]; do
     --proxy-ip) PROXY_IP="${2:?--proxy-ip needs an address}"; shift 2 ;;
     --bind) BIND="${2:?--bind needs an address}"; shift 2 ;;
     --port) PORT="${2:?--port needs a port}"; shift 2 ;;
+    --tls-port) TLS_PORT="${2:?--tls-port needs a port}"; shift 2 ;;
+    --acme) ACME=true; shift ;;
     --retention) RETENTION="${2:?--retention needs a period}"; RETENTION_SET=true; shift 2 ;;
     --metrics-retention) METRICS_RETENTION="${2:?--metrics-retention needs a number of months}"; shift 2 ;;
     --monitoring) MONITORING=true; shift ;;
@@ -308,6 +316,13 @@ if [[ -f deploy/compose/syslogc.local.yaml ]]; then
   fi
 fi
 
+if [[ "$ACME" == true ]]; then
+  force_env SYSLOGC_ACME_BIND "0.0.0.0"
+  force_env SYSLOGC_ACME_PORT "80"
+  ok "port 80 published for certificate challenges"
+fi
+set_env SYSLOGC_TLS_PORT "$TLS_PORT"
+set_env SYSLOGC_TLS_BIND "$BIND"
 set_env SYSLOGC_HTTP_BIND "$BIND"
 set_env SYSLOGC_HTTP_PORT "$PORT"
 set_env SYSLOGC_RETENTION "$RETENTION"
@@ -341,7 +356,9 @@ fi
 # ---- 5. firewall -----------------------------------------------------------------
 if [[ "$OPEN_FIREWALL" == true ]] && command -v ufw >/dev/null && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
   step "Opening ports in ufw"
-  for rule in "514/udp" "514/tcp" "${PORT}/tcp"; do
+  rules=("514/udp" "514/tcp" "${PORT}/tcp" "${TLS_PORT}/tcp")
+  [[ "$ACME" == true ]] && rules+=("80/tcp")
+  for rule in "${rules[@]}"; do
     $SUDO ufw allow "$rule" >/dev/null && ok "allowed $rule"
   done
 fi

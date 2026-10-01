@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/freezxp/syslogc/backend/internal/acme"
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/certs"
 	"github.com/freezxp/syslogc/backend/internal/config"
@@ -32,11 +33,15 @@ type sourceJSONBody struct {
 	KeyStored bool `json:"key_stored,omitempty"`
 	// Certificate describes the certificate in use, so the person who
 	// pasted it can see what it covers and when it runs out.
-	Certificate *certs.Info        `json:"certificate,omitempty"`
-	Status      *supervisor.Status `json:"status,omitempty"`
-	CreatedAt   *time.Time         `json:"created_at,omitempty"`
-	UpdatedAt   *time.Time         `json:"updated_at,omitempty"`
-	Version     int                `json:"version,omitempty"`
+	Certificate *certs.Info `json:"certificate,omitempty"`
+	// ACME reports whether a certificate has been obtained from an
+	// authority, and why not when there is none. It belongs on the source
+	// because that is where it was asked for.
+	ACME      *acme.Status       `json:"acme,omitempty"`
+	Status    *supervisor.Status `json:"status,omitempty"`
+	CreatedAt *time.Time         `json:"created_at,omitempty"`
+	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
+	Version   int                `json:"version,omitempty"`
 }
 
 type sourceInput struct {
@@ -84,6 +89,35 @@ func describeCertificate(sc config.Source) *certs.Info {
 	return &info
 }
 
+// acmeStatus finds the certificate state for a source that asks an authority
+// sourceBody is the one way a source becomes a response, so everything a
+// read should carry is attached in a single place.
+func (s *Server) sourceBody(m metadata.Source, status map[string]supervisor.Status) (sourceJSONBody, error) {
+	body, err := managedSource(m, status)
+	if err != nil {
+		return body, err
+	}
+	body.ACME = s.acmeStatus(body.Config)
+	return body, nil
+}
+
+// acmeStatus finds the certificate state for a source that asks an authority
+// for one, matching on the domains it asked about.
+func (s *Server) acmeStatus(sc config.Source) *acme.Status {
+	if !sc.TLS.ACME.Enabled || s.opts.API.Certificates == nil {
+		return nil
+	}
+	want := strings.ToLower(strings.Join(sc.TLS.ACME.Domains, ","))
+	for _, st := range s.opts.API.Certificates() {
+		if strings.ToLower(strings.Join(st.Domains, ",")) == want {
+			return &st
+		}
+	}
+	// Asked for, but no manager yet — the source has not started, or the
+	// node holding it is another one.
+	return &acme.Status{Domains: sc.TLS.ACME.Domains}
+}
+
 func (s *Server) sourceStatuses() map[string]supervisor.Status {
 	out := map[string]supervisor.Status{}
 	if s.opts.API.Sources == nil {
@@ -125,7 +159,7 @@ func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request, p *au
 		out = append(out, body)
 	}
 	for _, m := range managed {
-		body, err := managedSource(m, status)
+		body, err := s.sourceBody(m, status)
 		if err != nil {
 			return err
 		}
@@ -140,7 +174,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request, p *auth
 	if err != nil {
 		return err
 	}
-	body, err := managedSource(*m, s.sourceStatuses())
+	body, err := s.sourceBody(*m, s.sourceStatuses())
 	if err != nil {
 		return err
 	}
@@ -166,7 +200,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request, p *a
 		return err
 	}
 	s.audit(r, p, "sources.create", "success", map[string]any{"source": sc.Name, "id": m.ID})
-	body, err := managedSource(*m, s.sourceStatuses())
+	body, err := s.sourceBody(*m, s.sourceStatuses())
 	if err != nil {
 		return err
 	}
@@ -203,7 +237,7 @@ func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request, p *a
 		return err
 	}
 	s.audit(r, p, "sources.update", "success", map[string]any{"source": sc.Name, "id": m.ID, "enabled": m.Enabled})
-	body, err := managedSource(*m, s.sourceStatuses())
+	body, err := s.sourceBody(*m, s.sourceStatuses())
 	if err != nil {
 		return err
 	}
@@ -454,7 +488,7 @@ func (s *Server) handleAdoptSource(w http.ResponseWriter, r *http.Request, p *au
 		return err
 	}
 	s.audit(r, p, "sources.adopt", "success", map[string]any{"source": sc.Name, "id": m.ID})
-	body, err := managedSource(*m, s.sourceStatuses())
+	body, err := s.sourceBody(*m, s.sourceStatuses())
 	if err != nil {
 		return err
 	}

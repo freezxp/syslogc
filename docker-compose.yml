@@ -37,7 +37,17 @@ services:
       - "${SYSLOGC_HTTP_BIND:-0.0.0.0}:${SYSLOGC_HTTP_PORT:-8080}:8080"
       - "514:5514/udp"
       - "514:5514/tcp"
-      # - "6514:6514/tcp"   # enable together with the syslog-tls source
+      # Syslog over TLS. Published whether or not a TLS source is enabled:
+      # a published port with nothing behind it refuses connections exactly
+      # as an unpublished one does, and needing to edit this file to open it
+      # is how a working listener ends up unreachable.
+      - "${SYSLOGC_TLS_BIND:-0.0.0.0}:${SYSLOGC_TLS_PORT:-6514}:6514/tcp"
+      # Certificate challenges. A certificate authority looks on port 80 of
+      # the public name and nowhere else, so ./deploy.sh --acme puts this on
+      # 0.0.0.0:80. It defaults to a harmless local port instead, because
+      # claiming port 80 on a host that already serves something there would
+      # break it.
+      - "${SYSLOGC_ACME_BIND:-127.0.0.1}:${SYSLOGC_ACME_PORT:-8880}:80/tcp"
     environment:
       # Stable across container re-creation (ingestion-rate history is per node).
       SYSLOGC_NODE_ID: ${SYSLOGC_NODE_ID:-syslogc-1}
