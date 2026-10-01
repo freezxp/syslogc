@@ -2,9 +2,6 @@ package listener
 
 import (
 	"crypto/tls"
-	"crypto/x509"
-	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -12,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/freezxp/syslogc/backend/internal/certs"
 	"github.com/freezxp/syslogc/backend/internal/config"
 )
 
@@ -21,7 +19,8 @@ const certCheckInterval = 10 * time.Second
 // NewTLSConfig builds a server TLS configuration for a syslog TLS source.
 // Certificates are reloaded when the files change, without a restart.
 func NewTLSConfig(c config.TLSConfig, log *slog.Logger) (*tls.Config, error) {
-	reloader, err := newCertReloader(c.CertFile, c.KeyFile, log)
+	material := certs.Material{CertFile: c.CertFile, KeyFile: c.KeyFile, Cert: c.Cert, Key: c.Key}
+	reloader, err := newCertReloader(material, log)
 	if err != nil {
 		return nil, err
 	}
@@ -38,23 +37,19 @@ func NewTLSConfig(c config.TLSConfig, log *slog.Logger) (*tls.Config, error) {
 	case "require_and_verify":
 		cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
-	if c.ClientCAFile != "" {
-		pem, err := os.ReadFile(c.ClientCAFile)
-		if err != nil {
-			return nil, fmt.Errorf("read client CA file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, errors.New("client CA file contains no certificates")
-		}
+	pool, err := certs.ClientCAs(c.ClientCA, c.ClientCAFile)
+	if err != nil {
+		return nil, err
+	}
+	if pool != nil {
 		cfg.ClientCAs = pool
 	}
 	return cfg, nil
 }
 
 type certReloader struct {
-	certFile, keyFile string
-	log               *slog.Logger
+	material certs.Material
+	log      *slog.Logger
 
 	mu        sync.Mutex
 	cert      *tls.Certificate
@@ -62,8 +57,8 @@ type certReloader struct {
 	lastCheck time.Time
 }
 
-func newCertReloader(certFile, keyFile string, log *slog.Logger) (*certReloader, error) {
-	r := &certReloader{certFile: certFile, keyFile: keyFile, log: log}
+func newCertReloader(material certs.Material, log *slog.Logger) (*certReloader, error) {
+	r := &certReloader{material: material, log: log}
 	if err := r.load(); err != nil {
 		return nil, err
 	}
@@ -71,19 +66,25 @@ func newCertReloader(certFile, keyFile string, log *slog.Logger) (*certReloader,
 }
 
 func (r *certReloader) load() error {
-	cert, err := tls.LoadX509KeyPair(r.certFile, r.keyFile)
+	cert, _, err := certs.Load(r.material)
 	if err != nil {
-		return fmt.Errorf("load TLS certificate: %w", err)
+		return err
 	}
-	r.cert = &cert
+	r.cert = cert
 	r.modTime = r.latestModTime()
 	r.lastCheck = time.Now()
 	return nil
 }
 
+// latestModTime is the newest change to the files, or the zero time when the
+// certificate is PEM text: pasted material changes when the source is saved,
+// which restarts the listener anyway.
 func (r *certReloader) latestModTime() time.Time {
+	if r.material.Inline() {
+		return time.Time{}
+	}
 	var latest time.Time
-	for _, f := range []string{r.certFile, r.keyFile} {
+	for _, f := range []string{r.material.CertFile, r.material.KeyFile} {
 		if st, err := os.Stat(f); err == nil && st.ModTime().After(latest) {
 			latest = st.ModTime()
 		}
@@ -102,7 +103,7 @@ func (r *certReloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, e
 				r.cert = old
 				r.log.Error("TLS certificate reload failed; keeping previous certificate", "error", err)
 			} else {
-				r.log.Info("TLS certificate reloaded", "cert_file", r.certFile)
+				r.log.Info("TLS certificate reloaded", "cert_file", r.material.CertFile)
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
+	"github.com/freezxp/syslogc/backend/internal/certs"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/extract"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
@@ -24,11 +25,18 @@ type sourceJSONBody struct {
 	Origin  string        `json:"origin"`
 	// Adopted marks a source copied from the configuration file, whose entry
 	// there is now ignored.
-	Adopted   bool               `json:"adopted,omitempty"`
-	Status    *supervisor.Status `json:"status,omitempty"`
-	CreatedAt *time.Time         `json:"created_at,omitempty"`
-	UpdatedAt *time.Time         `json:"updated_at,omitempty"`
-	Version   int                `json:"version,omitempty"`
+	Adopted bool `json:"adopted,omitempty"`
+	// KeyStored says a private key is held for this source without
+	// returning it. The key is write-only: it goes in, it is used, and it
+	// never comes back out.
+	KeyStored bool `json:"key_stored,omitempty"`
+	// Certificate describes the certificate in use, so the person who
+	// pasted it can see what it covers and when it runs out.
+	Certificate *certs.Info        `json:"certificate,omitempty"`
+	Status      *supervisor.Status `json:"status,omitempty"`
+	CreatedAt   *time.Time         `json:"created_at,omitempty"`
+	UpdatedAt   *time.Time         `json:"updated_at,omitempty"`
+	Version     int                `json:"version,omitempty"`
 }
 
 type sourceInput struct {
@@ -46,10 +54,34 @@ func managedSource(m metadata.Source, status map[string]supervisor.Status) (sour
 	sc.Name = m.Name
 	body := sourceJSONBody{ID: &m.ID, Config: sc, Enabled: m.Enabled, Origin: supervisor.OriginDatabase,
 		Adopted: m.Adopted, CreatedAt: &m.CreatedAt, UpdatedAt: &m.UpdatedAt, Version: m.Version}
+	body.redactKey()
+	body.Certificate = describeCertificate(sc)
 	if st, ok := status[m.Name]; ok {
 		body.Status = &st
 	}
 	return body, nil
+}
+
+// redactKey removes the private key from a response. It is the one field
+// that must never travel back to a browser, so it is cleared in exactly one
+// place that every read passes through.
+func (b *sourceJSONBody) redactKey() {
+	b.KeyStored = strings.TrimSpace(b.Config.TLS.Key) != ""
+	b.Config.TLS.Key = ""
+}
+
+// describeCertificate reports what a source's certificate covers, or nothing
+// when it has none or the material cannot be read — a source that will not
+// start says so through its status, which is the better place for it.
+func describeCertificate(sc config.Source) *certs.Info {
+	if strings.TrimSpace(sc.TLS.Cert) == "" {
+		return nil
+	}
+	info, err := certs.Describe(sc.TLS.Cert)
+	if err != nil {
+		return nil
+	}
+	return &info
 }
 
 func (s *Server) sourceStatuses() map[string]supervisor.Status {
@@ -224,6 +256,9 @@ func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		enabled := *in.Enabled
 		sc.Enabled = &enabled
 	}
+	if err := s.resolveTLSMaterial(&sc, self); err != nil {
+		return nil, sc, err
+	}
 	if err := config.PrepareSource(&sc); err != nil {
 		return nil, sc, badRequest("validation_failed", "/config", "%s", strings.ReplaceAll(err.Error(), "\n", "; "))
 	}
@@ -258,6 +293,43 @@ func (s *Server) decodeSource(w http.ResponseWriter, r *http.Request, p *auth.Pr
 		}
 	}
 	return &in, sc, nil
+}
+
+// resolveTLSMaterial carries a stored private key across an edit and checks
+// that the material works before it is saved.
+//
+// The key never leaves the server, so a form that loads a source and saves it
+// again has no key to send back. An empty key on a source that has one means
+// "unchanged" rather than "remove it" — the alternative is that editing the
+// address of a working TLS source silently breaks it.
+func (s *Server) resolveTLSMaterial(sc *config.Source, self *metadata.Source) error {
+	// Only a TLS listener needs certificate material.
+	if sc.Protocol != config.ProtocolTLS {
+		return nil
+	}
+	if strings.TrimSpace(sc.TLS.Key) == "" && self != nil {
+		var stored config.Source
+		if err := json.Unmarshal(self.Config, &stored); err == nil {
+			sc.TLS.Key = stored.TLS.Key
+		}
+	}
+	material := certs.Material{
+		CertFile: sc.TLS.CertFile, KeyFile: sc.TLS.KeyFile,
+		Cert: sc.TLS.Cert, Key: sc.TLS.Key,
+	}
+	if material.Empty() {
+		return badRequest("validation_failed", "/config/tls",
+			"a TLS source needs a certificate: paste it, or give the path to one on the server")
+	}
+	// Reading it now means a bad certificate is refused with an explanation
+	// rather than accepted and left to fail when the listener starts.
+	if _, _, err := certs.Load(material); err != nil {
+		return badRequest("validation_failed", "/config/tls/cert", "%s", err.Error())
+	}
+	if _, err := certs.ClientCAs(sc.TLS.ClientCA, sc.TLS.ClientCAFile); err != nil {
+		return badRequest("validation_failed", "/config/tls/client_ca", "%s", err.Error())
+	}
+	return nil
 }
 
 // maxExtractSamples bounds a dry run; it is an authoring aid, not an API for

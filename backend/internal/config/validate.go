@@ -319,8 +319,16 @@ func validateSource(p string, s Source) []error {
 		}
 	}
 	if s.Protocol == ProtocolTLS && s.IsEnabled() {
-		if s.TLS.CertFile == "" || s.TLS.KeyFile == "" {
-			add("tls.cert_file and tls.key_file are required for tls sources")
+		// Either form will do: paths to files on the server, or the PEM
+		// itself. A deployment whose filesystem is read-only has nowhere to
+		// put a file, so insisting on paths would leave it no way in.
+		pasted := strings.TrimSpace(s.TLS.Cert) != ""
+		files := s.TLS.CertFile != "" && s.TLS.KeyFile != ""
+		switch {
+		case pasted && strings.TrimSpace(s.TLS.Key) == "":
+			add("tls.key is required alongside tls.cert")
+		case !pasted && !files:
+			add("a tls source needs a certificate: set tls.cert and tls.key, or tls.cert_file and tls.key_file")
 		}
 		if s.TLS.MinVersion != "1.2" && s.TLS.MinVersion != "1.3" {
 			add("tls.min_version must be 1.2 or 1.3")

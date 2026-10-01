@@ -291,11 +291,23 @@ type UDPConfig struct {
 }
 
 type TLSConfig struct {
-	CertFile     string `koanf:"cert_file" json:"cert_file,omitempty"`
-	KeyFile      string `koanf:"key_file" json:"key_file,omitempty"`
+	// CertFile and KeyFile are paths on the server, for a host where
+	// something else writes and renews them.
+	CertFile string `koanf:"cert_file" json:"cert_file,omitempty"`
+	KeyFile  string `koanf:"key_file" json:"key_file,omitempty"`
+	// Cert and Key are the PEM text itself, which is how a source gets a
+	// certificate when there is nowhere to put a file — a container
+	// filesystem is read-only, so the web interface has no path to offer.
+	// They take precedence over the paths.
+	//
+	// Key is never returned by the API: it is written, stored and used, and
+	// read back only as whether one is set.
+	Cert         string `koanf:"cert" json:"cert,omitempty"`
+	Key          string `koanf:"key" json:"key,omitempty"`
 	MinVersion   string `koanf:"min_version" json:"min_version,omitempty"` // "1.2" | "1.3"
 	ClientAuth   string `koanf:"client_auth" json:"client_auth,omitempty"` // none | request | require_and_verify
 	ClientCAFile string `koanf:"client_ca_file" json:"client_ca_file,omitempty"`
+	ClientCA     string `koanf:"client_ca" json:"client_ca,omitempty"`
 }
 
 // ForwardingConfig mirrors stored logs to other instances.

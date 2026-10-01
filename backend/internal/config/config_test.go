@@ -173,7 +173,7 @@ typo_section: {}
 		"duplicate source name",
 		"already used by source",
 		"raw_message",
-		"tls.cert_file and tls.key_file are required",
+		"a tls source needs a certificate",
 		"name is required",
 		"protocol must be udp, tcp or tls",
 	} {
