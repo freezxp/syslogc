@@ -14,6 +14,8 @@ import type { CertificateInfo, SourceACMEStatus } from '@/api/types'
 import { Panel } from '@/components/data/common'
 import { Input, NativeSelect, Textarea } from '@/components/ui/input'
 import { cn } from '@/lib/cn'
+
+import { ChoiceCards } from './ChoiceCards'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
@@ -70,40 +72,15 @@ export function TlsPanel({
         {/* Describes what is stored, so it stays while an unsaved edit switches away. */}
         {acme && <AcmeCard acme={acme} />}
 
-        <fieldset>
-          <legend className="mb-1 text-sm font-medium text-muted">How this listener gets its certificate</legend>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {TLS_MODES.map((m) => (
-              <label
-                key={m.value}
-                className={cn(
-                  'flex cursor-pointer items-start gap-2 rounded-md border p-2',
-                  form.tls_mode === m.value ? 'border-accent bg-accent-muted' : 'border-border-strong bg-surface-2',
-                  !editable && 'cursor-default opacity-70',
-                )}
-              >
-                <input
-                  type="radio"
-                  name="tls-mode"
-                  value={m.value}
-                  className="mt-0.5"
-                  checked={form.tls_mode === m.value}
-                  disabled={!editable}
-                  onChange={() => set('tls_mode', m.value)}
-                />
-                <span className="min-w-0">
-                  <span className="block text-base text-fg">{m.label}</span>
-                  <span className="block text-xs text-subtle">{m.hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-          {errors.fields.tls_mode && (
-            <p role="alert" className="mt-1 text-sm text-danger">
-              {errors.fields.tls_mode}
-            </p>
-          )}
-        </fieldset>
+        <ChoiceCards
+          name="tls-mode"
+          legend="How this listener gets its certificate"
+          choices={TLS_MODES}
+          value={form.tls_mode}
+          editable={editable}
+          error={errors.fields.tls_mode}
+          onChange={(v) => set('tls_mode', v)}
+        />
 
         {form.tls_mode === 'acme' && <AcmeFields form={form} errors={errors} editable={editable} set={set} />}
         {form.tls_mode === 'paste' && (

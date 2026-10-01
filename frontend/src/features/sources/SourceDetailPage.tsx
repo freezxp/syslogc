@@ -13,6 +13,7 @@ import { Dialog, DialogContent } from '@/components/ui/overlay'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
+import { ChoiceCards } from './ChoiceCards'
 import { ExtractRulesPanel, ExtractTestPanel } from './ExtractEditor'
 import { Banner, Field } from './SourceFields'
 import { TlsPanel } from './TlsPanel'
@@ -23,6 +24,7 @@ import {
   formToConfig,
   hasErrors,
   parseSourceRouteId,
+  RAW_MESSAGE_CHOICES,
   rawMessageHint,
   sourceExplorerSearch,
   sourceProblemErrors,
@@ -356,23 +358,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
                 onChange={(e) => set('timezone', e.target.value)}
               />
             </Field>
-            <Field
-              id="src-raw"
-              label="Keep the original text"
-              hint={rawMessageHint(form.raw_message, form.extract.length > 0)}
-              {...field('raw_message')}
-            >
-              <NativeSelect
-                id="src-raw"
-                value={form.raw_message}
-                disabled={!editable}
-                onChange={(e) => set('raw_message', e.target.value as SourceFormState['raw_message'])}
-              >
-                <option value="always">Always — every message as it arrived</option>
-                <option value="on_error">Only when parsing fails</option>
-                <option value="never">Never</option>
-              </NativeSelect>
-            </Field>
+
             <Field id="src-hostname" label="Hostname fallback" {...field('hostname_fallback')}>
               <NativeSelect
                 id="src-hostname"
@@ -409,6 +395,21 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
                 onChange={(e) => set('max_message_bytes', e.target.value)}
               />
             </Field>
+          </div>
+          {/* Full width below the grid: each option needs a sentence, and
+              this is the one parsing choice with a standing cost. */}
+          <div className="mt-3">
+            <ChoiceCards
+              name="raw-message"
+              legend="Keep the original text of each message"
+              choices={RAW_MESSAGE_CHOICES}
+              value={form.raw_message}
+              editable={editable}
+              columns={1}
+              error={errors.fields.raw_message}
+              onChange={(v) => set('raw_message', v)}
+            />
+            <p className="mt-1 text-xs text-subtle">{rawMessageHint(form.raw_message, form.extract.length > 0)}</p>
           </div>
         </Panel>
 

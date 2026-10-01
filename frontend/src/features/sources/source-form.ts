@@ -653,6 +653,24 @@ export function acmeStatus(acme: SourceACMEStatus | undefined): AcmeStatus {
  * write the rule against — which is the moment people discover this setting,
  * usually by finding "Copy raw" greyed out.
  */
+/**
+ * Keeping the original text is a standing cost rather than a one-off, so the
+ * choices say what each is for rather than naming the stored value.
+ */
+export const RAW_MESSAGE_CHOICES = [
+  {
+    value: 'always',
+    label: 'Always',
+    hint: 'Every message as it arrived. What you need while mapping attributes.',
+  },
+  {
+    value: 'on_error',
+    label: 'Only when parsing fails',
+    hint: 'Keeps what went wrong without paying for what went right.',
+  },
+  { value: 'never', label: 'Never', hint: 'Parsed fields only. Nothing to fall back on.' },
+] as const satisfies readonly { value: SourceFormState['raw_message']; label: string; hint: string }[]
+
 export function rawMessageHint(policy: SourceFormState['raw_message'], hasExtractRules: boolean): string {
   switch (policy) {
     case 'always':
