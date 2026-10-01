@@ -90,6 +90,15 @@ analytics:
     # stops reading everything else:
     # sources: [syslog-tcp]
 
+# Copies of every stored log, sent to another VictoriaLogs instance. Targets
+# are normally added on the Forwarding page, which applies them without a
+# restart; defining them here instead makes them read-only in the interface.
+# forwarding:
+#   targets:
+#     - name: dr
+#       url: http://vlogs-dr.example.com:9428
+#       compression: gzip
+
 retention:
   period: 30d                   # keep equal to VictoriaLogs -retentionPeriod
 

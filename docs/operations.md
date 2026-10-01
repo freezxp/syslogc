@@ -141,6 +141,25 @@ process log, so a log shipper can forward them off the node.
 
 ## Forwarding logs to another instance
 
+Targets are added on the **Forwarding** page and applied within seconds, with
+no restart. A new one is created switched off: copying an organisation's logs
+to another address is a decision, so creating a target and starting it are two
+steps, and only an administrator can do either.
+
+The page is also where a target that is not working says so. A failing one
+reports what it costs — copies are buffered and then dropped once the queue
+fills, and those logs never reach the remote — while being clear that the
+logs stored on this node are unaffected.
+
+Targets can still be written in the configuration file under `forwarding`,
+which makes them read-only in the interface; that suits a deployment whose
+configuration is managed elsewhere. Earlier versions needed a second
+configuration file and a Compose overlay that ran another VictoriaLogs on
+this host. Mirroring onto the same machine protects against nothing, so both
+are gone; point a target at another host instead. If an upgrade finds the old
+mirror's data still on disk it says so, with the command to remove it.
+
+
 Syslogc can mirror everything it stores to one or more other VictoriaLogs
 instances — a disaster-recovery site, a central collector, or a second
 system you are migrating to. Configure targets under

@@ -26,7 +26,6 @@ METRICS_RETENTION="24"
 DOMAIN=""
 PROXY_IP=""
 MONITORING=false
-FORWARD_URL=""
 PULL=false
 ACTION="deploy"
 ASSUME_YES=false
@@ -53,7 +52,6 @@ Options:
                        How long derived counts, such as service trends, are
                        kept (default 24 months).
   --monitoring         Also run Prometheus and Grafana.
-  --forward URL        Mirror stored logs to another VictoriaLogs instance.
   --pull               Use the published image instead of building locally.
   --no-firewall        Do not open syslog and UI ports in ufw.
   --yes                Do not ask for confirmation.
@@ -77,7 +75,6 @@ while [[ $# -gt 0 ]]; do
     --retention) RETENTION="${2:?--retention needs a period}"; RETENTION_SET=true; shift 2 ;;
     --metrics-retention) METRICS_RETENTION="${2:?--metrics-retention needs a number of months}"; shift 2 ;;
     --monitoring) MONITORING=true; shift ;;
-    --forward) FORWARD_URL="${2:?--forward needs a URL}"; shift 2 ;;
     --pull) PULL=true; shift ;;
     --no-firewall) OPEN_FIREWALL=false; shift ;;
     --yes|-y) ASSUME_YES=true; shift ;;
@@ -112,7 +109,6 @@ fi
 compose_files() {
   local files=(-f docker-compose.yml)
   [[ "$MONITORING" == true ]] && files+=(-f docker-compose.monitoring.yml)
-  [[ -n "$FORWARD_URL" || -f .forwarding-enabled ]] && files+=(-f docker-compose.forwarding.yml)
   printf '%s\n' "${files[@]}"
 }
 docker_compose() {
@@ -309,11 +305,6 @@ if [[ -f deploy/compose/syslogc.local.yaml ]]; then
   ok "using deploy/compose/syslogc.local.yaml"
   # Forwarding mounts its own configuration file over this one, so settings
   # put here would be silently ignored while it is on.
-  if [[ -n "$FORWARD_URL" || -f .forwarding-enabled ]]; then
-    warn "forwarding is on, and it mounts its own configuration instead:"
-    printf '      your settings belong in deploy/compose/syslogc-forwarding.local.yaml\n'
-    printf '      (or turn forwarding off: rm .forwarding-enabled)\n'
-  fi
 fi
 
 if [[ "$ACME" == true ]]; then
@@ -336,21 +327,23 @@ set_env SYSLOGC_NODE_ID "$(hostname -s)"
 [[ "$PULL" == true ]] && set_env SYSLOGC_VERSION latest
 ok "$(grep -c '^[A-Z]' .env) settings in .env"
 
-if [[ -n "$FORWARD_URL" ]]; then
-  # The edited copy is untracked, so `git pull` during an upgrade is not
-  # blocked by a locally modified file.
-  python3 - "$FORWARD_URL" <<'PY'
-import re, sys
-url = sys.argv[1]
-src, dst = "deploy/compose/syslogc-forwarding.yaml", "deploy/compose/syslogc-forwarding.local.yaml"
-text = open(src).read()
-text = re.sub(r"(\n\s+url:\s*)\S+", r"\g<1>" + url, text, count=1)
-open(dst, "w").write(text)
-PY
-  sed -i '/^SYSLOGC_FORWARD_CONFIG=/d' .env
-  printf 'SYSLOGC_FORWARD_CONFIG=%s\n' "./deploy/compose/syslogc-forwarding.local.yaml" >> .env
-  touch .forwarding-enabled
-  ok "forwarding a copy of every stored log to $FORWARD_URL"
+# ---- 4b. the demo mirror, if an older version left one behind -------------------
+# Forwarding used to bring up a second VictoriaLogs on this host and mirror to
+# it, which protects against nothing if the host is lost. Targets are now added
+# on the Forwarding page and point wherever you like, so the container is gone
+# — but Docker never removes a volume by itself, and this one holds a copy of
+# every log it was given.
+# Read the list first: `grep -q` closes the pipe on its first match, and under
+# pipefail the writer's SIGPIPE would fail the whole script.
+dr_volume="${COMPOSE_PROJECT:-syslogc}_vlogs-dr-data"
+volumes="$($SUDO docker volume ls --format '{{.Name}}' 2>/dev/null || true)"
+if printf '%s\n' "$volumes" | grep -Fxq "$dr_volume"; then
+  # Reads to the end on purpose: an early exit closes the pipe and the
+  # writer's SIGPIPE would fail the script under pipefail.
+  size="$($SUDO docker system df -v 2>/dev/null | awk '/vlogs-dr-data/ {v=$NF} END {print v}')"
+  warn "the old local mirror's data is still here${size:+ ($size)}, and nothing uses it:"
+  printf '      docker volume rm %s\n' "$dr_volume"
+  printf '      (add forward targets on the Forwarding page instead)\n'
 fi
 
 # ---- 5. firewall -----------------------------------------------------------------
