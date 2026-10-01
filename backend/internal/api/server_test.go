@@ -5,12 +5,19 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	crand "crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -1706,5 +1713,147 @@ func TestServiceTrendsScope(t *testing.T) {
 		"time_range": map[string]string{"from": "now-6h", "to": "now"}, "window": "1h", "scope": "cdn"}, nil); resp.StatusCode != http.StatusUnprocessableEntity ||
 		!strings.Contains(string(body), "scope must be") {
 		t.Errorf("unknown scope: %d %s", resp.StatusCode, body)
+	}
+}
+
+// testCertificate is a certificate and key generated for one test run.
+func testCertificate(t *testing.T, cn string) (certPEM, keyPEM string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), crand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		DNSNames:     []string{cn},
+	}
+	der, err := x509.CreateCertificate(crand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+		string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+}
+
+func TestAPastedPrivateKeyNeverComesBack(t *testing.T) {
+	e := newEnv(t)
+	ops := e.login("ops")
+	certPEM, keyPEM := testCertificate(t, "syslog.example.com")
+
+	create := map[string]any{"enabled": false, "config": map[string]any{
+		"name": "tls-pasted", "type": "syslog", "protocol": "tls", "address": ":16514",
+		"tls": map[string]any{"cert": certPEM, "key": keyPEM, "min_version": "1.2"}}}
+	resp, body := ops.do("POST", "/api/v1/sources", create, nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.StatusCode, body)
+	}
+	// The key is the one field that must never travel back to a browser.
+	if strings.Contains(string(body), "PRIVATE KEY") {
+		t.Fatal("the private key was returned in the create response")
+	}
+	var created struct {
+		ID          string `json:"id"`
+		Version     int    `json:"version"`
+		KeyStored   bool   `json:"key_stored"`
+		Certificate *struct {
+			Subject  string   `json:"subject"`
+			DNSNames []string `json:"dns_names"`
+		} `json:"certificate"`
+		Config struct {
+			TLS struct {
+				Cert string `json:"cert"`
+				Key  string `json:"key"`
+			} `json:"tls"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Config.TLS.Key != "" {
+		t.Error("the key field was not cleared")
+	}
+	if !created.KeyStored {
+		t.Error("key_stored is false, so the editor cannot tell a key is held")
+	}
+	// The certificate is described, which is how someone confirms they
+	// pasted the right one.
+	if created.Certificate == nil || created.Certificate.Subject != "syslog.example.com" {
+		t.Fatalf("certificate = %+v", created.Certificate)
+	}
+	if len(created.Certificate.DNSNames) != 1 {
+		t.Errorf("dns names = %v", created.Certificate.DNSNames)
+	}
+	// It is still readable on its own, so the editor can show it.
+	if !strings.Contains(created.Config.TLS.Cert, "BEGIN CERTIFICATE") {
+		t.Error("the certificate was not returned")
+	}
+
+	// Reading it back does not leak the key either.
+	_, body = ops.do("GET", "/api/v1/sources/"+created.ID, nil, nil)
+	if strings.Contains(string(body), "PRIVATE KEY") {
+		t.Fatal("the private key was returned when reading the source")
+	}
+
+	// Saving the source again without a key — which is all the editor can
+	// do, having never received one — keeps the stored key rather than
+	// breaking a working listener.
+	update := map[string]any{"version": created.Version, "enabled": false, "config": map[string]any{
+		"name": "tls-pasted", "type": "syslog", "protocol": "tls", "address": ":16515",
+		"tls": map[string]any{"cert": certPEM, "min_version": "1.2"}}}
+	resp, body = ops.do("PUT", "/api/v1/sources/"+created.ID, update, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update: %d %s", resp.StatusCode, body)
+	}
+	var updated struct {
+		KeyStored bool `json:"key_stored"`
+	}
+	_ = json.Unmarshal(body, &updated)
+	if !updated.KeyStored {
+		t.Error("editing the address dropped the stored key, which would break the listener")
+	}
+}
+
+func TestCertificateMistakesAreRefusedWithTheReason(t *testing.T) {
+	e := newEnv(t)
+	ops := e.login("ops")
+	certPEM, keyPEM := testCertificate(t, "a.example.com")
+	_, otherKey := testCertificate(t, "b.example.com")
+
+	for _, tc := range []struct {
+		name string
+		tls  map[string]any
+		want string
+	}{
+		{"key of another certificate", map[string]any{"cert": certPEM, "key": otherKey, "min_version": "1.2"},
+			"does not belong to this certificate"},
+		{"the two swapped", map[string]any{"cert": keyPEM, "key": certPEM, "min_version": "1.2"},
+			"private key, not a certificate"},
+		{"no certificate at all", map[string]any{"min_version": "1.2"},
+			"needs a certificate"},
+		{"acme without agreeing to the terms", map[string]any{"min_version": "1.2",
+			"acme": map[string]any{"enabled": true, "domains": []string{"a.example.com"}}},
+			"accept_terms"},
+		{"acme without a domain", map[string]any{"min_version": "1.2",
+			"acme": map[string]any{"enabled": true, "accept_terms": true}},
+			"at least one hostname"},
+	} {
+		body := map[string]any{"enabled": true, "config": map[string]any{
+			"name": "tls-" + strings.ReplaceAll(tc.name, " ", "-"), "type": "syslog",
+			"protocol": "tls", "address": ":16600", "tls": tc.tls}}
+		resp, raw := ops.do("POST", "/api/v1/sources", body, nil)
+		if resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status %d, want it refused: %s", tc.name, resp.StatusCode, raw)
+			continue
+		}
+		if !strings.Contains(string(raw), tc.want) {
+			t.Errorf("%s: response does not mention %q: %s", tc.name, tc.want, raw)
+		}
 	}
 }

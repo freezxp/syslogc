@@ -1083,12 +1083,50 @@ components:
             read_buffer_bytes: {type: string}
         tls:
           type: object
+          description: |
+            A TLS source needs a certificate from exactly one of three
+            places: a certificate authority (`acme`), the PEM itself
+            (`cert` and `key`), or files on the server (`cert_file` and
+            `key_file`). Pasted material takes precedence over the paths.
           properties:
-            cert_file: {type: string}
+            cert_file: {type: string, description: Path on the server, watched so a renewal is picked up without a restart.}
             key_file: {type: string}
+            cert:
+              type: string
+              description: The certificate as PEM, for a deployment with nowhere to put a file.
+            key:
+              type: string
+              writeOnly: true
+              description: >-
+                The private key as PEM. Never returned: reads report
+                `key_stored` instead, and a write that omits it keeps the
+                stored key rather than removing it.
             min_version: {type: string, enum: ["1.2", "1.3"]}
             client_auth: {type: string, enum: [none, request, require_and_verify]}
             client_ca_file: {type: string}
+            client_ca: {type: string, description: The client CA as PEM.}
+            acme:
+              type: object
+              description: |
+                Obtain the certificate from Let's Encrypt over the HTTP-01
+                challenge. The host needs a public name that resolves to it
+                and port 80 reachable from the internet.
+              properties:
+                enabled: {type: boolean}
+                domains: {type: array, items: {type: string}, description: Bare hostnames; wildcards need DNS-01, which is not offered.}
+                email: {type: string, description: Where the authority sends expiry warnings.}
+                staging:
+                  type: boolean
+                  description: >-
+                    Ask the test authority, whose certificates nothing trusts
+                    and whose limits forgive. Start here: the real authority
+                    allows five failed validations per hostname per hour.
+                accept_terms:
+                  type: boolean
+                  description: Required. Records agreement to https://letsencrypt.org/repository/
+                skip_preflight:
+                  type: boolean
+                  description: Ask even when this host cannot reach its own name on port 80.
 
     ExtractRule:
       type: object
@@ -1120,6 +1158,21 @@ components:
           type: string
           enum: [file, database]
           description: "`file` sources are read-only and win any name or address conflict."
+        key_stored:
+          type: boolean
+          description: A private key is held for this source. The key itself is never returned.
+        certificate:
+          type: object
+          description: What the source's certificate covers, when it has a pasted one.
+          properties:
+            subject: {type: string}
+            issuer: {type: string}
+            dns_names: {type: array, items: {type: string}}
+            ip_addresses: {type: array, items: {type: string}}
+            not_before: {type: string, format: date-time}
+            not_after: {type: string, format: date-time}
+            self_signed: {type: boolean, description: Works, but every sender must be told to trust this certificate specifically.}
+            chain: {type: integer, description: How many certificates were given; a public certificate usually needs its intermediates too.}
         adopted:
           type: boolean
           description: >-
