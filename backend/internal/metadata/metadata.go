@@ -99,6 +99,23 @@ type AuditEvent struct {
 
 // Source is a database-managed ingestion source. Config is the YAML source
 // object as JSON, so the ingestion layer stays unaware of the metadata store.
+// ForwardTarget is somewhere stored logs are mirrored to, as configured in
+// the web interface.
+type ForwardTarget struct {
+	ID      uuid.UUID
+	Tenant  string
+	Name    string
+	Config  json.RawMessage
+	Enabled bool
+	// Secret holds credentials for the remote, kept apart from Config so
+	// that reads can return the configuration without them.
+	Secret    string
+	CreatedBy *uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Version   int
+}
+
 type Source struct {
 	ID      uuid.UUID
 	Tenant  string
@@ -204,6 +221,12 @@ type Store interface {
 	ListSavedSearches(ctx context.Context, f ListSavedSearches) ([]SavedSearch, error)
 	UpdateSavedSearch(ctx context.Context, s *SavedSearch) error
 	DeleteSavedSearch(ctx context.Context, tenant string, id uuid.UUID) error
+
+	CreateForwardTarget(ctx context.Context, t *ForwardTarget) error
+	ForwardTargetByID(ctx context.Context, tenant string, id uuid.UUID) (*ForwardTarget, error)
+	ListForwardTargets(ctx context.Context, tenant string) ([]ForwardTarget, error)
+	UpdateForwardTarget(ctx context.Context, t *ForwardTarget) error
+	DeleteForwardTarget(ctx context.Context, tenant string, id uuid.UUID) error
 
 	CreateSource(ctx context.Context, s *Source) error
 	SourceByID(ctx context.Context, tenant string, id uuid.UUID) (*Source, error)

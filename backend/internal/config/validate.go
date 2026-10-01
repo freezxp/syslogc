@@ -146,30 +146,11 @@ func (c *Config) Validate() error {
 		if t.Name != "" {
 			p = fmt.Sprintf("forwarding.targets[%s]", t.Name)
 		}
-		switch {
-		case t.Name == "":
-			add("%s: name is required", p)
-		case targetNames[t.Name]:
+		if targetNames[t.Name] {
 			add("%s: duplicate target name", p)
 		}
 		targetNames[t.Name] = true
-		if err := validateURL(t.URL); err != nil {
-			add("%s.url: %v", p, err)
-		}
-		if t.MinSeverity != "" && !validSeverity(t.MinSeverity) {
-			add("%s.min_severity: unknown severity %q", p, t.MinSeverity)
-		}
-		switch t.Compression {
-		case "", "none", "gzip", "zstd":
-		default:
-			add("%s.compression: must be none, gzip or zstd", p)
-		}
-		if t.Queue.MaxMessages < 1 {
-			add("%s.queue.max_messages: must be positive", p)
-		}
-		if t.Batch.MaxRows < 1 {
-			add("%s.batch.max_rows: must be positive", p)
-		}
+		errs = append(errs, validateForwardTarget(p, t)...)
 	}
 
 	pg := c.Metadata.Postgres
@@ -437,4 +418,40 @@ var severityNames = []string{"emergency", "alert", "critical", "error", "warning
 
 func validSeverity(name string) bool {
 	return slices.Contains(severityNames, strings.ToLower(name))
+}
+
+// validateForwardTarget checks one target. It is shared by the configuration
+// file and the API, so a target made in the web interface is held to exactly
+// the same rules as one written by hand.
+func validateForwardTarget(prefix string, t ForwardTarget) []error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+	if strings.TrimSpace(t.Name) == "" {
+		add("%s: name is required", prefix)
+	}
+	if err := validateURL(t.URL); err != nil {
+		add("%s.url: %v", prefix, err)
+	}
+	if t.MinSeverity != "" && !validSeverity(t.MinSeverity) {
+		add("%s.min_severity: unknown severity %q", prefix, t.MinSeverity)
+	}
+	switch t.Compression {
+	case "", "none", "gzip", "zstd":
+	default:
+		add("%s.compression: must be none, gzip or zstd", prefix)
+	}
+	if t.Queue.MaxMessages < 1 {
+		add("%s.queue.max_messages: must be positive", prefix)
+	}
+	if t.Batch.MaxRows < 1 {
+		add("%s.batch.max_rows: must be positive", prefix)
+	}
+	return errs
+}
+
+// PrepareForwardTarget fills in defaults and validates, for a target that
+// arrived through the API rather than the configuration file.
+func PrepareForwardTarget(t *ForwardTarget) error {
+	applyForwardDefaults(t)
+	return errors.Join(validateForwardTarget("target", *t)...)
 }

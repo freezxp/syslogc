@@ -41,6 +41,11 @@ type Options struct {
 	MaxBackoff       time.Duration
 	// Sources restricts forwarding to these source names; empty forwards all.
 	Sources []string
+	// Config is the definition this was built from, carried so the registry
+	// can tell an unchanged target from a changed one and rebuild it without
+	// consulting anything else. Compared by value, so it must stay
+	// comparable.
+	Config any
 	// MinSeverity forwards only entries at this severity or more severe
 	// (numerically lower). Nil forwards every severity.
 	MinSeverity *logentry.Severity
@@ -316,6 +321,12 @@ type Status struct {
 	LastError   string   `json:"last_error,omitempty"`
 	MinSeverity string   `json:"min_severity,omitempty"`
 	Sources     []string `json:"sources,omitempty"`
+	// Origin is "file" or "database", so it is clear where to change it.
+	Origin string `json:"origin,omitempty"`
+	// Enabled is false for a target that is configured but not running, which
+	// is reported rather than omitted: a target that is off should look off
+	// rather than look missing.
+	Enabled bool `json:"enabled"`
 }
 
 func (f *Forwarder) Status() Status {

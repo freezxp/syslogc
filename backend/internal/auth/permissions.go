@@ -9,26 +9,27 @@ import "sort"
 type Permission string
 
 const (
-	PermDashboardView   Permission = "dashboard:view"
-	PermLogsSearch      Permission = "logs:search"
-	PermLogsTail        Permission = "logs:tail"
-	PermLogsViewRaw     Permission = "logs:view_raw"
-	PermLogsQueryNative Permission = "logs:query_native"
-	PermLogsExport      Permission = "logs:export"
-	PermLogsIngest      Permission = "logs:ingest"
-	PermSearchesRead    Permission = "searches:read"
-	PermSearchesWrite   Permission = "searches:write"
-	PermSourcesRead     Permission = "sources:read"
-	PermSourcesManage   Permission = "sources:manage"
-	PermSystemView      Permission = "system:view"
-	PermConfigView      Permission = "config:view"
-	PermConfigManage    Permission = "config:manage"
-	PermRetentionManage Permission = "retention:manage"
-	PermAnalyticsManage Permission = "analytics:manage"
-	PermUsersManage     Permission = "users:manage"
-	PermAPIKeysOwn      Permission = "apikeys:own"
-	PermAPIKeysManage   Permission = "apikeys:manage"
-	PermAuditView       Permission = "audit:view"
+	PermDashboardView    Permission = "dashboard:view"
+	PermLogsSearch       Permission = "logs:search"
+	PermLogsTail         Permission = "logs:tail"
+	PermLogsViewRaw      Permission = "logs:view_raw"
+	PermLogsQueryNative  Permission = "logs:query_native"
+	PermLogsExport       Permission = "logs:export"
+	PermLogsIngest       Permission = "logs:ingest"
+	PermSearchesRead     Permission = "searches:read"
+	PermSearchesWrite    Permission = "searches:write"
+	PermSourcesRead      Permission = "sources:read"
+	PermSourcesManage    Permission = "sources:manage"
+	PermSystemView       Permission = "system:view"
+	PermConfigView       Permission = "config:view"
+	PermConfigManage     Permission = "config:manage"
+	PermRetentionManage  Permission = "retention:manage"
+	PermAnalyticsManage  Permission = "analytics:manage"
+	PermForwardingManage Permission = "forwarding:manage"
+	PermUsersManage      Permission = "users:manage"
+	PermAPIKeysOwn       Permission = "apikeys:own"
+	PermAPIKeysManage    Permission = "apikeys:manage"
+	PermAuditView        Permission = "audit:view"
 )
 
 // Roles.
@@ -50,6 +51,9 @@ var operatorPermissions = append(append([]Permission{}, viewerPermissions...),
 
 var adminPermissions = append(append([]Permission{}, operatorPermissions...),
 	PermConfigManage, PermRetentionManage, PermUsersManage, PermAPIKeysManage, PermAuditView,
+	// Mirroring every log to another system is an administrator's decision:
+	// it sends the organisation's data somewhere new.
+	PermForwardingManage,
 )
 
 var rolePermissions = map[string]PermissionSet{

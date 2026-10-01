@@ -183,14 +183,14 @@ type QueueConfig struct {
 }
 
 type BatchConfig struct {
-	MaxRows  int      `koanf:"max_rows"`
-	MaxBytes ByteSize `koanf:"max_bytes"`
-	MaxWait  Duration `koanf:"max_wait"`
+	MaxRows  int      `koanf:"max_rows" json:"max_rows,omitempty"`
+	MaxBytes ByteSize `koanf:"max_bytes" json:"max_bytes,omitempty"`
+	MaxWait  Duration `koanf:"max_wait" json:"max_wait,omitempty"`
 }
 
 type RetryConfig struct {
-	InitialBackoff Duration `koanf:"initial_backoff"`
-	MaxBackoff     Duration `koanf:"max_backoff"`
+	InitialBackoff Duration `koanf:"initial_backoff" json:"initial_backoff,omitempty"`
+	MaxBackoff     Duration `koanf:"max_backoff" json:"max_backoff,omitempty"`
 }
 
 type TimeConfig struct {
@@ -339,36 +339,40 @@ type ForwardingConfig struct {
 
 // ForwardTarget is one remote instance that receives a copy of stored logs.
 type ForwardTarget struct {
-	Name    string `koanf:"name"`
-	Enabled *bool  `koanf:"enabled"`
+	Name    string `koanf:"name" json:"name,omitempty"`
+	Enabled *bool  `koanf:"enabled" json:"enabled,omitempty"`
 	// URL is the base URL of the remote VictoriaLogs instance.
-	URL string `koanf:"url"`
+	URL string `koanf:"url" json:"url,omitempty"`
 	// Tenant selects which tenant's logs are forwarded; empty forwards all.
-	Tenant string `koanf:"tenant"`
+	Tenant string `koanf:"tenant" json:"tenant,omitempty"`
 	// Sources restricts forwarding to these source names; empty forwards all.
-	Sources []string `koanf:"sources"`
+	Sources []string `koanf:"sources" json:"sources,omitempty"`
 	// MinSeverity forwards only this severity or more severe (e.g. "warning").
-	MinSeverity string `koanf:"min_severity"`
+	MinSeverity string `koanf:"min_severity" json:"min_severity,omitempty"`
 
-	StreamFields []string `koanf:"stream_fields"`
-	Compression  string   `koanf:"compression"`
-	WriteTimeout Duration `koanf:"write_timeout"`
+	StreamFields []string `koanf:"stream_fields" json:"stream_fields,omitempty"`
+	Compression  string   `koanf:"compression" json:"compression,omitempty"`
+	WriteTimeout Duration `koanf:"write_timeout" json:"write_timeout,omitempty"`
 
-	BasicUsername     string `koanf:"basic_username"`
-	BasicPasswordFile string `koanf:"basic_password_file"`
-	BearerTokenFile   string `koanf:"bearer_token_file"`
+	BasicUsername     string `koanf:"basic_username" json:"basic_username,omitempty"`
+	BasicPasswordFile string `koanf:"basic_password_file" json:"basic_password_file,omitempty"`
+	BearerTokenFile   string `koanf:"bearer_token_file" json:"bearer_token_file,omitempty"`
+	// BearerToken is the token itself, for a target configured in the web
+	// interface where there is no file to point at. It is stored apart from
+	// the rest of the configuration and never returned by the API.
+	BearerToken string `koanf:"-" json:"-"`
 
-	Queue ForwardQueueConfig `koanf:"queue"`
-	Batch BatchConfig        `koanf:"batch"`
-	Retry RetryConfig        `koanf:"retry"`
+	Queue ForwardQueueConfig `koanf:"queue" json:"queue,omitempty"`
+	Batch BatchConfig        `koanf:"batch" json:"batch,omitempty"`
+	Retry RetryConfig        `koanf:"retry" json:"retry,omitempty"`
 }
 
 // IsEnabled reports whether the target is enabled (default true).
 func (t ForwardTarget) IsEnabled() bool { return t.Enabled == nil || *t.Enabled }
 
 type ForwardQueueConfig struct {
-	MaxMessages int      `koanf:"max_messages"`
-	MaxBytes    ByteSize `koanf:"max_bytes"`
+	MaxMessages int      `koanf:"max_messages" json:"max_messages,omitempty"`
+	MaxBytes    ByteSize `koanf:"max_bytes" json:"max_bytes,omitempty"`
 }
 
 type RetentionConfig struct {

@@ -27,7 +27,6 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
-	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metadata/postgres"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
@@ -60,7 +59,7 @@ type App struct {
 	pipeline   *pipeline.Pipeline
 	supervisor *supervisor.Supervisor
 	server     *api.Server
-	forwarders forwarding.Fanout
+	forwarders *forwarding.Registry
 	// closers hold remote clients owned by forwarders.
 	closers []io.Closer
 
@@ -207,57 +206,11 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 	return a, nil
 }
 
-// wireForwarding builds one forwarder per configured target. Targets are
-// separate storage clients: a slow or broken remote cannot affect the local
-// write path, only its own bounded queue.
+// wireForwarding prepares the set of places logs are mirrored to. Nothing is
+// built yet: the targets are reconciled once the pipeline is running, so a
+// remote that is slow to open cannot delay ingestion starting.
 func (a *App) wireForwarding() error {
-	for _, t := range a.cfg.Forwarding.Targets {
-		if !t.IsEnabled() {
-			a.log.Info("forward target disabled", "target", t.Name)
-			continue
-		}
-		remote, err := victorialogs.New(victorialogs.Config{
-			InsertURL:         t.URL,
-			SelectURL:         t.URL,
-			StreamFields:      t.StreamFields,
-			WriteTimeout:      t.WriteTimeout.D(),
-			QueryTimeout:      t.WriteTimeout.D(),
-			Compression:       t.Compression,
-			BasicUsername:     t.BasicUsername,
-			BasicPasswordFile: t.BasicPasswordFile,
-			BearerTokenFile:   t.BearerTokenFile,
-			MaxConnsPerHost:   8,
-		})
-		if err != nil {
-			return fmt.Errorf("forwarding target %s: %w", t.Name, err)
-		}
-		var minSeverity *logentry.Severity
-		if t.MinSeverity != "" {
-			sev, ok := normalization.ParseSeverity(t.MinSeverity)
-			if !ok {
-				return fmt.Errorf("forwarding target %s: unknown severity %q", t.Name, t.MinSeverity)
-			}
-			minSeverity = &sev
-		}
-		a.forwarders = append(a.forwarders, forwarding.New(forwarding.Options{
-			Name:             t.Name,
-			Writer:           remote.Writer(),
-			QueueMaxMessages: t.Queue.MaxMessages,
-			QueueMaxBytes:    int64(t.Queue.MaxBytes),
-			BatchMaxRows:     t.Batch.MaxRows,
-			BatchMaxBytes:    t.Batch.MaxBytes.Int(),
-			BatchMaxWait:     t.Batch.MaxWait.D(),
-			InitialBackoff:   t.Retry.InitialBackoff.D(),
-			MaxBackoff:       t.Retry.MaxBackoff.D(),
-			Sources:          t.Sources,
-			MinSeverity:      minSeverity,
-			Metrics:          a.metrics,
-			Log:              a.log.With("component", "forwarding"),
-		}))
-		a.closers = append(a.closers, remote)
-		a.log.Info("forward target configured", "target", t.Name, "url", t.URL,
-			"sources", t.Sources, "min_severity", t.MinSeverity)
-	}
+	a.forwarders = forwarding.NewRegistry(a.log.With("component", "forwarding"))
 	return nil
 }
 
@@ -347,7 +300,7 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 		AuditAll:      cfg.Query.AuditAll,
 		WebUI:         webui.FS(),
 	}
-	if len(a.forwarders) > 0 {
+	if a.forwarders != nil {
 		deps.Forwarders = a.forwarders.Statuses
 	}
 	if a.supervisor != nil {
@@ -427,6 +380,11 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 	}
 	if a.pipeline != nil {
 		a.forwarders.Start()
+		// The first reconcile opens the remotes. Done here rather than at
+		// wiring time so a remote that is slow to answer delays nothing.
+		rctx, rcancel := context.WithTimeout(context.Background(), time.Minute)
+		a.forwarders.Reconcile(rctx, a.desiredForwardTargets(rctx), a.buildForwarder)
+		rcancel()
 		a.pipeline.Start()
 		a.supervisor.Start(a.cfg.Ingestion.Sources)
 	}
@@ -444,6 +402,9 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 	}
 	if a.store != nil {
 		go a.maintenance(bgCtx)
+		if a.pipeline != nil {
+			go a.watchForwardTargets(bgCtx)
+		}
 	}
 	if a.trends != nil {
 		go a.recordServiceTrends(bgCtx)

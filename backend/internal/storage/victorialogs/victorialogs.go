@@ -31,6 +31,9 @@ type Config struct {
 	BasicUsername     string
 	BasicPasswordFile string
 	BearerTokenFile   string
+	// BearerToken is the token itself, for a caller that holds it rather
+	// than a path to it. Takes precedence over the file.
+	BearerToken string
 	// MaxConnsPerHost bounds concurrent connections (defaults to 64).
 	MaxConnsPerHost int
 }
@@ -143,6 +146,9 @@ func tenantHeaders(req *http.Request, tenant string) error {
 
 func authFunc(cfg Config) (func(*http.Request), error) {
 	switch {
+	case cfg.BearerToken != "":
+		token := cfg.BearerToken
+		return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+token) }, nil
 	case cfg.BearerTokenFile != "":
 		token, err := readSecretFile(cfg.BearerTokenFile)
 		if err != nil {
