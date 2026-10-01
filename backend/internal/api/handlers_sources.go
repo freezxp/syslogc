@@ -307,6 +307,15 @@ func (s *Server) resolveTLSMaterial(sc *config.Source, self *metadata.Source) er
 	if sc.Protocol != config.ProtocolTLS {
 		return nil
 	}
+	// A source backed by a certificate authority has no material of its own:
+	// the certificate arrives later, from the authority. Checking for one
+	// here would refuse every such source before it could ever be saved.
+	if sc.TLS.ACME.Enabled {
+		if _, err := certs.ClientCAs(sc.TLS.ClientCA, sc.TLS.ClientCAFile); err != nil {
+			return badRequest("validation_failed", "/config/tls/client_ca", "%s", err.Error())
+		}
+		return nil
+	}
 	if strings.TrimSpace(sc.TLS.Key) == "" && self != nil {
 		var stored config.Source
 		if err := json.Unmarshal(self.Config, &stored); err == nil {

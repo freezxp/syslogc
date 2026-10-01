@@ -1857,3 +1857,64 @@ func TestCertificateMistakesAreRefusedWithTheReason(t *testing.T) {
 		}
 	}
 }
+
+func TestASourceBackedByACertificateAuthorityCanBeSaved(t *testing.T) {
+	e := newEnv(t)
+	ops := e.login("ops")
+	// Such a source has no certificate of its own — the authority provides
+	// one later — so nothing may demand material from it at save time.
+	body := map[string]any{"enabled": false, "config": map[string]any{
+		"name": "tls-acme", "type": "syslog", "protocol": "tls", "address": ":16800",
+		"tls": map[string]any{"min_version": "1.2", "acme": map[string]any{
+			"enabled": true, "domains": []string{"syslog.example.com"},
+			"email": "ops@example.com", "staging": true, "accept_terms": true}}}}
+	resp, raw := ops.do("POST", "/api/v1/sources", body, nil)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+	var created struct {
+		Config struct {
+			TLS struct {
+				ACME struct {
+					Enabled bool     `json:"enabled"`
+					Domains []string `json:"domains"`
+					Staging bool     `json:"staging"`
+				} `json:"acme"`
+			} `json:"tls"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatal(err)
+	}
+	acme := created.Config.TLS.ACME
+	if !acme.Enabled || len(acme.Domains) != 1 || !acme.Staging {
+		t.Errorf("acme = %+v, want it stored as given", acme)
+	}
+}
+
+func TestAPastedClientCASatisfiesRequireAndVerify(t *testing.T) {
+	e := newEnv(t)
+	ops := e.login("ops")
+	certPEM, keyPEM := testCertificate(t, "mutual.example.com")
+	caPEM, _ := testCertificate(t, "ca.example.com")
+
+	// A deployment with nowhere to put a file must be able to paste the CA
+	// it verifies senders against, as it pastes its own certificate.
+	body := map[string]any{"enabled": true, "config": map[string]any{
+		"name": "tls-mutual", "type": "syslog", "protocol": "tls", "address": ":16801",
+		"tls": map[string]any{"cert": certPEM, "key": keyPEM, "min_version": "1.2",
+			"client_auth": "require_and_verify", "client_ca": caPEM}}}
+	if resp, raw := ops.do("POST", "/api/v1/sources", body, nil); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.StatusCode, raw)
+	}
+
+	// Asking senders for a certificate while naming no authority to judge
+	// them by is still refused.
+	body["config"].(map[string]any)["name"] = "tls-mutual-no-ca"
+	body["config"].(map[string]any)["address"] = ":16802"
+	body["config"].(map[string]any)["tls"].(map[string]any)["client_ca"] = ""
+	resp, raw := ops.do("POST", "/api/v1/sources", body, nil)
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(raw), "client CA is required") {
+		t.Errorf("no CA: %d %s", resp.StatusCode, raw)
+	}
+}

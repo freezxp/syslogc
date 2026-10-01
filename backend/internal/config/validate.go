@@ -343,8 +343,11 @@ func validateSource(p string, s Source) []error {
 		switch s.TLS.ClientAuth {
 		case "none", "request":
 		case "require_and_verify":
-			if s.TLS.ClientCAFile == "" {
-				add("tls.client_ca_file is required with client_auth require_and_verify")
+			// Either form of the CA will do, for the same reason the
+			// server's own certificate accepts either.
+			if s.TLS.ClientCAFile == "" && strings.TrimSpace(s.TLS.ClientCA) == "" {
+				add("a client CA is required with client_auth require_and_verify: " +
+					"set tls.client_ca or tls.client_ca_file")
 			}
 		default:
 			add("tls.client_auth must be none, request or require_and_verify")

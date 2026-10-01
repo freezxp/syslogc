@@ -7,6 +7,7 @@ import type {
   ApiKey,
   AuditEvent,
   BreakdownRequest,
+  CertificateInfo,
   ExportRequest,
   ExtractTestRequest,
   FacetsRequest,
@@ -19,6 +20,7 @@ import type {
   Problem,
   RetentionUpdateInput,
   SourceInput,
+  SourceTLSConfig,
   SavedSearch,
   SavedSearchInput,
   SearchRequest,
@@ -375,6 +377,20 @@ const FILE_SOURCES: ManagedSource[] = [
   },
 ]
 
+/** A real self-signed certificate, so the paste field shows what PEM looks like. */
+const MOCK_CERT_PEM = `-----BEGIN CERTIFICATE-----
+MIIBwTCCAWegAwIBAgIURhO2lneoFllk2+61DNfL5n9awiAwCgYIKoZIzj0EAwIw
+HTEbMBkGA1UEAwwSZG16LXJlbGF5LmludGVybmFsMB4XDTI2MTAwMTAzMDgyM1oX
+DTI2MTAzMTAzMDgyM1owHTEbMBkGA1UEAwwSZG16LXJlbGF5LmludGVybmFsMFkw
+EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPblEz9+96Syt064iNz/CnqlaCvax0bce
+PCqHO/ADtcSK4GIpFju3mxcLG6xJDhltRTfnmjTP62a10QY1bz0DZ6OBhDCBgTAd
+BgNVHQ4EFgQUUXYS6CYrEmn/dGSvgQqMgauZyNMwHwYDVR0jBBgwFoAUUXYS6CYr
+Emn/dGSvgQqMgauZyNMwDwYDVR0TAQH/BAUwAwEB/zAuBgNVHREEJzAlghJkbXot
+cmVsYXkuaW50ZXJuYWyCCWRtei1yZWxheYcECh4ACTAKBggqhkjOPQQDAgNIADBF
+AiAhetvR3NPpq3iujdN4USmgCQuilp7sxqZeMmr8+VeQhwIhAN+/v8C3ib0nkyt3
+5yxJPIygSJ4VyVs7A/SPNkDByX67
+-----END CERTIFICATE-----`
+
 let managedSources: ManagedSource[] = [
   {
     id: '0192f0c4-3333-7000-8000-000000000001',
@@ -456,7 +472,84 @@ let managedSources: ManagedSource[] = [
     updated_at: new Date(NOW - 45 * 60_000).toISOString(),
     version: 1,
   },
+  {
+    // A listener whose certificate was pasted: nothing on the host's filesystem,
+    // a stored key that never comes back, and an expiry worth warning about.
+    id: '0192f0c4-3333-7000-8000-000000000003',
+    config: {
+      name: 'dmz-tls',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6516',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      tls: {
+        cert: MOCK_CERT_PEM,
+        key: '-----BEGIN PRIVATE KEY-----\nmock\n-----END PRIVATE KEY-----',
+        min_version: '1.3',
+      },
+    },
+    enabled: true,
+    origin: 'database',
+    certificate: {
+      subject: 'CN=dmz-relay.internal',
+      issuer: 'CN=dmz-relay.internal',
+      dns_names: ['dmz-relay.internal', 'dmz-relay'],
+      ip_addresses: ['10.30.0.9'],
+      not_before: new Date(NOW - 72 * 86400_000).toISOString(),
+      not_after: new Date(NOW + 18 * 86400_000).toISOString(),
+      self_signed: true,
+      chain: 1,
+    },
+    status: {
+      name: 'dmz-tls',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6516',
+      state: 'running',
+      since: new Date(NOW - 6 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 5 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 6 * 3600_000).toISOString(),
+    version: 4,
+  },
 ]
+
+/**
+ * Mirrors the server's one rule about the private key: it goes in, it is used,
+ * and it is read back only as whether one is held.
+ */
+function sourceResponse(s: ManagedSource): ManagedSource {
+  const tls = s.config.tls
+  if (!tls) return s
+  return { ...s, key_stored: !!tls.key?.trim(), config: { ...s.config, tls: { ...tls, key: undefined } } }
+}
+
+/**
+ * What the server reports about a pasted certificate. A browser cannot read
+ * X.509, so a newly pasted one is described plausibly rather than truthfully;
+ * a certificate that has not changed keeps the description it came with.
+ */
+function describeCertificate(config: ManagedSource['config'], previous: ManagedSource | undefined) {
+  const cert = config.tls?.cert?.trim()
+  if (!cert) return undefined
+  if (previous?.certificate && previous.config.tls?.cert?.trim() === cert) return previous.certificate
+  const now = Date.now()
+  const info: CertificateInfo = {
+    subject: `CN=${config.name}`,
+    issuer: `CN=${config.name}`,
+    dns_names: [config.name],
+    not_before: new Date(now - 3600_000).toISOString(),
+    not_after: new Date(now + 90 * 86400_000).toISOString(),
+    self_signed: true,
+    chain: 1,
+  }
+  return info
+}
 
 let users: AdminUser[] = [
   {
@@ -1549,7 +1642,7 @@ export const handlers = [
     // A file source that has been adopted is replaced by its copy.
     const adopted = new Set(managedSources.filter((s) => s.adopted).map((s) => s.config.name))
     const file = FILE_SOURCES.filter((s) => !adopted.has(s.config.name))
-    return requireAuth() ?? HttpResponse.json({ sources: [...file, ...managedSources] })
+    return requireAuth() ?? HttpResponse.json({ sources: [...file, ...managedSources].map(sourceResponse) })
   }),
   http.post(api('/sources/adopt'), async ({ request }) => {
     const auth = requireAuth()
@@ -1573,7 +1666,7 @@ export const handlers = [
       version: 1,
     }
     managedSources = [...managedSources, s]
-    return HttpResponse.json(s, { status: 201 })
+    return HttpResponse.json(sourceResponse(s), { status: 201 })
   }),
   http.get(api('/sources/extract-presets'), () =>
     HttpResponse.json({
@@ -1605,7 +1698,7 @@ export const handlers = [
   }),
   http.get(api('/sources/:id'), ({ params }) => {
     const s = managedSources.find((x) => x.id === params.id)
-    return s ? HttpResponse.json(s) : problem(404, 'not_found', 'Not found', 'no such source')
+    return s ? HttpResponse.json(sourceResponse(s)) : problem(404, 'not_found', 'Not found', 'no such source')
   }),
   http.post(api('/sources'), async ({ request }) => {
     const body = (await request.json()) as SourceInput
@@ -1617,6 +1710,7 @@ export const handlers = [
       config: body.config,
       enabled: body.enabled ?? true,
       origin: 'database',
+      certificate: describeCertificate(body.config, undefined),
       created_at: now,
       updated_at: now,
       version: 1,
@@ -1642,7 +1736,7 @@ export const handlers = [
           : x,
       )
     }, 2500)
-    return HttpResponse.json(s, { status: 201 })
+    return HttpResponse.json(sourceResponse(s), { status: 201 })
   }),
   http.put(api('/sources/:id'), async ({ request, params }) => {
     const body = (await request.json()) as SourceInput
@@ -1650,12 +1744,17 @@ export const handlers = [
     if (!s) return problem(404, 'not_found', 'Not found', 'no such source')
     if (s.version !== body.version)
       return problem(409, 'version_conflict', 'Conflict', 'the source was modified by someone else; reload it')
+    // The key is write-only, so a save with none means "keep the stored one";
+    // clearing a working listener's key by editing its address would be cruel.
+    const tls = body.config.tls
+    if (tls && !tls.key?.trim() && s.config.tls?.key) tls.key = s.config.tls.key
     const invalid = sourceValidationError(body, s.id ?? null)
     if (invalid) return invalid
     const updated: ManagedSource = {
       ...s,
       config: body.config,
       enabled: body.enabled ?? s.enabled,
+      certificate: describeCertificate(body.config, s),
       updated_at: new Date().toISOString(),
       version: (s.version ?? 1) + 1,
       status: {
@@ -1669,7 +1768,7 @@ export const handlers = [
       },
     }
     managedSources = managedSources.map((x) => (x.id === s.id ? updated : x))
-    return HttpResponse.json(updated)
+    return HttpResponse.json(sourceResponse(updated))
   }),
   http.delete(api('/sources/:id'), ({ params }) => {
     managedSources = managedSources.filter((x) => x.id !== params.id)
@@ -1833,6 +1932,49 @@ function testExtract(body: ExtractTestRequest): Response {
   return HttpResponse.json({ results })
 }
 
+/**
+ * The server's TLS checks, answered with the pointers and the wording it uses:
+ * one of the three ways in must be complete, and a pasted certificate must look
+ * like a certificate. Reading the material itself is beyond a browser, so the
+ * mock stops at the shape of the PEM.
+ */
+function tlsValidationError(tls: SourceTLSConfig | undefined): Response | null {
+  const acme = tls?.acme
+  const cert = tls?.cert?.trim() ?? ''
+  const key = tls?.key?.trim() ?? ''
+  if (acme?.enabled) {
+    if (!acme.domains?.length)
+      return validationProblem(
+        '/config',
+        'source: tls.acme.domains: at least one hostname is required to ask for a certificate',
+      )
+    if (!acme.accept_terms)
+      return validationProblem(
+        '/config',
+        'source: tls.acme.accept_terms must be set: asking a certificate authority for a certificate accepts its ' +
+          'subscriber agreement, https://letsencrypt.org/repository/',
+      )
+    return null
+  }
+  if (cert) {
+    if (!cert.startsWith('-----BEGIN CERTIFICATE-----'))
+      return validationProblem(
+        '/config/tls/cert',
+        cert.includes('PRIVATE KEY-----')
+          ? 'that is a private key, not a certificate; the certificate begins with -----BEGIN CERTIFICATE-----'
+          : 'that is not PEM; a certificate begins with -----BEGIN CERTIFICATE-----',
+      )
+    if (!key) return validationProblem('/config', 'source: tls.key is required alongside tls.cert')
+    return null
+  }
+  if (!tls?.cert_file || !tls?.key_file)
+    return validationProblem(
+      '/config/tls',
+      'a TLS source needs a certificate: paste it, or give the path to one on the server',
+    )
+  return null
+}
+
 /** Mirrors the few server-side checks the source editor surfaces inline. */
 function sourceValidationError(body: SourceInput, selfId: string | null): Response | null {
   const c = body.config
@@ -1840,8 +1982,10 @@ function sourceValidationError(body: SourceInput, selfId: string | null): Respon
   if (!c.name) complaints.push('source: name is required')
   if (c.type === 'syslog') {
     if (!c.address) complaints.push('source: address: missing port')
-    if (c.protocol === 'tls' && (!c.tls?.cert_file || !c.tls?.key_file))
-      complaints.push('source: tls.cert_file and tls.key_file are required for tls sources')
+    if (c.protocol === 'tls') {
+      const tlsInvalid = tlsValidationError(c.tls)
+      if (tlsInvalid) return tlsInvalid
+    }
     if (c.protocol === 'udp' && c.max_message_bytes && Number(c.max_message_bytes) > 65535)
       complaints.push('source: max_message_bytes cannot exceed 65535 for udp')
   }

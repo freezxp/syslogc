@@ -4,11 +4,19 @@
  * configuration file), plus mapping of server validation problems back onto
  * individual form fields.
  */
-import type { ExtractRule, ManagedSource, Problem, SourceConfig, SourceState } from '@/api/types'
+import type { CertificateInfo, ExtractRule, ManagedSource, Problem, SourceConfig, SourceState } from '@/api/types'
 import { quote } from '@/lib/filter-text'
 import type { ExplorerSearch } from '@/lib/url-state'
 
 type Tls = NonNullable<SourceConfig['tls']>
+
+/**
+ * The three ways a TLS listener can get its certificate. They are mutually
+ * exclusive in the editor even though the stored config could hold material for
+ * more than one at a time: the server picks pasted PEM over paths, which is
+ * impossible to reason about from a form that shows both.
+ */
+export type TlsMode = 'acme' | 'paste' | 'files'
 
 /**
  * One extract rule while it is being edited. `key` only exists to keep React
@@ -96,11 +104,27 @@ export interface SourceFormState {
   idle_timeout: string
   udp_sockets: string
   udp_read_buffer_bytes: string
+  tls_mode: TlsMode
   tls_cert_file: string
   tls_key_file: string
+  /** PEM text, pasted. */
+  tls_cert: string
+  tls_key: string
+  /**
+   * Whether the server holds a key for this source. Never sent: it only decides
+   * whether an empty key field means "keep the stored one" or "nothing yet".
+   */
+  tls_key_stored: boolean
   tls_min_version: NonNullable<Tls['min_version']>
   tls_client_auth: NonNullable<Tls['client_auth']>
   tls_client_ca_file: string
+  tls_client_ca: string
+  /** One domain per line. */
+  tls_acme_domains: string
+  tls_acme_email: string
+  tls_acme_staging: boolean
+  tls_acme_accept_terms: boolean
+  tls_acme_skip_preflight: boolean
   /** Tried in order; the first rule that matches a message wins. */
   extract: ExtractRuleForm[]
 }
@@ -127,11 +151,26 @@ export const DEFAULT_SOURCE_FORM: SourceFormState = {
   idle_timeout: '',
   udp_sockets: '',
   udp_read_buffer_bytes: '',
+  // Pasted PEM is the only route that works everywhere: a host with no public
+  // name cannot use Let's Encrypt, and a read-only container has no path to
+  // point at. Let's Encrypt is offered first but chosen deliberately.
+  tls_mode: 'paste',
   tls_cert_file: '',
   tls_key_file: '',
+  tls_cert: '',
+  tls_key: '',
+  tls_key_stored: false,
   tls_min_version: '1.2',
   tls_client_auth: 'none',
   tls_client_ca_file: '',
+  tls_client_ca: '',
+  tls_acme_domains: '',
+  tls_acme_email: '',
+  // Staging first: the real authority allows five failures an hour, and a
+  // deployment that is not ready yet will spend them.
+  tls_acme_staging: true,
+  tls_acme_accept_terms: false,
+  tls_acme_skip_preflight: false,
   extract: [],
 }
 
@@ -151,8 +190,21 @@ export function sourceSections(f: Pick<SourceFormState, 'type' | 'protocol'>): {
   }
 }
 
-export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled'>): SourceFormState {
+/**
+ * Which of the three ways the stored config uses. A key alone counts as pasted
+ * material: the key is write-only, so a source whose certificate is being
+ * replaced can have a stored key and nothing else to go on.
+ */
+export function tlsMode(tls: Tls | undefined, keyStored = false): TlsMode {
+  if (tls?.acme?.enabled) return 'acme'
+  if ((tls?.cert ?? '').trim() || keyStored) return 'paste'
+  if (tls?.cert_file || tls?.key_file) return 'files'
+  return DEFAULT_SOURCE_FORM.tls_mode
+}
+
+export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled' | 'key_stored'>): SourceFormState {
   const c = source.config
+  const acme = c.tls?.acme
   return {
     ...DEFAULT_SOURCE_FORM,
     name: c.name ?? '',
@@ -175,11 +227,24 @@ export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled'>):
     idle_timeout: c.idle_timeout ?? '',
     udp_sockets: c.udp?.sockets ? String(c.udp.sockets) : '',
     udp_read_buffer_bytes: c.udp?.read_buffer_bytes ?? '',
+    tls_mode: tlsMode(c.tls, source.key_stored),
     tls_cert_file: c.tls?.cert_file ?? '',
     tls_key_file: c.tls?.key_file ?? '',
+    tls_cert: c.tls?.cert ?? '',
+    // The key is never returned, so the field starts empty whatever is stored.
+    tls_key: '',
+    tls_key_stored: source.key_stored ?? false,
     tls_min_version: c.tls?.min_version ?? '1.2',
     tls_client_auth: c.tls?.client_auth ?? 'none',
     tls_client_ca_file: c.tls?.client_ca_file ?? '',
+    tls_client_ca: c.tls?.client_ca ?? '',
+    tls_acme_domains: (acme?.domains ?? []).join('\n'),
+    tls_acme_email: acme?.email ?? '',
+    // A source already asking an authority keeps the authority it was given;
+    // only a source that has never asked gets the safe default.
+    tls_acme_staging: acme?.enabled ? (acme.staging ?? false) : DEFAULT_SOURCE_FORM.tls_acme_staging,
+    tls_acme_accept_terms: acme?.accept_terms ?? false,
+    tls_acme_skip_preflight: acme?.skip_preflight ?? false,
     extract: (c.extract ?? []).map((r) =>
       newExtractRule({ name: r.name ?? '', contains: r.contains ?? '', prefix: r.prefix ?? '', regex: r.regex ?? '' }),
     ),
@@ -269,18 +334,64 @@ export function formToConfig(f: SourceFormState): { config: SourceConfig; errors
     const buffer = f.udp_read_buffer_bytes.trim()
     if (sockets !== undefined || buffer) config.udp = { sockets, read_buffer_bytes: buffer || undefined }
   }
-  if (s.tls) {
-    config.tls = {
-      cert_file: f.tls_cert_file.trim() || undefined,
-      key_file: f.tls_key_file.trim() || undefined,
-      min_version: f.tls_min_version,
-      client_auth: f.tls_client_auth,
-      client_ca_file: f.tls_client_ca_file.trim() || undefined,
-    }
-  }
+  if (s.tls) config.tls = tlsConfig(f, errors)
   const extract = extractRules(f.extract, errors)
   if (extract.length) config.extract = extract
   return { config, errors }
+}
+
+/**
+ * The TLS block for the chosen way in, carrying only that way's material: the
+ * server prefers pasted PEM over paths, so sending both would make the stored
+ * config disagree with the form that wrote it.
+ *
+ * The checks here are the ones the server makes too, repeated only because
+ * waiting for a round trip to be told a required field is empty is poor; every
+ * check that needs the certificate itself is left to the server.
+ */
+function tlsConfig(f: SourceFormState, errors: SourceErrors): Tls {
+  const tls: Tls = { min_version: f.tls_min_version, client_auth: f.tls_client_auth }
+  if (f.tls_mode === 'acme') {
+    const domains = lines(f.tls_acme_domains)
+    if (!domains.length) errors.fields.tls_acme_domains = 'At least one hostname is required to ask for a certificate.'
+    if (!f.tls_acme_accept_terms)
+      errors.fields.tls_acme_accept_terms = 'Asking an authority for a certificate accepts its subscriber agreement.'
+    const acme: NonNullable<Tls['acme']> = {
+      enabled: true,
+      domains,
+      staging: f.tls_acme_staging,
+      accept_terms: f.tls_acme_accept_terms,
+      skip_preflight: f.tls_acme_skip_preflight,
+    }
+    const email = f.tls_acme_email.trim()
+    if (email) acme.email = email
+    tls.acme = acme
+  } else if (f.tls_mode === 'paste') {
+    const cert = f.tls_cert.trim()
+    const key = f.tls_key.trim()
+    if (!cert) errors.fields.tls_cert = 'The certificate is required; paste it in PEM form.'
+    else if (!key && !f.tls_key_stored) errors.fields.tls_key = 'The private key for this certificate is required.'
+    if (cert) tls.cert = cert
+    // An empty key field on a source that already has one means "keep the stored
+    // key", which is the server's reading of a missing key — so it is left out
+    // of the payload entirely rather than sent empty.
+    if (key) tls.key = key
+  } else {
+    const cert = f.tls_cert_file.trim()
+    const key = f.tls_key_file.trim()
+    if (!cert) errors.fields.tls_cert_file = 'A path on the Syslogc host is required.'
+    if (!key) errors.fields.tls_key_file = 'A path on the Syslogc host is required.'
+    if (cert) tls.cert_file = cert
+    if (key) tls.key_file = key
+  }
+  // The client CA is supplied the same way as the certificate: a host with
+  // nowhere to put the one has nowhere to put the other either.
+  const ca = (f.tls_mode === 'files' ? f.tls_client_ca_file : f.tls_client_ca).trim()
+  if (ca) {
+    if (f.tls_mode === 'files') tls.client_ca_file = ca
+    else tls.client_ca = ca
+  }
+  return tls
 }
 
 /**
@@ -325,11 +436,34 @@ const CONFIG_FIELD: Record<string, SourceFormField> = {
   idle_timeout: 'idle_timeout',
   'udp.sockets': 'udp_sockets',
   'udp.read_buffer_bytes': 'udp_read_buffer_bytes',
+  // A complaint about the TLS material as a whole belongs next to the choice of
+  // how to get it, which is what the author has to change.
+  tls: 'tls_mode',
   'tls.cert_file': 'tls_cert_file',
   'tls.key_file': 'tls_key_file',
+  'tls.cert': 'tls_cert',
+  'tls.key': 'tls_key',
   'tls.min_version': 'tls_min_version',
   'tls.client_auth': 'tls_client_auth',
   'tls.client_ca_file': 'tls_client_ca_file',
+  'tls.client_ca': 'tls_client_ca',
+  'tls.acme.domains': 'tls_acme_domains',
+  'tls.acme.email': 'tls_acme_email',
+  'tls.acme.accept_terms': 'tls_acme_accept_terms',
+}
+
+/**
+ * The field a config key names, falling back to its parent: the server reports
+ * `tls.acme.domains` but also whole-block complaints against `tls`, and a
+ * message about a key with no field of its own still belongs in the right panel.
+ */
+function configField(key: string): SourceFormField | undefined {
+  const parts = key.split('.')
+  for (let n = parts.length; n > 0; n--) {
+    const field = CONFIG_FIELD[parts.slice(0, n).join('.')]
+    if (field) return field
+  }
+  return undefined
 }
 
 function addFieldError(errors: SourceErrors, field: SourceFormField, message: string): void {
@@ -369,7 +503,7 @@ export function sourceProblemErrors(
 
   for (const entry of entries) {
     const path = entry.pointer.replace(/^\/?config\/?/, '')
-    const direct = path ? CONFIG_FIELD[path.replace(/\//g, '.')] : undefined
+    const direct = path ? configField(path.replace(/\//g, '.')) : undefined
     if (direct) {
       addFieldError(errors, direct, entry.message)
       continue
@@ -386,8 +520,8 @@ export function sourceProblemErrors(
           continue
         }
       }
-      const key = /^([a-z_]+(?:\.[a-z_]+)?)/.exec(text)?.[1]
-      const field = key ? CONFIG_FIELD[key] : undefined
+      const key = /^([a-z_]+(?:\.[a-z_]+){0,2})/.exec(text)?.[1]
+      const field = key ? configField(key) : undefined
       if (field) addFieldError(errors, field, text)
       else errors.general.push(text)
     }
@@ -419,6 +553,55 @@ export function sourceExplorerSearch(name: string): ExplorerSearch {
     cols: undefined,
     split: undefined,
     saved: undefined,
+  }
+}
+
+/** How long before expiry a certificate is worth warning about. */
+export const CERT_EXPIRY_WARNING_DAYS = 30
+
+export interface CertificateStatus {
+  /** Whole days until it runs out; negative once it has. */
+  daysRemaining: number
+  expired: boolean
+  /** Within the warning window, or not valid yet. */
+  attention: boolean
+  tone: 'ok' | 'warn' | 'fail'
+  /** What the certificate means for the people sending logs, worst first. */
+  notes: string[]
+}
+
+/**
+ * Reads a certificate the way the person who pasted it would ask about it: is
+ * this the right one, will senders accept it, and when does it stop working.
+ */
+export function certificateStatus(cert: CertificateInfo, now: Date): CertificateStatus {
+  const notAfter = Date.parse(cert.not_after)
+  const notBefore = Date.parse(cert.not_before)
+  const ms = notAfter - now.getTime()
+  const days = Math.floor(ms / 86_400_000)
+  const expired = ms <= 0
+  const early = now.getTime() < notBefore
+  const soon = !expired && days < CERT_EXPIRY_WARNING_DAYS
+  const notes: string[] = []
+  if (expired) notes.push('This certificate has expired. Senders are refusing the connection until it is replaced.')
+  else if (early) notes.push('This certificate is not valid yet, so senders will refuse it until its start date.')
+  else if (soon)
+    notes.push(
+      days <= 0
+        ? 'This certificate expires today. Replace it now, or senders will start refusing the connection.'
+        : `This certificate expires in ${days} ${days === 1 ? 'day' : 'days'}. Replace it before then.`,
+    )
+  if (cert.self_signed) notes.push('Self-signed: every sender has to be told to trust this certificate specifically.')
+  // One certificate is all a self-signed setup needs, but a public authority
+  // issues intermediates and a sender cannot build a trust path without them.
+  else if (cert.chain <= 1)
+    notes.push('Only one certificate was pasted. An authority-issued certificate usually needs its intermediates too.')
+  return {
+    daysRemaining: days,
+    expired,
+    attention: expired || early || soon,
+    tone: expired || early ? 'fail' : soon ? 'warn' : 'ok',
+    notes,
   }
 }
 

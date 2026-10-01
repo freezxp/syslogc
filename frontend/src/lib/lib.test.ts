@@ -6,8 +6,10 @@ import { validateNewPassword } from '@/features/auth/password'
 import { buildExpr } from '@/features/explorer/filter-builder-logic'
 import { exportFilename } from '@/features/explorer/export'
 import {
+  CERT_EXPIRY_WARNING_DAYS,
   DEFAULT_SOURCE_FORM,
   captureGroupNames,
+  certificateStatus,
   configToForm,
   extractFieldNames,
   extractRuleIndex,
@@ -18,6 +20,7 @@ import {
   sourceProblemErrors,
   sourceRouteId,
   sourceSections,
+  tlsMode,
   type SourceFormState,
 } from '@/features/sources/source-form'
 import {
@@ -441,6 +444,219 @@ describe('source form', () => {
   it('links to the explorer filtered by source, quoting names that need it', () => {
     expect(sourceExplorerSearch('branch-office').q).toBe('source=branch-office')
     expect(sourceExplorerSearch('edge tls').q).toBe('source="edge tls"')
+  })
+})
+
+describe('source TLS', () => {
+  const CERT = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----'
+  const KEY = '-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIVATE KEY-----'
+  const form = (patch: Partial<SourceFormState> = {}): SourceFormState => ({
+    ...DEFAULT_SOURCE_FORM,
+    name: 'edge',
+    protocol: 'tls',
+    address: ':6514',
+    ...patch,
+  })
+
+  it('asks an authority for a certificate, with the staging default on', () => {
+    const { config, errors } = formToConfig(
+      form({
+        tls_mode: 'acme',
+        tls_acme_domains: 'logs.example.com\n logs2.example.com ',
+        tls_acme_email: 'ops@example.com',
+        tls_acme_accept_terms: true,
+      }),
+    )
+    expect(config.tls).toEqual({
+      min_version: '1.2',
+      client_auth: 'none',
+      acme: {
+        enabled: true,
+        domains: ['logs.example.com', 'logs2.example.com'],
+        email: 'ops@example.com',
+        staging: true,
+        accept_terms: true,
+        skip_preflight: false,
+      },
+    })
+    expect(errors.fields).toEqual({})
+  })
+
+  it('requires a domain and the subscriber agreement before asking', () => {
+    const e = formToConfig(form({ tls_mode: 'acme' })).errors
+    expect(e.fields.tls_acme_domains).toMatch(/at least one hostname/i)
+    expect(e.fields.tls_acme_accept_terms).toMatch(/subscriber agreement/i)
+  })
+
+  it('sends pasted PEM and nothing about files', () => {
+    const { config, errors } = formToConfig(
+      form({ tls_mode: 'paste', tls_cert: CERT, tls_key: KEY, tls_cert_file: '/left/over.crt' }),
+    )
+    expect(config.tls).toEqual({ min_version: '1.2', client_auth: 'none', cert: CERT, key: KEY })
+    expect(errors.fields).toEqual({})
+  })
+
+  it('omits the key entirely when the field is left empty on a source that has one', () => {
+    const { config, errors } = formToConfig(form({ tls_mode: 'paste', tls_cert: CERT, tls_key_stored: true }))
+    // Not `key: ''` and not `key: undefined`: an absent key is what tells the
+    // server to keep the one it holds.
+    expect(config.tls && 'key' in config.tls).toBe(false)
+    expect(JSON.parse(JSON.stringify(config)).tls).toEqual({ min_version: '1.2', client_auth: 'none', cert: CERT })
+    expect(errors.fields).toEqual({})
+  })
+
+  it('requires the key alongside a pasted certificate when none is stored', () => {
+    const e = formToConfig(form({ tls_mode: 'paste', tls_cert: CERT })).errors
+    expect(e.fields.tls_key).toMatch(/private key/i)
+    expect(formToConfig(form({ tls_mode: 'paste' })).errors.fields.tls_cert).toMatch(/certificate is required/i)
+  })
+
+  it('sends paths and nothing pasted, requiring both', () => {
+    const { config } = formToConfig(
+      form({
+        tls_mode: 'files',
+        tls_cert_file: ' /etc/tls/s.crt ',
+        tls_key_file: '/etc/tls/s.key',
+        tls_cert: CERT,
+        tls_client_auth: 'require_and_verify',
+        tls_client_ca_file: '/etc/tls/ca.crt',
+      }),
+    )
+    expect(config.tls).toEqual({
+      min_version: '1.2',
+      client_auth: 'require_and_verify',
+      cert_file: '/etc/tls/s.crt',
+      key_file: '/etc/tls/s.key',
+      client_ca_file: '/etc/tls/ca.crt',
+    })
+    const e = formToConfig(form({ tls_mode: 'files' })).errors
+    expect(e.fields.tls_cert_file).toBeDefined()
+    expect(e.fields.tls_key_file).toBeDefined()
+  })
+
+  it('supplies the client CA the same way as the certificate', () => {
+    const pasted = formToConfig(
+      form({
+        tls_mode: 'paste',
+        tls_cert: CERT,
+        tls_key: KEY,
+        tls_client_auth: 'require_and_verify',
+        tls_client_ca: CERT,
+      }),
+    )
+    expect(pasted.config.tls?.client_ca).toBe(CERT)
+    expect(pasted.config.tls?.client_ca_file).toBeUndefined()
+  })
+
+  it('reads back which way a stored source uses', () => {
+    expect(tlsMode(undefined)).toBe('paste')
+    expect(tlsMode({ acme: { enabled: true, domains: ['a.example.com'] } })).toBe('acme')
+    expect(tlsMode({ cert: CERT })).toBe('paste')
+    // The key is write-only, so a source being edited may show nothing else.
+    expect(tlsMode({}, true)).toBe('paste')
+    expect(tlsMode({ cert_file: '/etc/tls/s.crt' })).toBe('files')
+  })
+
+  it('round-trips each way through the form', () => {
+    const base = { name: 'edge', type: 'syslog' as const, protocol: 'tls' as const, address: ':6514' }
+    const trip = (tls: NonNullable<ReturnType<typeof formToConfig>['config']['tls']>, keyStored = false) =>
+      formToConfig(configToForm({ config: { ...base, tls }, enabled: true, key_stored: keyStored })).config.tls
+
+    const acme = {
+      min_version: '1.3' as const,
+      client_auth: 'none' as const,
+      acme: {
+        enabled: true,
+        domains: ['logs.example.com'],
+        email: 'ops@example.com',
+        staging: false,
+        accept_terms: true,
+        skip_preflight: true,
+      },
+    }
+    expect(trip(acme)).toEqual(acme)
+
+    const paste = { min_version: '1.2' as const, client_auth: 'none' as const, cert: CERT }
+    // The key comes back empty, so the round trip keeps the certificate alone.
+    expect(trip(paste, true)).toEqual(paste)
+
+    const files = {
+      min_version: '1.2' as const,
+      client_auth: 'require_and_verify' as const,
+      cert_file: '/etc/tls/s.crt',
+      key_file: '/etc/tls/s.key',
+      client_ca_file: '/etc/tls/ca.crt',
+    }
+    expect(trip(files)).toEqual(files)
+  })
+
+  it('places TLS complaints on the control that caused them', () => {
+    const at = (pointer: string, message: string) =>
+      sourceProblemErrors(
+        {
+          type: 'about:blank',
+          title: 'Validation failed',
+          status: 422,
+          code: 'validation_failed',
+          errors: [{ pointer, message }],
+        } as Problem,
+        'fallback',
+      ).fields
+    expect(at('/config/tls/cert', 'that is a private key, not a certificate').tls_cert).toBe(
+      'that is a private key, not a certificate',
+    )
+    expect(at('/config/tls/client_ca', 'no certificates found').tls_client_ca).toBe('no certificates found')
+    // A complaint about the material as a whole belongs next to the choice.
+    expect(at('/config/tls', 'a TLS source needs a certificate').tls_mode).toBe('a TLS source needs a certificate')
+    expect(at('/config', 'source: tls.acme.domains: at least one hostname is required').tls_acme_domains).toMatch(
+      /at least one hostname/,
+    )
+    expect(at('/config', 'source: tls.acme.accept_terms must be set').tls_acme_accept_terms).toMatch(/must be set/)
+  })
+
+  it('warns about a certificate that is expired, expiring or self-signed', () => {
+    const now = new Date('2026-06-01T00:00:00Z')
+    const cert = (patch: Partial<Parameters<typeof certificateStatus>[0]> = {}) => ({
+      subject: 'CN=logs.example.com',
+      issuer: 'CN=Example CA',
+      not_before: '2026-05-01T00:00:00Z',
+      not_after: '2026-12-01T00:00:00Z',
+      self_signed: false,
+      chain: 2,
+      ...patch,
+    })
+
+    const healthy = certificateStatus(cert(), now)
+    expect(healthy).toMatchObject({ expired: false, attention: false, tone: 'ok', notes: [] })
+    expect(healthy.daysRemaining).toBe(183)
+
+    const expired = certificateStatus(cert({ not_after: '2026-05-30T00:00:00Z' }), now)
+    expect(expired).toMatchObject({ expired: true, attention: true, tone: 'fail' })
+    expect(expired.daysRemaining).toBe(-2)
+    expect(expired.notes[0]).toMatch(/has expired/)
+
+    const soon = certificateStatus(cert({ not_after: '2026-06-11T00:00:00Z' }), now)
+    expect(soon).toMatchObject({ expired: false, attention: true, tone: 'warn', daysRemaining: 10 })
+    expect(soon.notes[0]).toMatch(/expires in 10 days/)
+    // The edge of the window: a day further out is not worth a warning.
+    const edge = new Date(now.getTime() + 0)
+    const justOutside = certificateStatus(
+      cert({ not_after: new Date(edge.getTime() + (CERT_EXPIRY_WARNING_DAYS + 1) * 86_400_000).toISOString() }),
+      edge,
+    )
+    expect(justOutside.attention).toBe(false)
+
+    const early = certificateStatus(cert({ not_before: '2026-07-01T00:00:00Z' }), now)
+    expect(early).toMatchObject({ expired: false, attention: true, tone: 'fail' })
+    expect(early.notes[0]).toMatch(/not valid yet/)
+
+    const selfSigned = certificateStatus(cert({ self_signed: true, chain: 1 }), now)
+    expect(selfSigned.tone).toBe('ok')
+    expect(selfSigned.notes).toEqual([
+      'Self-signed: every sender has to be told to trust this certificate specifically.',
+    ])
+    // A single certificate from an authority is the missing-intermediates case.
+    expect(certificateStatus(cert({ chain: 1 }), now).notes[0]).toMatch(/intermediates/)
   })
 })
 

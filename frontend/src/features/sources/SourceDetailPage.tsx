@@ -8,12 +8,14 @@ import type { ManagedSource } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { ErrorPanel, Panel, Skeleton, StatusDot } from '@/components/data/common'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { Input, Label, NativeSelect, Textarea } from '@/components/ui/input'
+import { Input, NativeSelect, Textarea } from '@/components/ui/input'
 import { Dialog, DialogContent } from '@/components/ui/overlay'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
 import { ExtractRulesPanel, ExtractTestPanel } from './ExtractEditor'
+import { Banner, Field } from './SourceFields'
+import { TlsPanel } from './TlsPanel'
 import {
   configToForm,
   DEFAULT_SOURCE_FORM,
@@ -181,7 +183,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
       </div>
 
       {readOnly && (
-        <Banner tone="muted" icon={<FileLock2 className="mt-0.5 size-4 shrink-0" />} title="Read-only">
+        <Banner tone="muted" icon={<FileLock2 className="mt-0.5 size-4 shrink-0" />} title="Read-only" className="mb-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p>
               This source comes from the configuration file (<code className="mono">ingestion.sources</code>). Edit the
@@ -209,24 +211,40 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
           tone="muted"
           icon={<FileLock2 className="mt-0.5 size-4 shrink-0" />}
           title="Copied from the configuration file"
+          className="mb-3"
         >
           The entry of the same name under <code className="mono">ingestion.sources</code> is ignored while this copy
           exists. Delete this source to hand control back to the file.
         </Banner>
       )}
       {conflict && (
-        <Banner tone="warning" icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />} title="Reload required">
+        <Banner
+          tone="warning"
+          icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />}
+          title="Reload required"
+          className="mb-3"
+        >
           Someone else changed this source while you were editing it. Reload the page to see their version, then reapply
           your change.
         </Banner>
       )}
       {status?.error && (
-        <Banner tone="danger" icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />} title="Listener error">
+        <Banner
+          tone="danger"
+          icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />}
+          title="Listener error"
+          className="mb-3"
+        >
           {status.error}
         </Banner>
       )}
       {errors.general.length > 0 && !conflict && (
-        <Banner tone="danger" icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />} title="Could not save">
+        <Banner
+          tone="danger"
+          icon={<AlertTriangle className="mt-0.5 size-4 shrink-0" />}
+          title="Could not save"
+          className="mb-3"
+        >
           <ul className="list-inside list-disc">
             {errors.general.map((m) => (
               <li key={m}>{m}</li>
@@ -495,75 +513,7 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
         )}
 
         {sections.tls && (
-          <Panel title="TLS" className="md:col-span-2">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field
-                id="src-cert"
-                label="Certificate file"
-                hint="Path on the Syslogc host."
-                {...field('tls_cert_file')}
-              >
-                <Input
-                  id="src-cert"
-                  className="mono text-sm"
-                  placeholder="/etc/syslogc/tls/server.crt"
-                  value={form.tls_cert_file}
-                  disabled={!editable}
-                  onChange={(e) => set('tls_cert_file', e.target.value)}
-                />
-              </Field>
-              <Field id="src-key" label="Key file" {...field('tls_key_file')}>
-                <Input
-                  id="src-key"
-                  className="mono text-sm"
-                  placeholder="/etc/syslogc/tls/server.key"
-                  value={form.tls_key_file}
-                  disabled={!editable}
-                  onChange={(e) => set('tls_key_file', e.target.value)}
-                />
-              </Field>
-              <Field id="src-minver" label="Minimum version" {...field('tls_min_version')}>
-                <NativeSelect
-                  id="src-minver"
-                  value={form.tls_min_version}
-                  disabled={!editable}
-                  onChange={(e) => set('tls_min_version', e.target.value as SourceFormState['tls_min_version'])}
-                >
-                  <option value="1.2">1.2</option>
-                  <option value="1.3">1.3</option>
-                </NativeSelect>
-              </Field>
-              <Field id="src-clientauth" label="Client authentication" {...field('tls_client_auth')}>
-                <NativeSelect
-                  id="src-clientauth"
-                  value={form.tls_client_auth}
-                  disabled={!editable}
-                  onChange={(e) => set('tls_client_auth', e.target.value as SourceFormState['tls_client_auth'])}
-                >
-                  <option value="none">none</option>
-                  <option value="request">request</option>
-                  <option value="require_and_verify">require_and_verify</option>
-                </NativeSelect>
-              </Field>
-              {form.tls_client_auth === 'require_and_verify' && (
-                <Field
-                  id="src-clientca"
-                  label="Client CA file"
-                  className="sm:col-span-2"
-                  {...field('tls_client_ca_file')}
-                >
-                  <Input
-                    id="src-clientca"
-                    className="mono text-sm"
-                    placeholder="/etc/syslogc/tls/clients-ca.crt"
-                    value={form.tls_client_ca_file}
-                    disabled={!editable}
-                    onChange={(e) => set('tls_client_ca_file', e.target.value)}
-                  />
-                </Field>
-              )}
-            </div>
-          </Panel>
+          <TlsPanel form={form} errors={errors} editable={editable} certificate={source?.certificate} set={set} />
         )}
 
         <ExtractRulesPanel
@@ -605,63 +555,5 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
         </DialogContent>
       </Dialog>
     </form>
-  )
-}
-
-function Field({
-  id,
-  label,
-  hint,
-  error,
-  className,
-  children,
-}: {
-  id: string
-  label: string
-  hint?: string
-  error?: string
-  className?: string
-  children: ReactNode
-}) {
-  return (
-    <div className={className}>
-      <Label htmlFor={id}>{label}</Label>
-      {children}
-      {error ? (
-        <p role="alert" className="mt-0.5 text-sm text-danger">
-          {error}
-        </p>
-      ) : (
-        hint && <p className="mt-0.5 text-xs text-subtle">{hint}</p>
-      )}
-    </div>
-  )
-}
-
-const BANNER_TONES = {
-  muted: 'border-border-strong bg-surface-2 text-muted',
-  warning: 'border-warning/40 bg-warning/10 text-warning',
-  danger: 'border-danger/40 bg-danger/10 text-danger',
-}
-
-function Banner({
-  tone,
-  icon,
-  title,
-  children,
-}: {
-  tone: keyof typeof BANNER_TONES
-  icon: ReactNode
-  title: string
-  children: ReactNode
-}) {
-  return (
-    <div role="alert" className={`mb-3 flex items-start gap-2 rounded-md border p-3 ${BANNER_TONES[tone]}`}>
-      {icon}
-      <div className="min-w-0">
-        <div className="font-medium">{title}</div>
-        <div className="text-sm break-words">{children}</div>
-      </div>
-    </div>
   )
 }

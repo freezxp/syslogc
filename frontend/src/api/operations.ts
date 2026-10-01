@@ -18,12 +18,52 @@ export interface SourceUDPConfig {
   read_buffer_bytes?: string
 }
 
+/** Asks a certificate authority for the certificate instead of supplying one. */
+export interface SourceACMEConfig {
+  enabled?: boolean
+  /** Hostnames to ask for; each must resolve to this host. */
+  domains?: string[]
+  /** Receives the authority's expiry warnings. */
+  email?: string
+  /** The test authority, whose certificates nothing trusts and whose limits forgive. */
+  staging?: boolean
+  /** Agreement to https://letsencrypt.org/repository/; the authority requires it. */
+  accept_terms?: boolean
+  /** Asks even when this host cannot reach its own name on port 80. */
+  skip_preflight?: boolean
+}
+
 export interface SourceTLSConfig {
+  /** Paths on the server, for a host where something else writes and renews them. */
   cert_file?: string
   key_file?: string
+  /**
+   * The PEM text itself, for a deployment with nowhere to put a file. Takes
+   * precedence over the paths. `key` is write-only: it is always returned empty
+   * and `ManagedSource.key_stored` says whether one is held.
+   */
+  cert?: string
+  key?: string
   min_version?: '1.2' | '1.3'
   client_auth?: 'none' | 'request' | 'require_and_verify'
   client_ca_file?: string
+  client_ca?: string
+  acme?: SourceACMEConfig
+}
+
+/** What a source's certificate covers and how long it lasts. */
+export interface CertificateInfo {
+  subject: string
+  issuer: string
+  /** What the certificate is valid for; a sender outside this list refuses the connection. */
+  dns_names?: string[]
+  ip_addresses?: string[]
+  not_before: string
+  not_after: string
+  /** Works, but every sender must be told to trust this certificate specifically. */
+  self_signed: boolean
+  /** How many certificates were given: one is fine self-signed, but a public authority needs its intermediates. */
+  chain: number
 }
 
 /**
@@ -90,6 +130,10 @@ export interface ManagedSource {
   status?: ManagedSourceStatus
   /** True when this copy replaces a source of the same name in the configuration file. */
   adopted?: boolean
+  /** A private key is held for this source; the key itself never comes back. */
+  key_stored?: boolean
+  /** Present when the source carries a pasted certificate. */
+  certificate?: CertificateInfo
   created_at?: string
   updated_at?: string
   version?: number
