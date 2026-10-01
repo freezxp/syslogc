@@ -50,6 +50,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return configCmd(args[1:], stdout, stderr)
 	case "healthcheck":
 		return healthcheck(args[1:], stderr)
+	case "reset-password":
+		return resetPassword(args[1:], stdout, stderr)
 	case "init-secrets":
 		return initSecrets(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
@@ -72,6 +74,7 @@ Commands:
   config validate       Validate configuration and exit
   config print          Print the effective configuration as YAML
   healthcheck           Probe a running server's /health endpoint (for container health checks)
+  reset-password        Set an account's password from the host, for when the initial one is lost
   init-secrets          Create missing secrets (database password, DSN, signing key) in a directory
   version               Print version information
 
@@ -79,6 +82,9 @@ Configuration precedence: flags > SYSLOGC_* environment variables > YAML file > 
 Any scalar configuration key can be set as a flag, e.g. --storage.victorialogs.insert_url=http://vl:9428
 `)
 }
+
+// defaultConfigFile is where the container keeps it; see the Dockerfile.
+const defaultConfigFile = "/etc/syslogc/syslogc.yaml"
 
 func loadConfig(name string, args []string, stderr io.Writer) (*config.Config, error) {
 	fs := pflag.NewFlagSet(name, pflag.ContinueOnError)

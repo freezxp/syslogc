@@ -399,7 +399,8 @@ EOF
 if [[ -n "$password" ]]; then
   printf '  Password   %s   (change it at first login)\n' "$password"
 else
-  printf '  Password   already set; recover it with an existing admin account\n'
+  printf '  Password   already set\n'
+  printf '             lost it?  docker compose exec syslogc syslogc reset-password\n'
 fi
 [[ -n "$DOMAIN" ]] && printf '  Proxy      point %s at %s, then set SYSLOGC_AUTH_COOKIE_SECURE=true in .env\n' "$DOMAIN" "$url"
 [[ "$MONITORING" == true ]] && printf '  Grafana    http://%s:3000 (admin / %s)\n' "$(hostname -I | awk '{print $1}')" "${GRAFANA_PASSWORD:-admin}"

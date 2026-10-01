@@ -105,7 +105,7 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 	}
 	a.backend = backend
 
-	dsn, err := postgresDSN(cfg.Metadata.Postgres)
+	dsn, err := PostgresDSN(cfg.Metadata.Postgres)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,7 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 }
 
 // postgresDSN returns the DSN; an inline dsn takes precedence over dsn_file.
-func postgresDSN(c config.PostgresConfig) (string, error) {
+func PostgresDSN(c config.PostgresConfig) (string, error) {
 	if c.DSN != "" || c.DSNFile == "" {
 		return c.DSN, nil
 	}

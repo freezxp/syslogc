@@ -169,6 +169,32 @@ with a larger `analytics.service_trends.query_timeout`, or cut the work with
 `analytics.service_trends.sources`, which stops the rollup reading log
 sources that carry no DNS at all.
 
+## Nobody can sign in
+
+The first administrator's password is printed once, when the database is
+empty and the account is created:
+
+```bash
+docker compose logs syslogc | grep -A 3 "initial administrator"
+```
+
+A log rotates, so that line does not last for ever. When it is gone, set a
+new password from the host:
+
+```bash
+docker compose exec syslogc syslogc reset-password --username admin
+```
+
+It prints a generated password that must be changed at the next sign-in, and
+ends every existing session for that account — a reset usually means the
+password was lost or seen by someone it should not have been. Pass
+`--password` to choose one instead (it must satisfy the same rules the web
+interface applies), or `--keep-sessions` to leave people signed in.
+
+This needs access to the machine and its database, which is the same bar as
+reading the stored logs directly, so it adds no exposure that was not there
+already.
+
 ## Useful commands
 
 ```bash

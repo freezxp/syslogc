@@ -327,6 +327,10 @@ func (s *Service) RevokeAPIKey(ctx context.Context, p *Principal, id uuid.UUID) 
 // Bootstrap creates the initial admin account when no users exist. The
 // password comes from passwordFile, or is generated and returned so it can
 // be printed once (the user must change it at first login).
+// GeneratedPassword is a random password of the strength the bootstrap
+// account gets, for the command that sets one from the host.
+func GeneratedPassword() (string, error) { return randomToken(15) }
+
 func (s *Service) Bootstrap(ctx context.Context, username, passwordFile string) (generated string, err error) {
 	n, err := s.store.CountUsers(ctx)
 	if err != nil || n > 0 {
