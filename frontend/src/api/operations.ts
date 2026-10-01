@@ -1,6 +1,7 @@
 /**
  * Hand-written API surface for the operations and analytics endpoints (sources,
- * users, audit log, retention, effective configuration, breakdown and series).
+ * forward targets, users, audit log, retention, effective configuration,
+ * breakdown and series).
  *
  * `npm run gen:api` regenerates `schema.d.ts` from `../docs/openapi.yaml`, which
  * does not describe these endpoints yet; keeping them here means regenerating
@@ -324,6 +325,96 @@ export interface ForwardTarget {
   sources?: string[]
 }
 
+// ---- forwarding ------------------------------------------------------------
+
+/** Where a target is defined. File ones live in the YAML and are read-only here. */
+export type ForwardOrigin = 'file' | 'database'
+
+export type ForwardCompression = 'none' | 'gzip' | 'zstd'
+
+/**
+ * What is held while the remote is unreachable. Both limits are an upper bound on
+ * what an outage can cost: copies past them are dropped rather than queued.
+ */
+export interface ForwardQueueConfig {
+  max_messages?: number
+  /** Size with an optional unit, e.g. "128MiB". */
+  max_bytes?: string
+}
+
+export interface ForwardBatchConfig {
+  max_rows?: number
+  max_bytes?: string
+  /** Duration a partial batch waits before it is sent anyway, e.g. "1s". */
+  max_wait?: string
+}
+
+export interface ForwardRetryConfig {
+  /** Durations; the wait after a failed write, doubling up to the maximum. */
+  initial_backoff?: string
+  max_backoff?: string
+}
+
+/** A target exactly as it appears under `forwarding.targets` in the YAML config. */
+export interface ForwardTargetConfig {
+  name: string
+  /** The remote VictoriaLogs instance; http or https. */
+  url: string
+  /** Filters; empty means the target receives everything. */
+  sources?: string[]
+  /** Empty means every severity, so it is a severity name or nothing. */
+  min_severity?: NonNullable<S['LogRow']['severity']> | ''
+  compression?: ForwardCompression
+  write_timeout?: string
+  basic_username?: string
+  /**
+   * Paths on the Syslogc host, for credentials something else writes there. The
+   * bearer token itself goes in `ForwardTargetInput.token` instead.
+   */
+  basic_password_file?: string
+  bearer_token_file?: string
+  queue?: ForwardQueueConfig
+  batch?: ForwardBatchConfig
+  retry?: ForwardRetryConfig
+}
+
+/**
+ * Counters for a running target: what `GET /system/ingestion` reports, plus where
+ * the target came from and whether it is meant to be running at all.
+ */
+export interface ForwardTargetStatus extends ForwardTarget {
+  origin?: ForwardOrigin
+  enabled?: boolean
+}
+
+export interface ManagedForwardTarget {
+  /** Absent for `origin: "file"` targets, which live in the configuration file. */
+  id?: string
+  config: ForwardTargetConfig
+  enabled: boolean
+  origin: ForwardOrigin
+  /** Absent until the target runs: a target that is switched off has no counters. */
+  status?: ForwardTargetStatus
+  /** A bearer token is held for this target; the token itself never comes back. */
+  token_stored?: boolean
+  created_at?: string
+  updated_at?: string
+  version?: number
+}
+
+export interface ForwardTargetInput {
+  config: ForwardTargetConfig
+  /** A target is created switched off; the server does not enable it for you. */
+  enabled?: boolean
+  /**
+   * Write-only. Omit it to keep whatever is stored and send "" to remove it;
+   * `ManagedForwardTarget.token_stored` says whether one is held.
+   */
+  token?: string
+  /** Required on update; a mismatch answers 409. */
+  version?: number
+}
+
 // ---- analytics -------------------------------------------------------------
 
 export type AnalyticsMetricType = 'count' | 'count_distinct'
@@ -548,6 +639,14 @@ export interface OperationsPaths {
   '/api/v1/analytics/services': {
     get: Read<ServiceCatalog>
     put: Write<ServiceCatalog, ServiceCatalogInput>
+  }
+  '/api/v1/forward-targets': {
+    get: Read<{ targets: ManagedForwardTarget[] }>
+    post: Write<ManagedForwardTarget, ForwardTargetInput, NoParams, 201>
+  }
+  '/api/v1/forward-targets/{id}': {
+    put: Write<ManagedForwardTarget, ForwardTargetInput, ById>
+    delete: Remove
   }
   '/api/v1/sources': {
     get: Read<{ sources: ManagedSource[] }>

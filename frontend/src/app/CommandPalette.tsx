@@ -14,6 +14,7 @@ import {
   ScrollText,
   Search,
   Server,
+  Share2,
   Star,
   Users,
 } from 'lucide-react'
@@ -85,6 +86,11 @@ export function CommandPalette({
                 {can('sources:read') && (
                   <Item icon={<Network />} onSelect={close(() => navigate({ to: '/sources' }))}>
                     Sources
+                  </Item>
+                )}
+                {can('system:view') && (
+                  <Item icon={<Share2 />} onSelect={close(() => navigate({ to: '/forwarding' }))}>
+                    Forwarding
                   </Item>
                 )}
                 {can('system:view') && (

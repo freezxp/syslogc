@@ -14,8 +14,12 @@ import type {
   FieldInfo,
   FieldValuesRequest,
   FilterExpr,
+  ForwardTargetConfig,
+  ForwardTargetInput,
+  ForwardTargetStatus,
   HistogramRequest,
   LogRow,
+  ManagedForwardTarget,
   ManagedSource,
   Problem,
   RetentionUpdateInput,
@@ -41,6 +45,7 @@ import type {
 import { normalizePeriod, samePeriod, validatePeriod } from '@/features/settings/retention'
 import { CORE_FIELDS, getField } from '@/lib/fields'
 import { formatFilter } from '@/lib/filter-text'
+import { SEVERITIES } from '@/lib/severity'
 import { resolveRange } from '@/lib/time-range'
 
 import { generateLogs, matchFilter, rowTimeMs } from './data'
@@ -81,6 +86,7 @@ const SESSION: Session = {
     'searches:write',
     'sources:read',
     'sources:manage',
+    'forwarding:manage',
     'system:view',
     'config:view',
     'retention:manage',
@@ -713,6 +719,162 @@ function describeAcme(
 function obtainedNow(domains: string[]): Pick<SourceACMEStatus, 'obtained' | 'last_tried'> {
   const at = new Date().toISOString()
   return { obtained: Object.fromEntries(domains.map((d) => [d, at])), last_tried: at }
+}
+
+/** Targets from the configuration file: read-only here, like file sources. */
+const FILE_FORWARD_TARGETS: ManagedForwardTarget[] = [
+  {
+    config: {
+      name: 'dr-site',
+      url: 'http://vlogs-dr.example.com:9428',
+      compression: 'gzip',
+      write_timeout: '30s',
+      queue: { max_messages: 200_000, max_bytes: '128MiB' },
+      batch: { max_rows: 10_000, max_bytes: '8MiB', max_wait: '1s' },
+    },
+    enabled: true,
+    origin: 'file',
+    status: {
+      name: 'dr-site',
+      healthy: true,
+      queued_messages: 0,
+      sent_messages: 1_530_004_120,
+      dropped_messages: 0,
+      last_success_at: new Date(NOW - 4_000).toISOString(),
+      origin: 'file',
+      enabled: true,
+    },
+  },
+]
+
+let forwardTargets: ManagedForwardTarget[] = [
+  {
+    id: '0192f0c4-4444-7000-8000-000000000001',
+    config: {
+      name: 'cold-storage',
+      url: 'https://vlogs-archive.example.com:9428',
+      sources: ['syslog-tcp'],
+      min_severity: 'warning',
+      compression: 'zstd',
+      write_timeout: '30s',
+    },
+    enabled: true,
+    origin: 'database',
+    status: {
+      name: 'cold-storage',
+      healthy: true,
+      queued_messages: 15,
+      sent_messages: 692_441,
+      dropped_messages: 0,
+      last_success_at: new Date(NOW - 2_000).toISOString(),
+      min_severity: 'warning',
+      sources: ['syslog-tcp'],
+      origin: 'database',
+      enabled: true,
+    },
+    token_stored: true,
+    created_at: new Date(NOW - 11 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 11 * 86400_000).toISOString(),
+    version: 2,
+  },
+  {
+    id: '0192f0c4-4444-7000-8000-000000000002',
+    config: {
+      name: 'siem-archive',
+      url: 'http://10.0.0.9:9428',
+      min_severity: 'error',
+      compression: 'gzip',
+      queue: { max_messages: 50_000 },
+    },
+    enabled: true,
+    origin: 'database',
+    // The state the list exists for: writes are failing and copies are already lost.
+    status: {
+      name: 'siem-archive',
+      healthy: false,
+      queued_messages: 48_120,
+      sent_messages: 88_412_003,
+      dropped_messages: 1_204_880,
+      last_success_at: new Date(NOW - 19 * 60_000).toISOString(),
+      last_error: 'storage write unavailable: dial tcp 10.0.0.9:9428: connect: connection refused',
+      min_severity: 'error',
+      origin: 'database',
+      enabled: true,
+    },
+    created_at: new Date(NOW - 30 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 6 * 3600_000).toISOString(),
+    version: 7,
+  },
+  {
+    id: '0192f0c4-4444-7000-8000-000000000003',
+    config: { name: 'lab-replica', url: 'http://vlogs-lab.internal:9428', compression: 'gzip' },
+    // Created and never turned on: what every new target looks like.
+    enabled: false,
+    origin: 'database',
+    created_at: new Date(NOW - 2 * 3600_000).toISOString(),
+    updated_at: new Date(NOW - 2 * 3600_000).toISOString(),
+    version: 1,
+  },
+]
+
+/**
+ * Bearer tokens the mock holds, kept apart from the targets for the same reason
+ * the server keeps them apart: they go in, they are used, and they are read back
+ * only as whether one is held.
+ */
+const forwardTokens = new Map<string, string>([['0192f0c4-4444-7000-8000-000000000001', 'mock-bearer-token']])
+
+function forwardResponse(t: ManagedForwardTarget): ManagedForwardTarget {
+  return { ...t, token_stored: !!t.id && forwardTokens.has(t.id) }
+}
+
+/** Omitted keeps whatever is stored; "" removes it. */
+function applyForwardToken(id: string, token: string | undefined): void {
+  if (token === undefined) return
+  if (token === '') forwardTokens.delete(id)
+  else forwardTokens.set(id, token)
+}
+
+/**
+ * The counters the forwarder would report. A target that was already running keeps
+ * its tallies; one that has just been switched on starts from nothing and is
+ * healthy until a write fails.
+ */
+function forwardStatus(previous: ForwardTargetStatus | undefined, config: ForwardTargetConfig): ForwardTargetStatus {
+  return {
+    ...(previous ?? { healthy: true, queued_messages: 0, sent_messages: 0, dropped_messages: 0 }),
+    name: config.name,
+    min_severity: config.min_severity || undefined,
+    sources: config.sources,
+    origin: 'database',
+    enabled: true,
+  }
+}
+
+function forwardValidationError(body: ForwardTargetInput, selfId: string | null): Response | null {
+  const c = body.config
+  const complaints: string[] = []
+  if (!c?.name) complaints.push('target: name is required')
+  if (!c?.url) complaints.push('target: url is required')
+  else if (!/^https?:\/\//i.test(c.url)) complaints.push('target: url must be http or https')
+  if (c?.compression && !['none', 'gzip', 'zstd'].includes(c.compression))
+    complaints.push('target: compression must be none, gzip or zstd')
+  if (c?.min_severity && !SEVERITIES.includes(c.min_severity))
+    complaints.push(`target: min_severity "${c.min_severity}" is not a severity name`)
+  if (c?.queue?.max_messages !== undefined && c.queue.max_messages < 1)
+    complaints.push('target: queue.max_messages must be at least 1')
+  if (c?.batch?.max_rows !== undefined && c.batch.max_rows < 1)
+    complaints.push('target: batch.max_rows must be at least 1')
+  const name = (c?.name ?? '').toLowerCase()
+  const file = FILE_FORWARD_TARGETS.find((t) => t.config.name.toLowerCase() === name)
+  if (file)
+    complaints.push(
+      `target: name is already used by a forward target in the configuration file ("${file.config.name}")`,
+    )
+  const clash = forwardTargets.find((t) => t.id !== selfId && t.config.name.toLowerCase() === name)
+  if (clash) complaints.push(`target: name is already used by target "${clash.config.name}"`)
+  if (complaints.length === 0) return null
+  return validationProblem('/config', complaints.join('; '))
 }
 
 let users: AdminUser[] = [
@@ -1944,6 +2106,73 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
+  http.get(
+    api('/forward-targets'),
+    () =>
+      requireAuth() ??
+      HttpResponse.json({ targets: [...FILE_FORWARD_TARGETS, ...forwardTargets].map(forwardResponse) }),
+  ),
+  http.post(api('/forward-targets'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as ForwardTargetInput
+    const invalid = forwardValidationError(body, null)
+    if (invalid) return invalid
+    const now = new Date().toISOString()
+    const t: ManagedForwardTarget = {
+      id: crypto.randomUUID(),
+      config: body.config,
+      // Switched off whatever the caller asked for: copying every stored log
+      // somewhere new is a decision of its own, taken once the target is right.
+      enabled: false,
+      origin: 'database',
+      created_at: now,
+      updated_at: now,
+      version: 1,
+    }
+    applyForwardToken(t.id!, body.token)
+    forwardTargets = [...forwardTargets, t]
+    return HttpResponse.json(forwardResponse(t), { status: 201 })
+  }),
+  http.put(api('/forward-targets/:id'), async ({ request, params }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as ForwardTargetInput
+    const t = forwardTargets.find((x) => x.id === params.id)
+    if (!t) return problem(404, 'not_found', 'Not found', 'no such forward target')
+    if (t.version !== body.version)
+      return problem(409, 'version_conflict', 'Conflict', 'the target was modified by someone else; reload it')
+    const invalid = forwardValidationError(body, t.id ?? null)
+    if (invalid) return invalid
+    applyForwardToken(t.id!, body.token)
+    const enabled = body.enabled ?? t.enabled
+    // A target that has just been switched on reports nothing for a moment, like
+    // the real forwarder, which picks the change up within a few seconds.
+    const starting = enabled && !t.enabled
+    const updated: ManagedForwardTarget = {
+      ...t,
+      config: body.config,
+      enabled,
+      status: enabled && !starting ? forwardStatus(t.status, body.config) : undefined,
+      updated_at: new Date().toISOString(),
+      version: (t.version ?? 1) + 1,
+    }
+    forwardTargets = forwardTargets.map((x) => (x.id === t.id ? updated : x))
+    if (starting) {
+      setTimeout(() => {
+        forwardTargets = forwardTargets.map((x) =>
+          x.id === t.id && x.enabled ? { ...x, status: forwardStatus(t.status, x.config) } : x,
+        )
+      }, 2000)
+    }
+    return HttpResponse.json(forwardResponse(updated))
+  }),
+  http.delete(api('/forward-targets/:id'), ({ params }) => {
+    forwardTargets = forwardTargets.filter((x) => x.id !== params.id)
+    forwardTokens.delete(String(params.id))
+    return new HttpResponse(null, { status: 204 })
+  }),
+
   http.get(api('/users'), () => requireAuth() ?? HttpResponse.json({ users })),
   http.post(api('/users'), async ({ request }) => {
     const body = (await request.json()) as UserCreateInput
@@ -2193,6 +2422,12 @@ ingestion:
     - name: http-json
       type: http_json
       raw_message: never
+forwarding:
+  targets:
+    - name: dr-site
+      url: http://vlogs-dr.example.com:9428
+      compression: gzip
+      write_timeout: 30s
 storage:
   victorialogs:
     insert_url: http://victorialogs:9428

@@ -139,6 +139,12 @@ const sourceRoute = createRoute({
   component: lazyRouteComponent(() => import('@/features/sources/SourceDetailPage'), 'SourceDetailPage'),
 })
 
+const forwardingRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/forwarding',
+  component: lazyRouteComponent(() => import('@/features/forwarding/ForwardingPage'), 'ForwardingPage'),
+})
+
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/users',
@@ -185,6 +191,7 @@ export const routeTree = rootRoute.addChildren([
     searchRoute,
     sourcesRoute,
     sourceRoute,
+    forwardingRoute,
     usersRoute,
     auditRoute,
     settingsRoute,

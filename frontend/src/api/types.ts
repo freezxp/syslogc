@@ -6,10 +6,11 @@ type S = components['schemas']
 export type Problem = S['Problem']
 export type ProblemError = NonNullable<Problem['errors']>[number]
 /**
- * `analytics:manage` is newer than the generated schema (see the note in
- * ./operations.ts), so it is spelled out until the spec catches up.
+ * `analytics:manage` and `forwarding:manage` are newer than the generated schema
+ * (see the note in ./operations.ts), so they are spelled out until the spec
+ * catches up.
  */
-export type Permission = S['Permission'] | 'analytics:manage'
+export type Permission = S['Permission'] | 'analytics:manage' | 'forwarding:manage'
 export type Role = S['Role']
 export type User = S['User']
 export type Session = Omit<S['Session'], 'permissions'> & { permissions: Permission[] }
@@ -72,7 +73,16 @@ export type {
   ExtractTestResponse,
   ExtractTestResult,
   AdoptSourceInput,
+  ForwardBatchConfig,
+  ForwardCompression,
+  ForwardOrigin,
+  ForwardQueueConfig,
+  ForwardRetryConfig,
   ForwardTarget,
+  ForwardTargetConfig,
+  ForwardTargetInput,
+  ForwardTargetStatus,
+  ManagedForwardTarget,
   ManagedSource,
   ManagedSourceStatus,
   RetentionDrift,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FilterExpr, Problem } from '@/api/types'
+import type { FilterExpr, ManagedForwardTarget, Problem } from '@/api/types'
 import { auditQueryFromSearch } from '@/features/audit/audit-query'
 import { validateNewPassword } from '@/features/auth/password'
 import { buildExpr } from '@/features/explorer/filter-builder-logic'
@@ -73,6 +73,18 @@ import {
   samePeriod,
   validatePeriod,
 } from '@/features/settings/retention'
+import {
+  DEFAULT_FORWARD_FORM,
+  configToForwardForm,
+  formToForwardInput,
+  forwardAttentionSummary,
+  forwardEnableConsequence,
+  forwardHealth,
+  forwardProblemErrors,
+  forwardSourceNames,
+  hasForwardErrors,
+  type ForwardFormState,
+} from '@/features/forwarding/forward-form'
 import { forwardFilterLabels, secondsSince, truncateError } from '@/features/system/forwarding'
 import { validateCustomRange } from '@/features/time-range/time-input'
 
@@ -297,6 +309,195 @@ describe('forwarding', () => {
     expect(secondsSince('not a date', now)).toBeNull()
     // A stamp ahead of the browser clock reads as "just now", never as a negative age.
     expect(secondsSince('2026-09-18T03:12:09Z', now)).toBe(0)
+  })
+})
+
+describe('forward target form', () => {
+  const form = (patch: Partial<ForwardFormState> = {}): ForwardFormState => ({
+    ...DEFAULT_FORWARD_FORM,
+    name: 'dr',
+    url: 'http://vlogs-dr.example.com:9428',
+    ...patch,
+  })
+
+  it('sends only the fields that were filled in', () => {
+    const { input, errors } = formToForwardInput(form())
+    expect(hasForwardErrors(errors)).toBe(false)
+    expect(input).toEqual({ config: { name: 'dr', url: 'http://vlogs-dr.example.com:9428', compression: 'gzip' } })
+  })
+
+  it('omits an untouched token instead of sending it empty', () => {
+    const kept = formToForwardInput(form({ token_stored: true })).input
+    // "" would remove the stored token, so an untouched field must send nothing.
+    expect('token' in kept).toBe(false)
+    expect(formToForwardInput(form({ token_stored: true, token: 's3cret' })).input.token).toBe('s3cret')
+    expect(formToForwardInput(form({ token_stored: true, remove_token: true })).input.token).toBe('')
+    // Removal wins over anything left in the field.
+    expect(formToForwardInput(form({ token_stored: true, token: 'typed', remove_token: true })).input.token).toBe('')
+  })
+
+  it('treats both empty filters as “everything”', () => {
+    const { config } = formToForwardInput(form({ sources: '  \n ', min_severity: '' })).input
+    expect(config.sources).toBeUndefined()
+    expect(config.min_severity).toBeUndefined()
+    const filtered = formToForwardInput(form({ sources: 'syslog-tcp, http-json\n', min_severity: 'warning' })).input
+    expect(filtered.config.sources).toEqual(['syslog-tcp', 'http-json'])
+    expect(filtered.config.min_severity).toBe('warning')
+    expect(forwardSourceNames('a\n b ,,c\n')).toEqual(['a', 'b', 'c'])
+  })
+
+  it('requires a name and an http(s) address', () => {
+    const e = formToForwardInput(form({ name: '  ', url: 'vlogs-dr.example.com:9428' })).errors
+    expect(e.fields.name).toBeDefined()
+    expect(e.fields.url).toMatch(/http/)
+    expect(formToForwardInput(form({ url: '' })).errors.fields.url).toBeDefined()
+    expect(formToForwardInput(form({ url: 'https://dr.example.com' })).errors.fields.url).toBeUndefined()
+  })
+
+  it('rejects limits below one and leaves empty ones to the server', () => {
+    const e = formToForwardInput(form({ queue_max_messages: '0', batch_max_rows: '-2' })).errors
+    expect(e.fields.queue_max_messages).toBeDefined()
+    expect(e.fields.batch_max_rows).toBeDefined()
+    const { config } = formToForwardInput(
+      form({ queue_max_bytes: '128MiB', batch_max_rows: '5000', retry_max_backoff: '1m' }),
+    ).input
+    // Only the blocks that were touched are sent, and only their touched keys.
+    expect(config.queue).toEqual({ max_bytes: '128MiB' })
+    expect(config.batch).toEqual({ max_rows: 5000 })
+    expect(config.retry).toEqual({ max_backoff: '1m' })
+  })
+
+  it('round-trips a stored config through the form', () => {
+    const config = {
+      name: 'dr',
+      url: 'https://vlogs-dr.example.com:9428',
+      sources: ['syslog-tcp'],
+      min_severity: 'warning' as const,
+      compression: 'zstd' as const,
+      write_timeout: '30s',
+      basic_username: 'syslogc',
+      basic_password_file: '/etc/syslogc/forward/dr.pass',
+      bearer_token_file: '/etc/syslogc/forward/dr.token',
+      queue: { max_messages: 200_000, max_bytes: '128MiB' },
+      batch: { max_rows: 10_000, max_bytes: '8MiB', max_wait: '1s' },
+      retry: { initial_backoff: '1s', max_backoff: '30s' },
+    }
+    const f = configToForwardForm({ config, token_stored: true })
+    // The token is never returned, so the field starts empty whatever is stored.
+    expect(f.token).toBe('')
+    expect(f.token_stored).toBe(true)
+    const { input, errors } = formToForwardInput(f)
+    expect(hasForwardErrors(errors)).toBe(false)
+    expect(input.config).toEqual(config)
+    expect('token' in input).toBe(false)
+  })
+
+  it('places server validation messages on the fields they name', () => {
+    const p: Problem = {
+      type: 'about:blank',
+      title: 'Validation failed',
+      status: 422,
+      code: 'validation_failed',
+      detail: 'x',
+      errors: [
+        {
+          pointer: '/config',
+          message:
+            'target: url must be http or https; ' +
+            'target: queue.max_messages must be at least 1; ' +
+            'target: name is already used by a forward target in the configuration file ("dr-site")',
+        },
+      ],
+    }
+    const e = forwardProblemErrors(p, 'fallback')
+    expect(e.fields.url).toMatch(/http or https/)
+    expect(e.fields.queue_max_messages).toMatch(/at least 1/)
+    expect(e.fields.name).toMatch(/configuration file/)
+    expect(e.general).toEqual([])
+  })
+
+  it('maps pointed-at config fields and falls back to the detail', () => {
+    const pointed = forwardProblemErrors(
+      {
+        type: 'about:blank',
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        errors: [{ pointer: '/config/url', message: 'must be http or https' }],
+      } as Problem,
+      'fallback',
+    )
+    expect(pointed.fields.url).toBe('must be http or https')
+    expect(forwardProblemErrors(undefined, 'network down').general).toEqual(['network down'])
+  })
+})
+
+describe('forward target health', () => {
+  const status = (patch: Partial<NonNullable<ManagedForwardTarget['status']>> = {}) => ({
+    name: 'dr',
+    healthy: true,
+    queued_messages: 0,
+    sent_messages: 100,
+    dropped_messages: 0,
+    ...patch,
+  })
+
+  it('reads a target that was never switched on as off, not as broken', () => {
+    const off = forwardHealth({ enabled: false })
+    expect(off.state).toBe('off')
+    expect(off.tone).toBe('idle')
+    expect(off.attention).toBe(false)
+    expect(off.notes[0]).toMatch(/nothing is being copied/i)
+  })
+
+  it('waits for the first report instead of calling a new target unhealthy', () => {
+    const starting = forwardHealth({ enabled: true })
+    expect(starting.state).toBe('starting')
+    expect(starting.attention).toBe(false)
+  })
+
+  it('calls out failing writes and dropped copies separately', () => {
+    expect(forwardHealth({ enabled: true, status: status() })).toMatchObject({
+      state: 'healthy',
+      tone: 'ok',
+      attention: false,
+      notes: [],
+    })
+    // Dropped copies are gone for good, so a healthy target still asks for a look.
+    const dropping = forwardHealth({ enabled: true, status: status({ dropped_messages: 12 }) })
+    expect(dropping).toMatchObject({ state: 'dropping', tone: 'warn', attention: true })
+    expect(dropping.notes).toHaveLength(1)
+    // Failing outranks dropping, and both are explained.
+    const failing = forwardHealth({ enabled: true, status: status({ healthy: false, dropped_messages: 12 }) })
+    expect(failing).toMatchObject({ state: 'failing', tone: 'fail', attention: true })
+    expect(failing.notes).toHaveLength(2)
+    // The state is always in words, never only in colour.
+    expect(failing.label).toBe('unhealthy')
+  })
+
+  it('names the targets that need looking at, and says nothing when all is well', () => {
+    const target = (name: string, patch: Partial<ManagedForwardTarget>): ManagedForwardTarget => ({
+      config: { name, url: 'http://v:9428' },
+      enabled: true,
+      origin: 'database',
+      ...patch,
+    })
+    expect(
+      forwardAttentionSummary([
+        target('ok', { status: status() }),
+        target('off', { enabled: false }),
+        target('siem', { status: status({ healthy: false }) }),
+        target('cold', { status: status({ dropped_messages: 3 }) }),
+      ]),
+    ).toBe('siem is not accepting writes; cold has dropped copies.')
+    expect(forwardAttentionSummary([target('ok', { status: status() })])).toBeNull()
+    expect(forwardAttentionSummary([])).toBeNull()
+  })
+
+  it('states the consequence of switching a target on', () => {
+    expect(forwardEnableConsequence({ url: 'http://vlogs-dr:9428' })).toBe(
+      'Every stored log matching the filters is copied to http://vlogs-dr:9428.',
+    )
   })
 })
 

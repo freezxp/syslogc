@@ -23,8 +23,10 @@ import type {
   FieldsResponse,
   FieldValuesResponse,
   FilterExpr,
+  ForwardTargetInput,
   HistogramResponse,
   IngestionRateResponse,
+  ManagedForwardTarget,
   ManagedSource,
   NativeQuery,
   RetentionUpdate,
@@ -541,16 +543,21 @@ export function useSystemConfig(enabled: boolean) {
 export const sourcesKey = ['sources'] as const
 
 /**
- * Listeners start and stop asynchronously, so a source's state lags a write by
- * up to a few seconds: re-read the list a few times instead of once.
+ * Listeners and forward targets start and stop asynchronously, so their state
+ * lags a write by up to a few seconds: re-read the list a few times instead of
+ * once.
  */
 const SETTLE_DELAYS_MS = [500, 1500, 3000, 5500]
 
-function settleSources(qc: QueryClient): void {
-  qc.invalidateQueries({ queryKey: sourcesKey })
+function settle(qc: QueryClient, key: readonly unknown[]): void {
+  qc.invalidateQueries({ queryKey: key })
   for (const ms of SETTLE_DELAYS_MS) {
-    setTimeout(() => qc.invalidateQueries({ queryKey: sourcesKey }), ms)
+    setTimeout(() => qc.invalidateQueries({ queryKey: key }), ms)
   }
+}
+
+function settleSources(qc: QueryClient): void {
+  settle(qc, sourcesKey)
 }
 
 export function useSources() {
@@ -627,6 +634,49 @@ export function useTestExtract() {
   return useMutation({
     mutationFn: (body: ExtractTestRequest) =>
       unwrap(client.POST('/api/v1/sources/test-extract', { body })) as Promise<ExtractTestResponse>,
+  })
+}
+
+// ---- forwarding ------------------------------------------------------------
+
+export const forwardTargetsKey = ['forward-targets'] as const
+
+export function useForwardTargets() {
+  return useQuery({
+    queryKey: forwardTargetsKey,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/forward-targets', { signal })),
+    // Health and counters are what the list is for, so it polls like the system
+    // pages rather than like a list of settings.
+    refetchInterval: 10_000,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useCreateForwardTarget() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ForwardTargetInput) =>
+      unwrap(client.POST('/api/v1/forward-targets', { body })) as Promise<ManagedForwardTarget>,
+    onSuccess: () => settle(qc, forwardTargetsKey),
+  })
+}
+
+export function useUpdateForwardTarget() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: ForwardTargetInput }) =>
+      unwrap(
+        client.PUT('/api/v1/forward-targets/{id}', { params: { path: { id } }, body }),
+      ) as Promise<ManagedForwardTarget>,
+    onSuccess: () => settle(qc, forwardTargetsKey),
+  })
+}
+
+export function useDeleteForwardTarget() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unwrap(client.DELETE('/api/v1/forward-targets/{id}', { params: { path: { id } } })),
+    onSuccess: () => settle(qc, forwardTargetsKey),
   })
 }
 
