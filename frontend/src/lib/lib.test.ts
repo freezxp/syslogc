@@ -8,6 +8,7 @@ import { exportFilename } from '@/features/explorer/export'
 import {
   CERT_EXPIRY_WARNING_DAYS,
   DEFAULT_SOURCE_FORM,
+  acmeStatus,
   captureGroupNames,
   certificateStatus,
   configToForm,
@@ -657,6 +658,50 @@ describe('source TLS', () => {
     ])
     // A single certificate from an authority is the missing-intermediates case.
     expect(certificateStatus(cert({ chain: 1 }), now).notes[0]).toMatch(/intermediates/)
+  })
+
+  it('says whether Let’s Encrypt actually produced a certificate', () => {
+    const domains = ['logs.example.com']
+    const at = '2026-10-01T04:12:33Z'
+
+    // A source that asks no authority has nothing to report.
+    expect(acmeStatus(undefined)).toMatchObject({ state: 'none', tone: 'idle' })
+
+    // Asked for, nothing back, nothing wrong yet.
+    expect(acmeStatus({ domains, staging: false, last_tried: '2026-10-01T04:15:00Z' })).toMatchObject({
+      state: 'pending',
+      tone: 'idle',
+      label: 'no certificate yet',
+    })
+    // An empty map means the same as no map at all.
+    expect(acmeStatus({ domains, staging: false, obtained: {} }).state).toBe('pending')
+
+    expect(acmeStatus({ domains, staging: false, error: 'no viable challenge type found' })).toMatchObject({
+      state: 'failed',
+      tone: 'fail',
+      label: 'no certificate',
+    })
+    // A blank message is not a failure report.
+    expect(acmeStatus({ domains, staging: false, error: '  ' }).state).toBe('pending')
+
+    // Obtained from staging is not success: nothing trusts those certificates.
+    expect(acmeStatus({ domains, staging: true, obtained: { 'logs.example.com': at } })).toMatchObject({
+      state: 'staging',
+      tone: 'warn',
+      label: 'staging certificate',
+    })
+
+    expect(acmeStatus({ domains, staging: false, obtained: { 'logs.example.com': at } })).toMatchObject({
+      state: 'ready',
+      tone: 'ok',
+      label: 'certificate obtained',
+    })
+
+    // A certificate that exists outranks a failed attempt: that one was about
+    // renewing, and the listener can still complete a handshake meanwhile.
+    expect(
+      acmeStatus({ domains, staging: false, obtained: { 'logs.example.com': at }, error: 'rate limited' }).state,
+    ).toBe('ready')
   })
 })
 

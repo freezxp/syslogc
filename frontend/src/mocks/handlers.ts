@@ -19,6 +19,7 @@ import type {
   ManagedSource,
   Problem,
   RetentionUpdateInput,
+  SourceACMEStatus,
   SourceInput,
   SourceTLSConfig,
   SavedSearch,
@@ -517,6 +518,145 @@ let managedSources: ManagedSource[] = [
     updated_at: new Date(NOW - 6 * 3600_000).toISOString(),
     version: 4,
   },
+  {
+    // Let's Encrypt worked, but against the test authority: the listener is up,
+    // the certificate is real, and every actual sender still refuses it.
+    id: '0192f0c4-3333-7000-8000-000000000004',
+    config: {
+      name: 'acme-staging',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6517',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'none',
+      sd_flatten: 'full',
+      tls: {
+        min_version: '1.2',
+        client_auth: 'none',
+        acme: { enabled: true, domains: ['logs-test.example.com'], staging: true, accept_terms: true },
+      },
+    },
+    enabled: true,
+    origin: 'database',
+    acme: {
+      domains: ['logs-test.example.com'],
+      staging: true,
+      obtained: { 'logs-test.example.com': new Date(NOW - 4 * 3600_000).toISOString() },
+      last_tried: new Date(NOW - 4 * 3600_000).toISOString(),
+    },
+    status: {
+      name: 'acme-staging',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6517',
+      state: 'running',
+      since: new Date(NOW - 4 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 4 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 4 * 3600_000).toISOString(),
+    version: 2,
+  },
+  {
+    // The state this whole card exists for: "running", no certificate, and the
+    // only explanation is the authority's own message.
+    id: '0192f0c4-3333-7000-8000-000000000005',
+    config: {
+      name: 'acme-public',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6518',
+      format: 'auto',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      tls: {
+        min_version: '1.2',
+        client_auth: 'none',
+        acme: {
+          enabled: true,
+          domains: ['logs.example.com'],
+          email: 'ops@example.com',
+          staging: false,
+          accept_terms: true,
+        },
+      },
+    },
+    enabled: true,
+    origin: 'database',
+    acme: {
+      domains: ['logs.example.com'],
+      staging: false,
+      error:
+        'acme/autocert: unable to satisfy "https://acme-v02.api.letsencrypt.org/acme/authz-v3/18290317" for domain ' +
+        '"logs.example.com": no viable challenge type found',
+      last_tried: new Date(NOW - 11 * 60_000).toISOString(),
+    },
+    status: {
+      name: 'acme-public',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6518',
+      state: 'running',
+      since: new Date(NOW - 3 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 3 * 3600_000).toISOString(),
+    updated_at: new Date(NOW - 3 * 3600_000).toISOString(),
+    version: 1,
+  },
+  {
+    // The one that simply works, so the success state has something to be.
+    id: '0192f0c4-3333-7000-8000-000000000006',
+    config: {
+      name: 'acme-live',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6519',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'none',
+      sd_flatten: 'full',
+      tls: {
+        min_version: '1.3',
+        client_auth: 'none',
+        acme: {
+          enabled: true,
+          domains: ['logs.example.net', 'relay.example.net'],
+          email: 'ops@example.net',
+          staging: false,
+          accept_terms: true,
+        },
+      },
+    },
+    enabled: true,
+    origin: 'database',
+    acme: {
+      domains: ['logs.example.net', 'relay.example.net'],
+      staging: false,
+      obtained: {
+        'logs.example.net': new Date(NOW - 9 * 86400_000).toISOString(),
+        'relay.example.net': new Date(NOW - 9 * 86400_000 + 40_000).toISOString(),
+      },
+      last_tried: new Date(NOW - 9 * 86400_000).toISOString(),
+    },
+    status: {
+      name: 'acme-live',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6519',
+      state: 'running',
+      since: new Date(NOW - 9 * 86400_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 20 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 9 * 86400_000).toISOString(),
+    version: 5,
+  },
 ]
 
 /**
@@ -549,6 +689,30 @@ function describeCertificate(config: ManagedSource['config'], previous: ManagedS
     chain: 1,
   }
   return info
+}
+
+/**
+ * The authority state the server would report. A source that has just asked has
+ * nothing obtained yet — the pending state anyone sees straight after saving —
+ * and a source still asking for the same names keeps what it already got.
+ */
+function describeAcme(
+  config: ManagedSource['config'],
+  previous: ManagedSource | undefined,
+): SourceACMEStatus | undefined {
+  const acme = config.tls?.acme
+  if (!acme?.enabled) return undefined
+  const domains = acme.domains ?? []
+  const staging = !!acme.staging
+  const before = previous?.acme
+  if (before && before.staging === staging && before.domains.join(',') === domains.join(',')) return before
+  return { domains, staging, last_tried: new Date().toISOString() }
+}
+
+/** A successful round with the authority: every name got a certificate just now. */
+function obtainedNow(domains: string[]): Pick<SourceACMEStatus, 'obtained' | 'last_tried'> {
+  const at = new Date().toISOString()
+  return { obtained: Object.fromEntries(domains.map((d) => [d, at])), last_tried: at }
 }
 
 let users: AdminUser[] = [
@@ -1711,6 +1875,7 @@ export const handlers = [
       enabled: body.enabled ?? true,
       origin: 'database',
       certificate: describeCertificate(body.config, undefined),
+      acme: describeAcme(body.config, undefined),
       created_at: now,
       updated_at: now,
       version: 1,
@@ -1732,6 +1897,9 @@ export const handlers = [
                 since: new Date().toISOString(),
                 origin: 'database',
               },
+              // The certificate is asked for as the listener starts, so a source
+              // saved a moment ago goes from pending to obtained on its own.
+              acme: x.enabled && x.acme ? { ...x.acme, ...obtainedNow(x.acme.domains) } : x.acme,
             }
           : x,
       )
@@ -1755,6 +1923,7 @@ export const handlers = [
       config: body.config,
       enabled: body.enabled ?? s.enabled,
       certificate: describeCertificate(body.config, s),
+      acme: describeAcme(body.config, s),
       updated_at: new Date().toISOString(),
       version: (s.version ?? 1) + 1,
       status: {

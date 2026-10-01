@@ -7,10 +7,10 @@
  * it, and get "no such file or directory" with nothing to fix. So the three ways
  * are an explicit choice, with the two that need no filesystem first.
  */
-import { AlertTriangle, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Clock, ShieldAlert, ShieldCheck } from 'lucide-react'
 import type { ReactNode } from 'react'
 
-import type { CertificateInfo } from '@/api/types'
+import type { CertificateInfo, SourceACMEStatus } from '@/api/types'
 import { Panel } from '@/components/data/common'
 import { Input, NativeSelect, Textarea } from '@/components/ui/input'
 import { cn } from '@/lib/cn'
@@ -19,7 +19,9 @@ import { useTimezone } from '@/lib/preferences'
 
 import { Field } from './SourceFields'
 import {
+  acmeStatus,
   certificateStatus,
+  type AcmeState,
   type SourceErrors,
   type SourceFormField,
   type SourceFormState,
@@ -48,6 +50,7 @@ export function TlsPanel({
   errors,
   editable,
   certificate,
+  acme,
   set,
 }: {
   form: SourceFormState
@@ -55,6 +58,8 @@ export function TlsPanel({
   editable: boolean
   /** From the source response: what the stored certificate turned out to be. */
   certificate: CertificateInfo | undefined
+  /** From the source response: whether asking an authority produced anything. */
+  acme: SourceACMEStatus | undefined
   set: <K extends SourceFormField>(key: K, value: SourceFormState[K]) => void
 }) {
   const field = (name: SourceFormField) => ({ error: errors.fields[name] })
@@ -62,6 +67,8 @@ export function TlsPanel({
     <Panel title="TLS" className="md:col-span-2">
       <div className="grid gap-3">
         {certificate && <CertificateCard certificate={certificate} />}
+        {/* Describes what is stored, so it stays while an unsaved edit switches away. */}
+        {acme && <AcmeCard acme={acme} />}
 
         <fieldset>
           <legend className="mb-1 text-sm font-medium text-muted">How this listener gets its certificate</legend>
@@ -426,6 +433,103 @@ function CertificateCard({ certificate }: { certificate: CertificateInfo }) {
           ))}
         </ul>
       )}
+    </section>
+  )
+}
+
+const ACME_TONES = {
+  ok: 'border-success/40 bg-success/10',
+  warn: 'border-warning/40 bg-warning/10',
+  fail: 'border-danger/40 bg-danger/10',
+  idle: 'border-border-strong bg-surface-2',
+}
+
+const ACME_TEXT_TONES = { ok: 'text-success', warn: 'text-warning', fail: 'text-danger', idle: 'text-muted' }
+
+/**
+ * What each state means for the people sending logs. The failed and pending
+ * states say the same thing about handshakes because that is the consequence
+ * nobody expects: the listener is up, the port answers, and every sender is
+ * turned away.
+ */
+const ACME_EXPLANATION: Record<Exclude<AcmeState, 'none'>, string> = {
+  failed:
+    'The last attempt failed, so this listener has no certificate to offer: it accepts connections and then rejects ' +
+    'the handshake. The authority’s own words are below — they usually name what to fix.',
+  pending:
+    'No certificate has arrived yet. One is asked for when the source starts, which can take a moment; until it ' +
+    'arrives senders cannot complete a handshake.',
+  staging:
+    'This came from the staging authority, which is trusted by nothing: every real sender will still reject this ' +
+    'listener. It does prove the setup works, so turn off “Use the staging authority” below and save to ask the real ' +
+    'authority for one.',
+  ready: 'A certificate from the real authority is in place and is renewed for you. Senders can complete a handshake.',
+}
+
+/**
+ * Whether asking an authority for a certificate actually produced one. Until the
+ * server reported this, the first sign that it never did was a sender failing its
+ * handshake against a listener this page called "running".
+ */
+function AcmeCard({ acme }: { acme: SourceACMEStatus }) {
+  const tz = useTimezone()
+  const status = acmeStatus(acme)
+  const obtained = acme.obtained ?? {}
+  // The configured domains are what was asked for; fall back to whatever was
+  // obtained so a renamed domain still shows the certificate that exists.
+  const domains = acme.domains?.length ? acme.domains : Object.keys(obtained)
+  return (
+    <section className={cn('rounded-md border p-3', ACME_TONES[status.tone])}>
+      <div className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+        {status.state === 'ready' ? (
+          <ShieldCheck className="size-4 shrink-0 text-success" />
+        ) : status.state === 'pending' ? (
+          <Clock className="size-4 shrink-0 text-muted" />
+        ) : (
+          <ShieldAlert className={cn('size-4 shrink-0', ACME_TEXT_TONES[status.tone])} />
+        )}
+        <h3 className="text-base font-medium">Let’s Encrypt</h3>
+        {/* The state in words, not only in colour. */}
+        <span className={cn('text-sm', ACME_TEXT_TONES[status.tone])}>{status.label}</span>
+        {/* Which authority was asked, worth saying even before anything arrives;
+            the staging state's own label already says it. */}
+        {acme.staging && status.state !== 'staging' && (
+          <span className="rounded border border-border bg-surface px-1 text-xs text-muted">staging authority</span>
+        )}
+      </div>
+      {/* `none` is unreachable here — the card only exists when the server sent
+          an `acme` object — but narrowing beats a placeholder sentence. */}
+      {status.state !== 'none' && <p className="text-sm">{ACME_EXPLANATION[status.state]}</p>}
+      <dl className="mt-2 grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+        <Detail label="Domains" className="sm:col-span-2">
+          <ul className="grid gap-0.5">
+            {domains.map((d) => (
+              <li key={d} className="flex flex-wrap items-baseline gap-x-2">
+                <span className="mono break-all">{d}</span>
+                {obtained[d] ? (
+                  <span className="mono text-xs text-subtle">
+                    obtained {formatTimestamp(obtained[d], tz, 'yyyy-MM-dd HH:mm')}
+                  </span>
+                ) : (
+                  <span className="text-xs text-subtle">no certificate</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Detail>
+        {acme.last_tried && (
+          <Detail label="Last tried">
+            <span className="mono">{formatTimestamp(acme.last_tried, tz, 'yyyy-MM-dd HH:mm')}</span>
+          </Detail>
+        )}
+        {acme.error && (
+          <Detail label="Last error" className="sm:col-span-2">
+            {/* Verbatim: the authority's message is written for people and often
+                names exactly what to fix, so nothing here paraphrases it. */}
+            <p className="mono text-sm break-words whitespace-pre-wrap text-danger">{acme.error}</p>
+          </Detail>
+        )}
+      </dl>
     </section>
   )
 }

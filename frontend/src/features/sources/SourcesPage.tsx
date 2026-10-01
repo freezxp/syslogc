@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { FileLock2, Network, Plus, Search } from 'lucide-react'
+import { FileLock2, Network, Plus, Search, ShieldAlert } from 'lucide-react'
 
 import { useSources } from '@/api/hooks'
 import type { ManagedSource } from '@/api/types'
@@ -7,10 +7,11 @@ import { useCan } from '@/auth/permissions'
 import { EmptyState, ErrorPanel, Skeleton, StatusDot } from '@/components/data/common'
 import { buttonVariants } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/overlay'
+import { cn } from '@/lib/cn'
 import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 
-import { sourceExplorerSearch, sourceRouteId, sourceStateTone } from './source-form'
+import { acmeStatus, sourceExplorerSearch, sourceRouteId, sourceStateTone } from './source-form'
 
 export function SourcesPage() {
   const q = useSources()
@@ -74,10 +75,39 @@ export function SourcesPage() {
   )
 }
 
+/**
+ * Why a Let's Encrypt source needs saying something about in a list of
+ * listeners: "running" is about the port, not about whether a sender can get
+ * past the handshake, and these three states mean it cannot (or not for real).
+ */
+const ACME_LIST_HELP = {
+  failed:
+    'Let’s Encrypt has not issued a certificate: the last attempt failed. This listener accepts connections and then ' +
+    'rejects the handshake. Open the source to see the error.',
+  pending:
+    'Let’s Encrypt has not issued a certificate yet. One is asked for when the source starts; until it arrives ' +
+    'senders cannot complete a handshake.',
+  staging:
+    'The certificate came from Let’s Encrypt’s staging authority, which is trusted by nothing, so real senders will ' +
+    'still reject this listener.',
+}
+
+const ACME_BADGE_TONES = {
+  ok: 'bg-success/15 text-success',
+  warn: 'bg-warning/15 text-warning',
+  fail: 'bg-danger/15 text-danger',
+  idle: 'bg-surface-3 text-muted',
+}
+
 function SourceRow({ source, tz }: { source: ManagedSource; tz: string }) {
   const c = source.config
   const state = source.status?.state ?? (source.enabled ? 'stopped' : 'disabled')
   const protocol = c.type === 'http_json' ? 'http' : (c.protocol ?? '—')
+  const acme = acmeStatus(source.acme)
+  // `ready` and `none` get no badge: a certificate that works is what the State
+  // column already implies, and silence keeps the table readable.
+  const acmeHelp =
+    acme.state === 'failed' || acme.state === 'pending' || acme.state === 'staging' ? ACME_LIST_HELP[acme.state] : null
   return (
     <tr className="border-t border-border hover:bg-[var(--row-hover)]">
       <td className="px-3 py-2">
@@ -100,6 +130,15 @@ function SourceRow({ source, tz }: { source: ManagedSource; tz: string }) {
           <StatusDot status={sourceStateTone(state)} />
           {state}
         </span>
+        {acmeHelp && (
+          <Tooltip content={acmeHelp}>
+            <span
+              className={cn('mt-0.5 inline-flex items-center gap-1 rounded px-1 text-xs', ACME_BADGE_TONES[acme.tone])}
+            >
+              <ShieldAlert className="size-3 shrink-0" /> {acme.label}
+            </span>
+          </Tooltip>
+        )}
         {source.status?.error && <div className="max-w-sm text-sm break-words text-danger">{source.status.error}</div>}
         {source.status?.since && !source.status.error && (
           <div className="mono text-xs text-subtle">

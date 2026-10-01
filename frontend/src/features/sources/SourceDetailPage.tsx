@@ -513,7 +513,14 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
         )}
 
         {sections.tls && (
-          <TlsPanel form={form} errors={errors} editable={editable} certificate={source?.certificate} set={set} />
+          <TlsPanel
+            form={form}
+            errors={errors}
+            editable={editable}
+            certificate={source?.certificate}
+            acme={source?.acme}
+            set={set}
+          />
         )}
 
         <ExtractRulesPanel

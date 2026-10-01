@@ -89,6 +89,7 @@ export type {
   SeriesRequest,
   SeriesResponse,
   SourceACMEConfig,
+  SourceACMEStatus,
   SourceConfig,
   SourceInput,
   SourceOrigin,

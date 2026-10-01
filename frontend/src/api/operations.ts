@@ -33,6 +33,23 @@ export interface SourceACMEConfig {
   skip_preflight?: boolean
 }
 
+/**
+ * Whether asking an authority actually produced a certificate. Without this the
+ * only sign that it never arrived is a sender's failed handshake: a listener with
+ * no certificate to offer still accepts connections and then rejects them.
+ */
+export interface SourceACMEStatus {
+  /** The hostnames asked for, as configured. */
+  domains: string[]
+  /** The certificate came from the test authority, so nothing trusts it. */
+  staging: boolean
+  /** Domain → when its certificate was last obtained; absent or empty means none yet. */
+  obtained?: Record<string, string>
+  /** Why the last attempt failed; empty when the last one worked. */
+  error?: string
+  last_tried?: string
+}
+
 export interface SourceTLSConfig {
   /** Paths on the server, for a host where something else writes and renews them. */
   cert_file?: string
@@ -134,6 +151,8 @@ export interface ManagedSource {
   key_stored?: boolean
   /** Present when the source carries a pasted certificate. */
   certificate?: CertificateInfo
+  /** Present when the source asks an authority for its certificate (`config.tls.acme.enabled`). */
+  acme?: SourceACMEStatus
   created_at?: string
   updated_at?: string
   version?: number

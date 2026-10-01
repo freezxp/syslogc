@@ -4,7 +4,15 @@
  * configuration file), plus mapping of server validation problems back onto
  * individual form fields.
  */
-import type { CertificateInfo, ExtractRule, ManagedSource, Problem, SourceConfig, SourceState } from '@/api/types'
+import type {
+  CertificateInfo,
+  ExtractRule,
+  ManagedSource,
+  Problem,
+  SourceACMEStatus,
+  SourceConfig,
+  SourceState,
+} from '@/api/types'
 import { quote } from '@/lib/filter-text'
 import type { ExplorerSearch } from '@/lib/url-state'
 
@@ -603,6 +611,39 @@ export function certificateStatus(cert: CertificateInfo, now: Date): Certificate
     tone: expired || early ? 'fail' : soon ? 'warn' : 'ok',
     notes,
   }
+}
+
+/** Where asking an authority for a certificate has got to. */
+export type AcmeState = 'none' | 'pending' | 'staging' | 'ready' | 'failed'
+
+export interface AcmeStatus {
+  state: AcmeState
+  /** Short enough to sit beside a source's state in the list. */
+  label: string
+  tone: 'ok' | 'warn' | 'fail' | 'idle'
+}
+
+/**
+ * Whether Let's Encrypt has actually produced a certificate for this listener.
+ * Nothing else answers that: a TLS listener with no certificate to offer still
+ * binds its port and reports "running", and only tells a sender the truth at
+ * handshake time.
+ *
+ * A certificate that exists outranks an error, which by then is about a renewal
+ * rather than about whether a handshake can complete at all — the card still
+ * shows the message. Staging is kept apart from success on purpose: those
+ * certificates are trusted by nothing, so the listener works only in tests.
+ */
+export function acmeStatus(acme: SourceACMEStatus | undefined): AcmeStatus {
+  if (!acme) return { state: 'none', label: 'not using Let’s Encrypt', tone: 'idle' }
+  const obtained = Object.keys(acme.obtained ?? {}).length > 0
+  if (obtained) {
+    return acme.staging
+      ? { state: 'staging', label: 'staging certificate', tone: 'warn' }
+      : { state: 'ready', label: 'certificate obtained', tone: 'ok' }
+  }
+  if (acme.error?.trim()) return { state: 'failed', label: 'no certificate', tone: 'fail' }
+  return { state: 'pending', label: 'no certificate yet', tone: 'idle' }
 }
 
 export function sourceStateTone(state: SourceState | undefined): 'ok' | 'warn' | 'fail' | 'idle' {
