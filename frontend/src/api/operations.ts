@@ -122,6 +122,12 @@ export interface SourceConfig {
   udp?: SourceUDPConfig
   tls?: SourceTLSConfig
   extract?: ExtractRule[]
+  /**
+   * The shape of log this source carries (a `SourceTemplate.id`). It supplies
+   * the parsing when the source is created and decides which analyses are
+   * offered at all; absent means a plain source, which most are.
+   */
+  template?: string
 }
 
 export type SourceOrigin = 'file' | 'database'
@@ -579,6 +585,174 @@ export interface ServiceTrendResponse {
   hint?: string
 }
 
+// ---- source templates ------------------------------------------------------
+
+/**
+ * One value a template produces, so the editor can say what becomes searchable
+ * before a single log has arrived.
+ */
+export interface TemplateField {
+  name: string
+  description: string
+  example?: string
+}
+
+/**
+ * Keys of a JSON message body promoted to log fields. A sender that emits
+ * structured records is read this way instead of by matching its prose, which
+ * is written in the server's own language.
+ */
+export interface TemplateJSONExtract {
+  /** Prepended to every field name, e.g. "ad.". */
+  prefix?: string
+  /** JSON key → the field name it becomes. */
+  keys?: Record<string, string>
+}
+
+/** One instruction of a setup guide, with text to copy where there is any. */
+export interface TemplateStep {
+  title: string
+  body?: string
+  /** A block of configuration to copy rather than retype. */
+  config?: string
+  /** Labels the snippet, e.g. "apache", "batch", "yaml". */
+  language?: string
+}
+
+/** How to get these logs here, from the sender's side. */
+export interface TemplateSetup {
+  /** What produces the logs, e.g. "NXLog Community Edition". */
+  sender: string
+  summary: string
+  steps?: TemplateStep[]
+  /** The sender's own documentation. */
+  reference?: string
+}
+
+/**
+ * One recognised shape of log: the rules that turn it into fields, the analyses
+ * those fields feed, and how to configure whatever sends it.
+ */
+export interface SourceTemplate {
+  id: string
+  title: string
+  description: string
+  /** Rules a new source is given; it keeps its own copy and may edit them. */
+  extract?: ExtractRule[]
+  json?: TemplateJSONExtract
+  fields?: TemplateField[]
+  /** Analysis ids this template unlocks, e.g. "directory". */
+  analyses?: string[]
+  setup: TemplateSetup
+  /** An enabled source carries this template, so its analyses are worth offering. */
+  in_use: boolean
+  /** The enabled sources using it, so the interface can say where data comes from. */
+  sources?: string[]
+}
+
+export interface TemplatesResponse {
+  templates: SourceTemplate[]
+  /**
+   * The analyses worth offering right now, so the interface need not work it
+   * out from the templates. Null when no template is in use at all.
+   */
+  analyses?: string[] | null
+}
+
+// ---- Active Directory ------------------------------------------------------
+
+export interface DirectoryRequest {
+  time_range: S['TimeRange']
+  filter?: S['FilterExpr']
+  /** Target point count for the activity chart, at most 1000. */
+  buckets?: number
+  /** Caps the lists. */
+  limit?: number
+}
+
+/** The headline numbers, in the terms somebody asks about a domain. */
+export interface DirectoryOverview {
+  /**
+   * Accounts that signed in and have not signed out. An estimate: a machine
+   * that loses power never reports the sign-out, so it drifts upwards.
+   */
+  signed_in: number
+  /** Accounts that signed in at all. */
+  accounts: number
+  logons: number
+  failures: number
+  lockouts: number
+  /** Sign-ins that carried administrative rights. */
+  privileged_logons: number
+  /** Accounts created, deleted, enabled or disabled. */
+  account_changes: number
+  /** Group membership added or removed. */
+  group_changes: number
+}
+
+/** One counted thing over time; `points` aligns index-for-index with the timestamps. */
+export interface DirectoryLine {
+  /** Stable key, e.g. "logons". */
+  name: string
+  label: string
+  points: number[]
+  total: number
+}
+
+export interface DirectoryActivity {
+  step_seconds: number
+  timestamps: string[]
+  lines: DirectoryLine[]
+}
+
+/** One account locking, with what caused it. */
+export interface DirectoryLockout {
+  at: string
+  user: string
+  /** The machine whose attempts caused it; the lockout event does not always name one. */
+  caller?: string
+  /** Read from the failures just before the lockout, which is where the address is. */
+  source_ip?: string
+  dc?: string
+  /** Failed sign-ins seen for the account in the window before it locked. */
+  failures_before: number
+}
+
+/** One account or group change worth reviewing. */
+export interface DirectoryChange {
+  at: string
+  /** The Windows event id, e.g. "4728". */
+  event: string
+  /** What it was, in words: "added to a global group". */
+  what: string
+  /** The account or group the change was made to. */
+  subject?: string
+  actor?: string
+  member?: string
+  dc?: string
+}
+
+/** One value and how often it occurred; `label` explains codes like 0xC000006D. */
+export interface DirectoryCount {
+  value: string
+  label?: string
+  count: number
+}
+
+export interface DirectoryResponse {
+  resolved_range: S['ResolvedRange']
+  overview: DirectoryOverview
+  activity: DirectoryActivity
+  /** Newest first. Null rather than empty when nothing locked. */
+  lockouts?: DirectoryLockout[] | null
+  changes?: DirectoryChange[] | null
+  busiest_accounts: DirectoryCount[]
+  most_failures: DirectoryCount[]
+  failure_reasons: DirectoryCount[]
+  logon_types: DirectoryCount[]
+  failure_sources: DirectoryCount[]
+}
+
 // ---- path definitions ------------------------------------------------------
 //
 // The shape openapi-fetch expects: `parameters`, `requestBody` and `responses`
@@ -636,6 +810,9 @@ export interface OperationsPaths {
   '/api/v1/analytics/service-trends': {
     post: Write<ServiceTrendResponse, ServiceTrendRequest>
   }
+  '/api/v1/analytics/directory': {
+    post: Write<DirectoryResponse, DirectoryRequest>
+  }
   '/api/v1/analytics/services': {
     get: Read<ServiceCatalog>
     put: Write<ServiceCatalog, ServiceCatalogInput>
@@ -660,6 +837,9 @@ export interface OperationsPaths {
   }
   '/api/v1/sources/test-extract': {
     post: Write<ExtractTestResponse, ExtractTestRequest>
+  }
+  '/api/v1/templates': {
+    get: Read<TemplatesResponse>
   }
   '/api/v1/sources/{id}': {
     get: Read<ManagedSource, ById>

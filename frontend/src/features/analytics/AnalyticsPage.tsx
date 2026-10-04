@@ -1,12 +1,14 @@
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { ExternalLink } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { ExternalLink, Lock, Plus } from 'lucide-react'
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useBreakdown, useSeries } from '@/api/hooks'
+import { useBreakdown, useSeries, useTemplates } from '@/api/hooks'
 import type { AnalyticsMetric, FilterExpr } from '@/api/types'
+import { useCan } from '@/auth/permissions'
 import { GroupedSeriesChart } from '@/components/charts'
 import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
+import { buttonVariants } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/overlay'
 import { QueryBar, type QueryError } from '@/features/explorer/QueryBar'
@@ -20,6 +22,8 @@ import { resolveRange, TimeRangeError } from '@/lib/time-range'
 import { buildSelection, decodeQuery, encodeFilter, withoutPipes, type AnalyticsSearch } from '@/lib/url-state'
 
 import { AnalyticsHeader } from './AnalyticsHeader'
+import { analysisAvailability, analysisGateMessage, ANALYSES, type AnalysisId } from './analyses'
+import { DirectoryView } from './DirectoryView'
 import { ServiceTrendsView } from './ServiceTrendsView'
 import {
   coverageLabel,
@@ -44,9 +48,66 @@ import { FieldPicker } from './FieldPicker'
 
 export function AnalyticsPage() {
   const { view } = useSearch({ from: '/app/analytics' })
-  // Two views over the same time range: ad-hoc aggregation over the logs, and
-  // the service trends recorded window by window.
-  return view === 'trends' ? <ServiceTrendsView /> : <ExploreView />
+  // Views over the same time range: ad-hoc aggregation over the logs, the
+  // service trends recorded window by window, and the directory analysis. The
+  // last two read fields only a template produces, so they are gated on one
+  // being in use rather than shown empty forever.
+  if (view === 'trends') {
+    return (
+      <AnalysisGate id="dns-services">
+        <ServiceTrendsView />
+      </AnalysisGate>
+    )
+  }
+  if (view === 'directory') {
+    return (
+      <AnalysisGate id="directory">
+        <DirectoryView />
+      </AnalysisGate>
+    )
+  }
+  return <ExploreView />
+}
+
+/**
+ * An analysis nothing feeds, explained rather than hidden: somebody who was
+ * handed the link, or who turned the source off, needs to know which template
+ * unlocks the page — not an empty one, and not a redirect somewhere else.
+ */
+function AnalysisGate({ id, children }: { id: AnalysisId; children: ReactNode }) {
+  const templates = useTemplates()
+  const can = useCan()
+  if (analysisAvailability(id, templates.data) !== 'unavailable') return <>{children}</>
+  const { title, hint } = analysisGateMessage(id, templates.data)
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <AnalyticsHeader range={null} />
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <Panel title={ANALYSES[id].label}>
+          <EmptyState
+            title={title}
+            icon={<Lock />}
+            // EmptyState puts its hint in a paragraph, so the link has to be
+            // phrasing content rather than another block.
+            hint={
+              <>
+                {hint}
+                {can('sources:manage') && (
+                  <Link
+                    to="/sources/$id"
+                    params={{ id: 'new' }}
+                    className={cn(buttonVariants({ variant: 'primary' }), 'mx-auto mt-3 flex w-fit')}
+                  >
+                    <Plus /> Add a source
+                  </Link>
+                )}
+              </>
+            }
+          />
+        </Panel>
+      </div>
+    </div>
+  )
 }
 
 function ExploreView() {

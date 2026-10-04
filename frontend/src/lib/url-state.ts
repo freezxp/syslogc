@@ -28,9 +28,11 @@ export type ExplorerSearch = z.infer<typeof explorerSearchSchema>
  * the aggregation. `top` stays a string like every other param; the codec in
  * `features/analytics/analytics-query.ts` turns it into a request.
  *
- * `view` picks between the ad-hoc explorer and the recorded service trends;
- * `win`, `count`, `scope`, `svc` and `catalog` belong to the latter and are
- * decoded by `features/analytics/service-trends.ts`.
+ * `view` picks between the ad-hoc explorer, the recorded service trends and the
+ * directory analysis; `win`, `count`, `scope`, `svc` and `catalog` belong to the
+ * trends and are decoded by `features/analytics/service-trends.ts`, while `acct`
+ * and `rows` belong to the directory view and are decoded by
+ * `features/analytics/directory.ts`.
  */
 export const analyticsSearchSchema = z.object({
   from: str('now-1h'),
@@ -43,12 +45,14 @@ export const analyticsSearchSchema = z.object({
   metric: z._default(z.catch(z.enum(['count', 'unique']), 'count'), 'count'),
   mfield: optStr(),
   top: optStr(),
-  view: z._default(z.catch(z.enum(['explore', 'trends']), 'explore'), 'explore'),
+  view: z._default(z.catch(z.enum(['explore', 'trends', 'directory']), 'explore'), 'explore'),
   win: optStr(),
   count: optStr(),
   scope: optStr(),
   svc: optStr(),
   catalog: optStr(),
+  acct: optStr(),
+  rows: optStr(),
 })
 
 export type AnalyticsSearch = z.infer<typeof analyticsSearchSchema>

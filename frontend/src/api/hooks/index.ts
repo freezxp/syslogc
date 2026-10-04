@@ -16,6 +16,7 @@ import type {
   AuditQuery,
   BreakdownResponse,
   DashboardOverview,
+  DirectoryResponse,
   ExtractPreset,
   ExtractTestRequest,
   ExtractTestResponse,
@@ -47,6 +48,7 @@ import type {
   SystemIngestion,
   SystemRetention,
   SystemStorage,
+  TemplatesResponse,
   TimeRange,
   TrendMetric,
   TrendScope,
@@ -393,6 +395,58 @@ export function useServiceTrends(
   })
 }
 
+// ---- Active Directory ------------------------------------------------------
+
+/** The server caps `buckets` at 1000; 120 keeps a day's shape readable. */
+export const DIRECTORY_BUCKETS = 120
+
+/**
+ * Every directory question in one request, because they are read together: a
+ * rise in failed sign-ins means one thing beside a lockout and another beside
+ * none, and separate requests would answer about windows taken moments apart.
+ */
+export function useDirectory(range: TimeRange | null, filter: FilterExpr | undefined, limit: number, enabled = true) {
+  return useQuery({
+    queryKey: ['analytics', 'directory', range, filter, limit],
+    enabled: enabled && range !== null,
+    queryFn: ({ signal }) =>
+      unwrap(
+        client.POST('/api/v1/analytics/directory', {
+          body: { time_range: range!, filter, buckets: DIRECTORY_BUCKETS, limit },
+          signal,
+        }),
+      ) as Promise<DirectoryResponse>,
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+    retry: false,
+  })
+}
+
+// ---- source templates ------------------------------------------------------
+
+export const templatesKey = ['templates'] as const
+
+/**
+ * The shapes of log this deployment can make sense of, and which are in use.
+ * The source editor offers them and the analytics views are gated on them, so
+ * it is fetched once and shared: the list only changes when a source does,
+ * which is when `settleSources` invalidates it.
+ */
+export function useTemplates() {
+  const session = useSession()
+  // Listing templates needs sources:read, which an API-key principal may not
+  // have. Asking anyway would answer 403, and a failed list must not read as
+  // "no analysis is available" — so it is not asked at all.
+  const permitted = session.data?.permissions.includes('sources:read') ?? false
+  return useQuery({
+    queryKey: templatesKey,
+    enabled: permitted,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/templates', { signal })) as Promise<TemplatesResponse>,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
 // ---- saved searches --------------------------------------------------------
 
 export function useSavedSearches(q: string) {
@@ -558,6 +612,10 @@ function settle(qc: QueryClient, key: readonly unknown[]): void {
 
 function settleSources(qc: QueryClient): void {
   settle(qc, sourcesKey)
+  // Which analyses are offered follows from which templates enabled sources
+  // carry, so a source that was just added, retemplated or switched off can
+  // reveal or hide a whole view.
+  qc.invalidateQueries({ queryKey: templatesKey })
 }
 
 export function useSources() {

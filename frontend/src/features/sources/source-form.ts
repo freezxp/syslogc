@@ -12,9 +12,12 @@ import type {
   SourceACMEStatus,
   SourceConfig,
   SourceState,
+  SourceTemplate,
 } from '@/api/types'
 import { quote } from '@/lib/filter-text'
 import type { ExplorerSearch } from '@/lib/url-state'
+
+import type { Choice } from './ChoiceCards'
 
 type Tls = NonNullable<SourceConfig['tls']>
 
@@ -91,6 +94,85 @@ export function extractFieldNames(rule: Pick<ExtractRuleForm, 'prefix' | 'regex'
   return captureGroupNames(rule.regex).map((n) => prefix + n)
 }
 
+/**
+ * What a source with no template carries: anything at all. It is the default,
+ * because most sources are a listener somebody points something at rather than
+ * a known shape of log.
+ */
+export const TEMPLATE_NONE = ''
+
+export function templateById(templates: SourceTemplate[], id: string): SourceTemplate | undefined {
+  return id ? templates.find((t) => t.id === id) : undefined
+}
+
+/**
+ * The templates as cards. "Anything else" comes last: it is what you pick when
+ * none of the shapes above describe the logs, not the first thing to consider.
+ */
+export function templateChoices(templates: SourceTemplate[]): Choice<string>[] {
+  return [
+    ...templates.map((t) => ({ value: t.id, label: t.title, hint: t.description })),
+    {
+      value: TEMPLATE_NONE,
+      label: 'Anything else',
+      hint: 'Syslog as it arrives. Fields can still be pulled out with extract rules below.',
+    },
+  ]
+}
+
+/**
+ * What a copyable block of a setup guide is. A template labels its snippets
+ * with a highlighting language, and nothing here highlights code, so the label
+ * is used for the one thing it can honestly say: what you are looking at.
+ */
+const CONFIG_LANGUAGES: Record<string, string> = {
+  apache: 'configuration file',
+  ini: 'configuration file',
+  batch: 'Windows commands',
+  powershell: 'PowerShell',
+  shell: 'shell commands',
+  sh: 'shell commands',
+  bash: 'shell commands',
+  yaml: 'YAML',
+  json: 'JSON',
+  xml: 'XML',
+}
+
+export function configLanguageLabel(language: string | undefined): string {
+  const key = language?.trim().toLowerCase() ?? ''
+  return CONFIG_LANGUAGES[key] ?? (key || 'configuration')
+}
+
+/** Two rules are the same rule when they match the same text into the same fields. */
+function sameRule(a: Pick<ExtractRuleForm, 'regex' | 'prefix'>, b: Pick<ExtractRule, 'regex' | 'prefix'>): boolean {
+  return a.regex.trim() === b.regex.trim() && a.prefix.trim() === (b.prefix ?? '').trim()
+}
+
+/**
+ * The form after choosing a template.
+ *
+ * A template's extract rules are a starting point the source keeps its own copy
+ * of — the server applies only the template's JSON mapping, not its rules — so
+ * they are seeded here, where they are visible and editable before saving.
+ * Switching templates takes back only the rules the previous one contributed,
+ * so a rule somebody wrote by hand survives changing their mind.
+ */
+export function applyTemplate(
+  form: SourceFormState,
+  next: SourceTemplate | undefined,
+  previous: SourceTemplate | undefined,
+): SourceFormState {
+  const kept = form.extract.filter((r) => !(previous?.extract ?? []).some((p) => sameRule(r, p)))
+  const added = (next?.extract ?? [])
+    .filter((r) => !kept.some((k) => sameRule(k, r)))
+    .map((r) =>
+      newExtractRule({ name: r.name ?? '', contains: r.contains ?? '', prefix: r.prefix ?? '', regex: r.regex }),
+    )
+  // The template's own rules go first: rules are tried in order, and a broad
+  // rule written earlier would otherwise match first and hide the template's.
+  return { ...form, template: next?.id ?? TEMPLATE_NONE, extract: [...added, ...kept] }
+}
+
 export interface SourceFormState {
   name: string
   type: NonNullable<SourceConfig['type']>
@@ -135,6 +217,8 @@ export interface SourceFormState {
   tls_acme_skip_preflight: boolean
   /** Tried in order; the first rule that matches a message wins. */
   extract: ExtractRuleForm[]
+  /** A `SourceTemplate.id`, or empty for a source that carries anything else. */
+  template: string
 }
 
 export type SourceFormField = keyof SourceFormState
@@ -180,6 +264,7 @@ export const DEFAULT_SOURCE_FORM: SourceFormState = {
   tls_acme_accept_terms: false,
   tls_acme_skip_preflight: false,
   extract: [],
+  template: TEMPLATE_NONE,
 }
 
 /** Which parts of the editor apply to a given type and protocol. */
@@ -256,6 +341,7 @@ export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled' | 
     extract: (c.extract ?? []).map((r) =>
       newExtractRule({ name: r.name ?? '', contains: r.contains ?? '', prefix: r.prefix ?? '', regex: r.regex ?? '' }),
     ),
+    template: c.template ?? TEMPLATE_NONE,
   }
 }
 
@@ -345,6 +431,9 @@ export function formToConfig(f: SourceFormState): { config: SourceConfig; errors
   if (s.tls) config.tls = tlsConfig(f, errors)
   const extract = extractRules(f.extract, errors)
   if (extract.length) config.extract = extract
+  // A plain source carries no template at all, rather than an empty one: the
+  // stored config stays what an operator would have written by hand.
+  if (f.template) config.template = f.template
   return { config, errors }
 }
 
@@ -428,6 +517,7 @@ export function hasErrors(e: SourceErrors): boolean {
 
 const CONFIG_FIELD: Record<string, SourceFormField> = {
   name: 'name',
+  template: 'template',
   type: 'type',
   protocol: 'protocol',
   address: 'address',

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import type { FilterExpr, ManagedForwardTarget, Problem } from '@/api/types'
+import type {
+  DirectoryActivity,
+  DirectoryOverview,
+  FilterExpr,
+  ManagedForwardTarget,
+  Problem,
+  SourceTemplate,
+  TemplatesResponse,
+} from '@/api/types'
 import { auditQueryFromSearch } from '@/features/audit/audit-query'
 import { validateNewPassword } from '@/features/auth/password'
 import { buildExpr } from '@/features/explorer/filter-builder-logic'
@@ -8,8 +16,11 @@ import { exportFilename } from '@/features/explorer/export'
 import {
   CERT_EXPIRY_WARNING_DAYS,
   DEFAULT_SOURCE_FORM,
+  TEMPLATE_NONE,
   acmeStatus,
+  applyTemplate,
   captureGroupNames,
+  configLanguageLabel,
   certificateStatus,
   configToForm,
   extractFieldNames,
@@ -21,10 +32,36 @@ import {
   sourceProblemErrors,
   sourceRouteId,
   sourceSections,
+  templateById,
+  templateChoices,
   tlsMode,
   type SourceFormState,
   rawMessageHint,
 } from '@/features/sources/source-form'
+import {
+  analysisAvailability,
+  analysisGateMessage,
+  analysisShown,
+  templateForAnalysis,
+} from '@/features/analytics/analyses'
+import {
+  activityChartData,
+  activityLineColor,
+  activityStepLabel,
+  changesSummary,
+  countLabel,
+  decodeDirectory,
+  directoryEmptyHint,
+  directoryExplorerSearch,
+  directoryFilter,
+  directoryIsEmpty,
+  directoryRangePatch,
+  directoryTiles,
+  encodeDirectory,
+  lockoutSentence,
+  DEFAULT_DIRECTORY_RANGE,
+  DEFAULT_DIRECTORY_ROWS,
+} from '@/features/analytics/directory'
 import {
   computeDeltas,
   coverageLabel,
@@ -1563,5 +1600,305 @@ describe('retention period', () => {
     expect(periodProblemMessage({ ...problem, errors: [] }, 'fallback')).toBe('retention must be at least 1d')
     expect(periodProblemMessage({ ...problem, errors: [], detail: undefined }, 'fallback')).toBe('fallback')
     expect(periodProblemMessage(undefined, 'fallback')).toBe('fallback')
+  })
+})
+
+describe('source templates', () => {
+  const dns: SourceTemplate = {
+    id: 'dns-dnsdist',
+    title: 'DNS queries (dnsdist / DNScollector)',
+    description: 'Client queries from a dnsdist resolver.',
+    extract: [{ name: 'dnsdist-query', contains: 'dnsdist', prefix: 'dns.', regex: '^(?P<qname>\\S+)$' }],
+    analyses: ['dns-services'],
+    setup: { sender: 'dnsdist', summary: 'Point it here.' },
+    in_use: true,
+    sources: ['branch-office'],
+  }
+  const ad: SourceTemplate = {
+    id: 'active-directory',
+    title: 'Active Directory (Windows Security log)',
+    description: 'Sign-ins, lockouts and account changes.',
+    json: { prefix: 'ad.', keys: { EventID: 'event_id' } },
+    fields: [{ name: 'ad.user', description: 'The account the event is about', example: 'a.hassan' }],
+    analyses: ['directory'],
+    setup: { sender: 'NXLog Community Edition', summary: 'Read the Security channel.' },
+    in_use: false,
+  }
+
+  it('offers every template with the escape hatch last', () => {
+    const choices = templateChoices([dns, ad])
+    expect(choices.map((c) => c.value)).toEqual(['dns-dnsdist', 'active-directory', TEMPLATE_NONE])
+    // A plain source is the default, so its card has to read as a choice rather
+    // than as an absence.
+    expect(choices.at(-1)?.label).toBe('Anything else')
+    expect(templateById([dns, ad], 'active-directory')).toBe(ad)
+    expect(templateById([dns, ad], 'nonsense')).toBeUndefined()
+    expect(templateById([dns, ad], TEMPLATE_NONE)).toBeUndefined()
+  })
+
+  it('seeds the chosen template’s rules and takes back only its own', () => {
+    const own = newExtractRule({ name: 'mine', regex: 'Failed password for (?P<user>\\S+)' })
+    const start: SourceFormState = { ...DEFAULT_SOURCE_FORM, extract: [own] }
+
+    const withDns = applyTemplate(start, dns, undefined)
+    expect(withDns.template).toBe('dns-dnsdist')
+    // The template's rule goes first: rules are tried in order, and a broad
+    // hand-written one would otherwise match first and hide it.
+    expect(withDns.extract.map((r) => r.name)).toEqual(['dnsdist-query', 'mine'])
+    expect(withDns.extract[0]!.prefix).toBe('dns.')
+
+    // Switching templates drops the rule the old one contributed, and keeps the
+    // one somebody wrote themselves.
+    const switched = applyTemplate(withDns, ad, dns)
+    expect(switched.template).toBe('active-directory')
+    expect(switched.extract.map((r) => r.name)).toEqual(['mine'])
+
+    // "Anything else" is the same operation with nothing to add.
+    const plain = applyTemplate(withDns, undefined, dns)
+    expect(plain.template).toBe(TEMPLATE_NONE)
+    expect(plain.extract.map((r) => r.name)).toEqual(['mine'])
+  })
+
+  it('does not duplicate a rule the source already carries', () => {
+    const existing = newExtractRule({ name: 'copied', prefix: 'dns.', regex: '^(?P<qname>\\S+)$' })
+    const next = applyTemplate({ ...DEFAULT_SOURCE_FORM, extract: [existing] }, dns, undefined)
+    expect(next.extract.map((r) => r.name)).toEqual(['copied'])
+  })
+
+  it('stores the template on the config, and nothing at all for a plain source', () => {
+    expect(formToConfig({ ...DEFAULT_SOURCE_FORM, name: 's', template: 'active-directory' }).config.template).toBe(
+      'active-directory',
+    )
+    expect('template' in formToConfig({ ...DEFAULT_SOURCE_FORM, name: 's' }).config).toBe(false)
+    expect(
+      configToForm({ config: { name: 's', type: 'syslog', template: 'active-directory' }, enabled: true }).template,
+    ).toBe('active-directory')
+    expect(configToForm({ config: { name: 's', type: 'syslog' }, enabled: true }).template).toBe(TEMPLATE_NONE)
+  })
+
+  it('places a server complaint about the template on the choice', () => {
+    const errors = sourceProblemErrors(
+      {
+        type: 'about:blank',
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        detail: 'source: template: unknown template "winsec"',
+      },
+      'fallback',
+    )
+    expect(errors.fields.template).toMatch(/unknown template/)
+  })
+
+  it('says what a copyable block is, since nothing highlights it', () => {
+    expect(configLanguageLabel('apache')).toBe('configuration file')
+    expect(configLanguageLabel('BATCH')).toBe('Windows commands')
+    expect(configLanguageLabel('yaml')).toBe('YAML')
+    // An unknown language is still better shown than hidden.
+    expect(configLanguageLabel('toml')).toBe('toml')
+    expect(configLanguageLabel(undefined)).toBe('configuration')
+    expect(configLanguageLabel('  ')).toBe('configuration')
+  })
+})
+
+describe('analysis gating', () => {
+  const templates = (analyses: string[] | null): TemplatesResponse => ({
+    templates: [
+      {
+        id: 'active-directory',
+        title: 'Active Directory (Windows Security log)',
+        description: 'Sign-ins and lockouts.',
+        analyses: ['directory'],
+        setup: { sender: 'NXLog Community Edition', summary: 'Read the Security channel.' },
+        in_use: analyses?.includes('directory') ?? false,
+      },
+    ],
+    analyses,
+  })
+
+  it('only hides a view on a definite answer', () => {
+    expect(analysisAvailability('directory', templates(['directory']))).toBe('available')
+    // No template in use at all: the server answers null, which is a "no".
+    expect(analysisAvailability('directory', templates(null))).toBe('unavailable')
+    expect(analysisAvailability('directory', templates(['dns-services']))).toBe('unavailable')
+    // Not loaded, or a session that may not read the list: guessing would hide
+    // a page somebody has data for.
+    expect(analysisAvailability('directory', undefined)).toBe('unknown')
+    expect(analysisShown('available')).toBe(true)
+    expect(analysisShown('unknown')).toBe(true)
+    expect(analysisShown('unavailable')).toBe(false)
+  })
+
+  it('names the template that unlocks a page nothing feeds', () => {
+    expect(templateForAnalysis('directory', templates(null))?.id).toBe('active-directory')
+    expect(templateForAnalysis('dns-services', templates(null))).toBeUndefined()
+    const message = analysisGateMessage('directory', templates(null))
+    expect(message.title).toMatch(/Active Directory/)
+    expect(message.hint).toContain('Active Directory (Windows Security log)')
+    expect(message.hint).toContain('who signed in')
+    // Without the list there is still a template to name, from the registry.
+    expect(analysisGateMessage('dns-services', undefined).hint).toContain('dnsdist')
+  })
+})
+
+describe('directory analysis', () => {
+  const base = { acct: undefined, rows: undefined }
+
+  it('defaults to the whole domain, and ignores a row count it cannot use', () => {
+    expect(decodeDirectory(base)).toEqual({ account: '', rows: DEFAULT_DIRECTORY_ROWS })
+    expect(decodeDirectory({ ...base, rows: '25' }).rows).toBe(25)
+    expect(decodeDirectory({ ...base, rows: '7' }).rows).toBe(DEFAULT_DIRECTORY_ROWS)
+    expect(decodeDirectory({ ...base, acct: '  s.tan  ' }).account).toBe('s.tan')
+  })
+
+  it('round-trips through the URL, dropping defaults', () => {
+    const q = { account: 's.tan', rows: 100 }
+    const encoded = encodeDirectory(q)
+    expect(encoded).toEqual({ acct: 's.tan', rows: '100' })
+    expect(decodeDirectory(encoded)).toEqual(q)
+    expect(encodeDirectory({ account: ' ', rows: DEFAULT_DIRECTORY_ROWS })).toEqual({
+      acct: undefined,
+      rows: undefined,
+    })
+  })
+
+  it('widens the explorer default to a day, but leaves a chosen range alone', () => {
+    expect(directoryRangePatch({ from: 'now-1h', to: 'now' })).toEqual(DEFAULT_DIRECTORY_RANGE)
+    expect(directoryRangePatch({ from: 'now-7d', to: 'now' })).toEqual({})
+  })
+
+  it('narrows the request by account, and only when there is one', () => {
+    expect(directoryFilter('s.tan')).toEqual({ op: 'eq', field: 'ad.user', value: 's.tan' })
+    expect(directoryFilter('  ')).toBeUndefined()
+    const search = directoryExplorerSearch('s.tan', { from: 'now-24h', to: 'now', tz: undefined })
+    expect(search.q).toBe('ad.user=s.tan')
+    expect(search.from).toBe('now-24h')
+    // A name needing quoting gets them, so the filter still parses back.
+    expect(directoryExplorerSearch('CORP\\s tan', { from: 'now-1h', to: 'now', tz: 'UTC' }).q).toBe(
+      'ad.user="CORP\\\\s tan"',
+    )
+  })
+
+  it('shows what the server called a code, not the code', () => {
+    expect(countLabel({ value: '0xC000006D', label: 'wrong user name or password' })).toBe(
+      'wrong user name or password',
+    )
+    expect(countLabel({ value: '3', label: '  ' })).toBe('3')
+    expect(countLabel({ value: '' })).toBe('(none)')
+  })
+
+  const overview: DirectoryOverview = {
+    signed_in: 3,
+    accounts: 6,
+    logons: 40,
+    failures: 9,
+    lockouts: 1,
+    privileged_logons: 1,
+    account_changes: 1,
+    group_changes: 1,
+  }
+
+  it('says that the signed-in count is an estimate, where the number is', () => {
+    const tiles = directoryTiles(overview)
+    const signedIn = tiles.find((t) => t.name === 'signed_in')!
+    expect(signedIn.value).toBe(3)
+    expect(signedIn.note).toMatch(/Estimate/)
+    // The caveat is the point: presented as fact the number would be wrong.
+    expect(signedIn.note).toMatch(/never reports the sign-out/)
+  })
+
+  it('marks lockouts and failures without relying on their colour', () => {
+    const tiles = directoryTiles(overview)
+    const lockouts = tiles.find((t) => t.name === 'lockouts')!
+    expect(lockouts.tone).toBe('alert')
+    expect(lockouts.note).toMatch(/1 account was locked out/)
+    expect(tiles.find((t) => t.name === 'failures')!.tone).toBe('warn')
+    // A quiet window is quiet, not alarming, and still says so in words.
+    const quiet = directoryTiles({ ...overview, lockouts: 0, failures: 0 })
+    expect(quiet.find((t) => t.name === 'lockouts')!.tone).toBe('neutral')
+    expect(quiet.find((t) => t.name === 'lockouts')!.note).toMatch(/No account locked out/)
+    // Nothing loaded yet reads as zeroes rather than as an empty page.
+    expect(directoryTiles(undefined).map((t) => t.value)).toEqual([0, 0, 0, 0, 0, 0])
+  })
+
+  it('turns activity lines into chart rows, padding a short line with zeroes', () => {
+    const activity: DirectoryActivity = {
+      step_seconds: 300,
+      timestamps: ['2026-10-04T10:00:00Z', '2026-10-04T10:05:00Z'],
+      lines: [
+        { name: 'logons', label: 'Sign-ins', points: [3, 5], total: 8 },
+        { name: 'lockouts', label: 'Lockouts', points: [1], total: 1 },
+      ],
+    }
+    const chart = activityChartData(activity)
+    expect(chart.series.map((s) => [s.key, s.name, s.total])).toEqual([
+      ['s0', 'logons', 8],
+      ['s1', 'lockouts', 1],
+    ])
+    expect(chart.rows).toEqual([
+      { t: Date.parse('2026-10-04T10:00:00Z'), s0: 3, s1: 1 },
+      { t: Date.parse('2026-10-04T10:05:00Z'), s0: 5, s1: 0 },
+    ])
+    expect(activityChartData(undefined)).toEqual({ rows: [], series: [] })
+  })
+
+  it('keeps a warning line looking like a warning', () => {
+    expect(activityLineColor('failures')).toBe('var(--warning)')
+    expect(activityLineColor('lockouts')).toBe('var(--danger)')
+    expect(activityLineColor('logons')).toBe('var(--accent)')
+    expect(activityLineColor('privileged')).not.toBe(activityLineColor('logons'))
+  })
+
+  it('reports the bucket width the way a person would say it', () => {
+    expect(activityStepLabel(30)).toBe('30s')
+    expect(activityStepLabel(300)).toBe('5m')
+    expect(activityStepLabel(10_800)).toBe('3h')
+    expect(activityStepLabel(86_400)).toBe('1d')
+  })
+
+  it('spells out a lockout, and reads without the parts Windows left out', () => {
+    expect(
+      lockoutSentence({ at: 'x', user: 's.tan', caller: 'PHONE-ST', source_ip: '172.16.9.12', failures_before: 9 }),
+    ).toBe('s.tan locked out from PHONE-ST (172.16.9.12) after 9 failed sign-ins')
+    expect(lockoutSentence({ at: 'x', user: 's.tan', source_ip: '172.16.9.12', failures_before: 1 })).toBe(
+      's.tan locked out from 172.16.9.12 after 1 failed sign-in',
+    )
+    // No failures before it usually means they are not being audited, which is
+    // worth saying rather than rounding to "0 failed sign-ins".
+    expect(lockoutSentence({ at: 'x', user: 'svc-report', caller: 'APP01', failures_before: 0 })).toBe(
+      'svc-report locked out from APP01 with no failed sign-ins recorded before it',
+    )
+    expect(lockoutSentence({ at: 'x', user: 'svc-report', failures_before: 0 })).toBe(
+      'svc-report locked out with no failed sign-ins recorded before it',
+    )
+  })
+
+  it('counts account changes apart from group changes', () => {
+    expect(changesSummary(overview)).toBe('1 account change · 1 group change')
+    expect(changesSummary({ ...overview, account_changes: 4, group_changes: 0 })).toBe(
+      '4 account changes · 0 group changes',
+    )
+    expect(changesSummary({ ...overview, account_changes: 0, group_changes: 0 })).toBe('nothing changed')
+    expect(changesSummary(undefined)).toBe('nothing changed')
+  })
+
+  it('tells an empty window apart from a quiet one, and explains it', () => {
+    expect(directoryIsEmpty(undefined)).toBe(true)
+    expect(directoryIsEmpty({ ...overview, logons: 0, failures: 0, lockouts: 0, accounts: 0 })).toBe(false)
+    expect(
+      directoryIsEmpty({
+        signed_in: 0,
+        accounts: 0,
+        logons: 0,
+        failures: 0,
+        lockouts: 0,
+        privileged_logons: 0,
+        account_changes: 0,
+        group_changes: 0,
+      }),
+    ).toBe(true)
+    // Both causes, in the order they happen.
+    expect(directoryEmptyHint()).toMatch(/just been added/)
+    expect(directoryEmptyHint()).toMatch(/audit policy/)
   })
 })

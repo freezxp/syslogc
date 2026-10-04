@@ -3,7 +3,15 @@ import { AlertTriangle, ArrowLeft, FileLock2, PencilLine, Search, Trash2 } from 
 import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useAdoptSource, useCreateSource, useDeleteSource, useSource, useSources, useUpdateSource } from '@/api/hooks'
+import {
+  useAdoptSource,
+  useCreateSource,
+  useDeleteSource,
+  useSource,
+  useSources,
+  useTemplates,
+  useUpdateSource,
+} from '@/api/hooks'
 import type { ManagedSource } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { ErrorPanel, Panel, Skeleton, StatusDot } from '@/components/data/common'
@@ -16,8 +24,10 @@ import { useTimezone } from '@/lib/preferences'
 import { ChoiceCards } from './ChoiceCards'
 import { ExtractRulesPanel, ExtractTestPanel } from './ExtractEditor'
 import { Banner, Field } from './SourceFields'
+import { TemplateChoicePanel, TemplateSetupPanel } from './TemplateGuide'
 import { TlsPanel } from './TlsPanel'
 import {
+  applyTemplate,
   configToForm,
   DEFAULT_SOURCE_FORM,
   emptySourceErrors,
@@ -30,6 +40,7 @@ import {
   sourceProblemErrors,
   sourceSections,
   sourceStateTone,
+  templateById,
   type SourceErrors,
   type SourceFormField,
   type SourceFormState,
@@ -103,6 +114,10 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
   const [errors, setErrors] = useState<SourceErrors>(emptySourceErrors)
   const [conflict, setConflict] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // Shared with the analytics views, which are gated on the same list.
+  const templates = useTemplates()
+  const templateList = templates.data?.templates ?? []
+  const chosen = templateById(templateList, form.template)
 
   const editable = !readOnly && can('sources:manage')
   const sections = sourceSections(form)
@@ -257,6 +272,20 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
       )}
 
       <div className="grid gap-3 md:grid-cols-2">
+        {/* First, because it decides the parsing and which analyses exist at
+            all: everything below it is easier to answer once it is settled. */}
+        {(templateList.length > 0 || form.template) && (
+          <TemplateChoicePanel
+            templates={templateList}
+            value={form.template}
+            editable={editable}
+            error={errors.fields.template}
+            // The template's own rules are seeded into the form, so switching
+            // choices has to take the previous one's rules back out again.
+            onChange={(id) => setForm((f) => applyTemplate(f, templateById(templateList, id), chosen))}
+          />
+        )}
+
         <Panel title="General" className="md:col-span-2">
           <div className="grid gap-3 md:grid-cols-3">
             <Field id="src-name" label="Name" hint="Stored on every log as the source label." {...field('name')}>
@@ -330,6 +359,11 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
             )}
           </div>
         </Panel>
+
+        {/* Keyed on the template so switching choices reopens the guide: the
+            steps of a template you have just picked are what you need next,
+            while an existing source's are usually already done. */}
+        {chosen && <TemplateSetupPanel key={chosen.id} template={chosen} defaultOpen={!source} />}
 
         <Panel title="Parsing">
           <div className="grid gap-3 sm:grid-cols-2">

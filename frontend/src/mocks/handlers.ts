@@ -8,6 +8,10 @@ import type {
   AuditEvent,
   BreakdownRequest,
   CertificateInfo,
+  DirectoryChange,
+  DirectoryCount,
+  DirectoryLockout,
+  DirectoryRequest,
   ExportRequest,
   ExtractTestRequest,
   FacetsRequest,
@@ -25,6 +29,7 @@ import type {
   RetentionUpdateInput,
   SourceACMEStatus,
   SourceInput,
+  SourceTemplate,
   SourceTLSConfig,
   SavedSearch,
   SavedSearchInput,
@@ -413,6 +418,7 @@ let managedSources: ManagedSource[] = [
       sd_flatten: 'full',
       allowed_cidrs: ['10.20.0.0/16'],
       labels: { site: 'dc2', env: 'prod' },
+      template: 'dns-dnsdist',
       framing: 'octet_counting',
       max_connections: 500,
       idle_timeout: '5m',
@@ -613,6 +619,41 @@ let managedSources: ManagedSource[] = [
     created_at: new Date(NOW - 3 * 3600_000).toISOString(),
     updated_at: new Date(NOW - 3 * 3600_000).toISOString(),
     version: 1,
+  },
+  {
+    // A domain controller shipping its Security channel, which is what unlocks
+    // the Active Directory analysis: without an enabled source carrying the
+    // template, that view is not offered at all.
+    id: '0192f0c4-3333-7000-8000-000000000006',
+    config: {
+      name: 'ad-dc',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6514',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      allowed_cidrs: ['10.10.0.0/16'],
+      labels: { site: 'dc1', env: 'prod' },
+      template: 'active-directory',
+      tls: { cert_file: '/etc/syslogc/tls/logs.crt', key_file: '/etc/syslogc/tls/logs.key', min_version: '1.2' },
+    },
+    enabled: true,
+    origin: 'database',
+    status: {
+      name: 'ad-dc',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6514',
+      state: 'running',
+      since: new Date(NOW - 31 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 9 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 31 * 3600_000).toISOString(),
+    version: 2,
   },
   {
     // The one that simply works, so the success state has something to be.
@@ -1270,6 +1311,362 @@ function catalogValidationError(services: TrendService[]): Response | null {
   return messages.length ? validationProblem('/services', messages.join('\n')) : null
 }
 
+// ---- source templates --------------------------------------------------------
+
+/**
+ * A complete, working NXLog configuration for a domain controller, as the
+ * server ships it. It is the thing somebody actually copies, so the mock
+ * carries it verbatim rather than a placeholder: the setup guide is what this
+ * screen is for before any log has ever arrived.
+ */
+const NXLOG_CONFIG = `## Syslogc — Windows Security log
+## Install NXLog Community Edition, then replace nxlog.conf with this and
+## restart the nxlog service.
+
+define SYSLOGC_HOST syslog.example.com
+define SYSLOGC_PORT 6514
+
+<Extension json>
+    Module  xm_json
+</Extension>
+
+<Extension syslog>
+    Module  xm_syslog
+</Extension>
+
+<Input security>
+    Module  im_msvistalog
+    # The whole Security channel. Audit policy decides what lands in it; see
+    # the step below.
+    <QueryXML>
+        <QueryList>
+            <Query Id="0">
+                <Select Path="Security">*</Select>
+            </Query>
+        </QueryList>
+    </QueryXML>
+</Input>
+
+<Output syslogc>
+    Module  om_ssl
+    Host    %SYSLOGC_HOST%
+    Port    %SYSLOGC_PORT%
+    # Set to TRUE only while testing against a self-signed certificate.
+    AllowUntrusted FALSE
+
+    Exec    $Message = to_json();
+    Exec    $SyslogFacility = 'AUDIT';
+    Exec    to_syslog_ietf();
+</Output>
+
+<Route security_to_syslogc>
+    Path    security => syslogc
+</Route>`
+
+const AD_AUDIT_POLICY = `:: Run on each domain controller, elevated.
+:: Sign-in activity
+auditpol /set /subcategory:"Logon" /success:enable /failure:enable
+auditpol /set /subcategory:"Logoff" /success:enable
+auditpol /set /subcategory:"Account Lockout" /success:enable /failure:enable
+auditpol /set /subcategory:"Special Logon" /success:enable
+
+:: Kerberos, which is how a domain actually authenticates
+auditpol /set /subcategory:"Kerberos Authentication Service" /success:enable /failure:enable
+auditpol /set /subcategory:"Kerberos Service Ticket Operations" /success:enable /failure:enable
+auditpol /set /subcategory:"Credential Validation" /success:enable /failure:enable
+
+:: Accounts and groups
+auditpol /set /subcategory:"User Account Management" /success:enable /failure:enable
+auditpol /set /subcategory:"Security Group Management" /success:enable /failure:enable
+auditpol /set /subcategory:"Computer Account Management" /success:enable /failure:enable
+
+:: Policy changes
+auditpol /set /subcategory:"Audit Policy Change" /success:enable /failure:enable
+auditpol /set /subcategory:"Authentication Policy Change" /success:enable /failure:enable`
+
+const DNSCOLLECTOR_OUTPUT = `  - name: out
+    syslog:
+      transport: tcp+tls
+      remote-address: syslog.example.com:6514
+      mode: text`
+
+/** The templates this deployment knows, in the order they are offered. */
+const TEMPLATES: Omit<SourceTemplate, 'in_use' | 'sources'>[] = [
+  {
+    id: 'dns-dnsdist',
+    title: 'DNS queries (dnsdist / DNScollector)',
+    description:
+      'Client queries from a dnsdist resolver. Produces the queried name and the client address, which is what ' +
+      'the service trends are counted from.',
+    extract: [
+      {
+        name: 'dnsdist-query',
+        contains: 'dnsdist',
+        prefix: 'dns.',
+        regex:
+          '^(?P<query_time>\\S+) dnsdist (?P<event>\\S+) \\S+ (?P<client_ip>\\S+) (?P<client_port>\\d+) ' +
+          '(?P<address_family>\\S+) (?P<transport>\\S+) (?P<query_bytes>\\S+) (?P<qname>\\S+) (?P<qtype>\\S+) (?P<policy>\\S+)$',
+      },
+    ],
+    fields: [
+      { name: 'dns.qname', description: 'The name that was looked up', example: 'www.tiktok.com' },
+      { name: 'dns.client_ip', description: 'Who asked', example: '10.21.4.17' },
+      { name: 'dns.qtype', description: 'Record type', example: 'A' },
+      { name: 'dns.transport', description: 'UDP or TCP', example: 'UDP' },
+      { name: 'dns.event', description: 'What happened', example: 'CLIENT_QUERY' },
+      { name: 'dns.address_family', description: 'INET or INET6', example: 'INET6' },
+      { name: 'dns.query_bytes', description: 'Size of the query', example: '78b' },
+      { name: 'dns.policy', description: 'The dnsdist rule that applied, or - for none', example: '-' },
+    ],
+    analyses: ['dns-services'],
+    setup: {
+      sender: 'dnsdist or DNScollector',
+      summary:
+        "Point the resolver's syslog output at this source. Nothing else is needed: the template's rule reads the " +
+        'line as it arrives.',
+      steps: [
+        {
+          title: 'Send dnsdist’s client queries to this address over syslog',
+          body:
+            'In DNScollector, add a syslog output whose transport is tcp+tls for port 6514, or tcp for the plain ' +
+            'port. The address takes the port with it.',
+          language: 'yaml',
+          config: DNSCOLLECTOR_OUTPUT,
+        },
+      ],
+      reference: 'https://dmachard.github.io/go-dnscollector/',
+    },
+  },
+  {
+    id: 'active-directory',
+    title: 'Active Directory (Windows Security log)',
+    description:
+      "Sign-ins, lockouts, privilege use and account changes from a domain controller's Security channel, shipped " +
+      'by NXLog as JSON.',
+    json: {
+      prefix: 'ad.',
+      keys: {
+        EventID: 'event_id',
+        TargetUserName: 'user',
+        TargetDomainName: 'domain',
+        SubjectUserName: 'actor',
+        LogonType: 'logon_type',
+        IpAddress: 'source_ip',
+        IpPort: 'source_port',
+        WorkstationName: 'workstation',
+        Status: 'status',
+        SubStatus: 'sub_status',
+        FailureReason: 'failure_reason',
+        CallerComputerName: 'caller_computer',
+        MemberName: 'member',
+        Hostname: 'dc',
+      },
+    },
+    fields: [
+      { name: 'ad.event_id', description: 'Which Windows event this is', example: '4624' },
+      { name: 'ad.user', description: 'The account the event is about', example: 'a.hassan' },
+      { name: 'ad.domain', description: 'Its domain', example: 'CORP' },
+      { name: 'ad.actor', description: 'The account that caused the event, where different', example: 'SYSTEM' },
+      {
+        name: 'ad.logon_type',
+        description: 'How they signed in: 2 console, 3 network, 10 remote desktop',
+        example: '3',
+      },
+      { name: 'ad.source_ip', description: 'Where the attempt came from', example: '10.20.4.19' },
+      { name: 'ad.workstation', description: 'The machine named by the client', example: 'LAPTOP-07' },
+      {
+        name: 'ad.caller_computer',
+        description: 'On a lockout, the machine whose attempts caused it',
+        example: 'LAPTOP-07',
+      },
+      { name: 'ad.status', description: 'The failure code, on a failed sign-in', example: '0xC000006D' },
+      { name: 'ad.dc', description: 'The domain controller that recorded it', example: 'DC01' },
+    ],
+    analyses: ['directory'],
+    setup: {
+      sender: 'NXLog Community Edition',
+      summary:
+        'NXLog reads the Security channel on each domain controller and sends it here as JSON over TLS. Audit ' +
+        'policy decides what Windows writes to that channel in the first place, so both have to be set.',
+      steps: [
+        {
+          title: 'Turn on the auditing these analyses read',
+          body:
+            'Run this on every domain controller, elevated. Windows records far less than people expect by ' +
+            'default — successful sign-ins among them — so the pages stay empty until this is done.',
+          language: 'batch',
+          config: AD_AUDIT_POLICY,
+        },
+        {
+          title: 'Install NXLog Community Edition on each domain controller',
+          body:
+            'Download it from nxlog.co. The Community Edition is free and reads the Windows event log directly; ' +
+            'nothing needs installing on this server.',
+        },
+        {
+          title: 'Replace nxlog.conf with this, then restart the NXLog service',
+          body:
+            "Change SYSLOGC_HOST to this server's name. The name has to match its TLS certificate or NXLog will " +
+            'refuse to connect, which is the behaviour you want. Restart with: Restart-Service nxlog',
+          language: 'apache',
+          config: NXLOG_CONFIG,
+        },
+        {
+          title: 'Add the source here, then check the logs arrive',
+          body:
+            'Create a syslog source on port 6514 with this template, enable it, and open the Logs page filtered ' +
+            'to it. A domain controller is never quiet: if nothing arrives within a minute, the connection or the ' +
+            'certificate is the thing to look at, not the audit policy.',
+        },
+      ],
+      reference: 'https://docs.nxlog.co/userguide/integrate/ms-windows-eventlog.html',
+    },
+  },
+]
+
+/**
+ * Template id → the enabled sources carrying it. Only enabled sources count: a
+ * disabled one produces nothing, so an analysis resting on it would be
+ * permanently empty, which is what the gating exists to avoid.
+ */
+function templatesInUse(): Map<string, string[]> {
+  const adopted = new Set(managedSources.filter((s) => s.adopted).map((s) => s.config.name))
+  const all = [...FILE_SOURCES.filter((s) => !adopted.has(s.config.name)), ...managedSources]
+  const out = new Map<string, string[]>()
+  for (const s of all) {
+    const id = s.config.template?.trim().toLowerCase()
+    if (!id || !s.enabled) continue
+    out.set(id, [...(out.get(id) ?? []), s.config.name])
+  }
+  return out
+}
+
+// ---- Active Directory --------------------------------------------------------
+
+/**
+ * A believable small domain. The weights are what the lists are built from, so
+ * the busiest account and the one with every failure stay the same people
+ * across refetches — which is how somebody reading the page would experience a
+ * real one.
+ */
+const DIRECTORY_ACCOUNTS: { user: string; logons: number; failures: number }[] = [
+  { user: 'a.hassan', logons: 12, failures: 0 },
+  { user: 'r.kumar', logons: 9, failures: 1 },
+  { user: 'm.oliveira', logons: 7, failures: 0 },
+  { user: 's.tan', logons: 6, failures: 9 },
+  { user: 'svc-backup', logons: 4, failures: 0 },
+  { user: 'j.novak', logons: 3, failures: 2 },
+]
+
+/**
+ * Two lockouts, because the two shapes read differently: s.tan's phone is
+ * retrying an old password and the failures before it name the address, while
+ * a service account locked with nothing audited before it — which is the case
+ * that tells you the audit policy is incomplete.
+ */
+const DIRECTORY_LOCKOUTS: (Omit<DirectoryLockout, 'at'> & { minutesAgo: number })[] = [
+  {
+    minutesAgo: 190,
+    user: 's.tan',
+    caller: 'PHONE-ST',
+    source_ip: '172.16.9.12',
+    dc: 'DC01',
+    failures_before: 9,
+  },
+  { minutesAgo: 520, user: 'svc-report', caller: 'APP-REPORT01', dc: 'DC02', failures_before: 0 },
+]
+
+const DIRECTORY_CHANGES: (Omit<DirectoryChange, 'at'> & { minutesAgo: number })[] = [
+  {
+    minutesAgo: 95,
+    event: '4728',
+    what: 'added to a global group',
+    subject: 'Domain Admins',
+    actor: 'a.hassan',
+    member: 'CN=r.kumar,OU=Staff,DC=corp,DC=example',
+    dc: 'DC01',
+  },
+  {
+    minutesAgo: 240,
+    event: '4724',
+    what: 'password reset by an administrator',
+    subject: 's.tan',
+    actor: 'a.hassan',
+    dc: 'DC01',
+  },
+  { minutesAgo: 610, event: '4720', what: 'account created', subject: 't.mbeki', actor: 'a.hassan', dc: 'DC02' },
+  {
+    minutesAgo: 980,
+    event: '4733',
+    what: 'removed from a local group',
+    subject: 'Remote Desktop Users',
+    actor: 'm.oliveira',
+    member: 'CN=j.novak,OU=Staff,DC=corp,DC=example',
+    dc: 'DC02',
+  },
+  { minutesAgo: 1310, event: '4725', what: 'account disabled', subject: 'k.ferreira', actor: 'a.hassan', dc: 'DC01' },
+]
+
+/** Events that change an account rather than a group; the overview counts them apart. */
+const ACCOUNT_CHANGE_EVENTS = ['4720', '4722', '4723', '4724', '4725', '4726']
+
+const FAILURE_REASONS: [string, string, number][] = [
+  ['0xC000006D', 'wrong user name or password', 70],
+  ['0xC0000234', 'account locked out', 20],
+  ['0xC0000064', 'no such account', 10],
+]
+
+const LOGON_TYPES: [string, string, number][] = [
+  ['3', 'network', 50],
+  ['2', 'console', 28],
+  ['10', 'remote desktop', 15],
+  ['5', 'service', 7],
+]
+
+const FAILURE_SOURCES: [string, number][] = [
+  ['172.16.9.12', 70],
+  ['10.20.4.19', 20],
+  ['198.51.100.7', 10],
+]
+
+/**
+ * Splits a total into parts in the given proportions, keeping the parts adding
+ * back up to it: a breakdown whose rows do not reach the headline number is the
+ * sort of thing people report as a bug.
+ */
+function allocate(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((n, w) => n + w, 0)
+  if (total <= 0 || sum <= 0) return weights.map(() => 0)
+  const raw = weights.map((w) => (total * w) / sum)
+  const out = raw.map((v) => Math.floor(v))
+  let left = total - out.reduce((n, v) => n + v, 0)
+  for (const [, i] of raw.map((v, i) => [v - Math.floor(v), i] as const).sort((a, b) => b[0] - a[0])) {
+    if (left <= 0) break
+    out[i] = out[i]! + 1
+    left--
+  }
+  return out
+}
+
+/** The working day: sign-ins cluster around the morning and thin out overnight. */
+function directoryShape(at: Date): number {
+  const hour = at.getHours() + at.getMinutes() / 60
+  const away = Math.min(Math.abs(hour - 9.5), 24 - Math.abs(hour - 9.5))
+  return Math.exp(-(away * away) / (2 * 3.2 * 3.2)) + 0.06
+}
+
+/** The one account a directory request was narrowed to, or "" for the domain. */
+function directoryAccount(filter: FilterExpr | undefined): string {
+  if (!filter || !('field' in filter) || filter.field !== 'ad.user') return ''
+  return 'value' in filter && filter.op === 'eq' ? filter.value : ''
+}
+
+function counts(pairs: [string, string | undefined, number][]): DirectoryCount[] {
+  return pairs
+    .filter(([, , count]) => count > 0)
+    .map(([value, label, count]) => ({ value, ...(label ? { label } : {}), count }))
+}
+
 const api = (path: string) => `*/api/v1${path}`
 
 export const handlers = [
@@ -1694,6 +2091,150 @@ export const handlers = [
             },
           }
         : { hint: 'Nothing has been recorded for this window yet.' }),
+    })
+  }),
+
+  http.get(api('/templates'), () => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const using = templatesInUse()
+    const templates = TEMPLATES.map((t) => {
+      const sources = using.get(t.id) ?? []
+      return { ...t, in_use: sources.length > 0, ...(sources.length ? { sources } : {}) }
+    })
+    const analyses = [...new Set(templates.filter((t) => t.in_use).flatMap((t) => t.analyses ?? []))].sort()
+    // The server answers null rather than an empty list when no template is in
+    // use at all, and the gating has to read that as "nothing to offer".
+    return HttpResponse.json({ templates, analyses: analyses.length ? analyses : null })
+  }),
+
+  http.post(api('/analytics/directory'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as DirectoryRequest
+    const { start, end } = resolve(body.time_range)
+    const target = body.buckets && body.buckets > 0 && body.buckets <= 1000 ? body.buckets : 120
+    const limit = body.limit && body.limit > 0 ? Math.min(body.limit, 200) : 50
+    const account = directoryAccount(body.filter)
+    await delay(200)
+
+    const span = (end.getTime() - start.getTime()) / 1000
+    const step = STEPS.find((s) => span / s <= target) ?? 86400
+    const first = Math.floor(start.getTime() / 1000 / step) * step
+    const n = Math.max(1, Math.ceil((end.getTime() / 1000 - first) / step))
+    const timestamps = Array.from({ length: n }, (_, i) => new Date((first + i * step) * 1000))
+    const inWindow = (at: Date) => at >= start && at < end
+    const ago = (minutes: number) => new Date(NOW - minutes * 60_000)
+
+    const lockouts: DirectoryLockout[] = DIRECTORY_LOCKOUTS.map(({ minutesAgo, ...rest }) => ({
+      ...rest,
+      at: ago(minutesAgo).toISOString(),
+    }))
+      .filter((l) => inWindow(new Date(l.at)) && (!account || l.user === account))
+      .slice(0, limit)
+
+    const changes: DirectoryChange[] = DIRECTORY_CHANGES.map(({ minutesAgo, ...rest }) => ({
+      ...rest,
+      at: ago(minutesAgo).toISOString(),
+    }))
+      .filter((c) => inWindow(new Date(c.at)) && (!account || c.subject === account || c.actor === account))
+      .slice(0, limit)
+
+    // Narrowing to one account has to move the numbers the way the real
+    // aggregation would, not just filter the tables.
+    const people = account ? DIRECTORY_ACCOUNTS.filter((a) => a.user === account) : DIRECTORY_ACCOUNTS
+    const share = (field: 'logons' | 'failures') => {
+      const whole = DIRECTORY_ACCOUNTS.reduce((t, a) => t + a[field], 0)
+      return whole ? people.reduce((t, a) => t + a[field], 0) / whole : 0
+    }
+    const logonShare = share('logons')
+    const failureShare = share('failures')
+
+    const stepHours = step / 3600
+    /**
+     * Whole events at a rate below one per bucket: rounding would show none at
+     * all overnight, and a chart of zeroes is not what a domain looks like.
+     */
+    const events = (perHour: number, name: string, at: Date) => {
+      const want =
+        perHour * stepHours * directoryShape(at) * (0.85 + (hashString(`${name}:${at.getTime()}`) % 300) / 1000)
+      const carry = hashString(`carry:${name}:${at.getTime()}`) % 1000 < (want % 1) * 1000 ? 1 : 0
+      return Math.floor(want) + carry
+    }
+
+    const logonPoints = timestamps.map((t) => events(6 * logonShare, 'logons', t))
+    const failurePoints = timestamps.map((t) => events(1.1 * failureShare, 'failures', t))
+    const privilegedPoints = timestamps.map((t) => events(0.5 * logonShare, 'privileged', t))
+    const lockoutPoints = timestamps.map(() => 0)
+    for (const l of lockouts) {
+      const i = Math.floor(new Date(l.at).getTime() / 1000 / step - first / step)
+      if (i < 0 || i >= n) continue
+      lockoutPoints[i] = lockoutPoints[i]! + 1
+      // The failures that caused it land just before it, which is the shape
+      // that makes the chart worth looking at next to the lockouts table.
+      const [here, before] = allocate(l.failures_before, [2, 1])
+      failurePoints[i] = failurePoints[i]! + here! + (i === 0 ? before! : 0)
+      if (i > 0) failurePoints[i - 1] = failurePoints[i - 1]! + before!
+    }
+
+    const sum = (points: number[]) => points.reduce((t, v) => t + v, 0)
+    const logonTotal = sum(logonPoints)
+    const failureTotal = sum(failurePoints)
+    const lines = [
+      { name: 'logons', label: 'Sign-ins', points: logonPoints, total: logonTotal },
+      { name: 'failures', label: 'Failed sign-ins', points: failurePoints, total: failureTotal },
+      { name: 'lockouts', label: 'Lockouts', points: lockoutPoints, total: sum(lockoutPoints) },
+      { name: 'privileged', label: 'Privileged sign-ins', points: privilegedPoints, total: sum(privilegedPoints) },
+    ]
+
+    const perAccount = allocate(
+      logonTotal,
+      people.map((a) => a.logons),
+    )
+    const perAccountFailures = allocate(
+      failureTotal,
+      people.map((a) => a.failures),
+    )
+    const byCount = (a: DirectoryCount, b: DirectoryCount) => b.count - a.count || a.value.localeCompare(b.value)
+    const busiest = counts(people.map((a, i) => [a.user, undefined, perAccount[i]!])).sort(byCount)
+    const mostFailures = counts(people.map((a, i) => [a.user, undefined, perAccountFailures[i]!])).sort(byCount)
+
+    const reasons = allocate(
+      failureTotal,
+      FAILURE_REASONS.map(([, , w]) => w),
+    )
+    const types = allocate(
+      logonTotal,
+      LOGON_TYPES.map(([, , w]) => w),
+    )
+    const sources = allocate(
+      failureTotal,
+      FAILURE_SOURCES.map(([, w]) => w),
+    )
+
+    const accounts = busiest.length
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      overview: {
+        // Sign-outs are reported by the machine, so some never arrive; the
+        // estimate is deliberately below the accounts seen.
+        signed_in: accounts ? Math.max(1, Math.round(accounts * 0.4)) : 0,
+        accounts,
+        logons: logonTotal,
+        failures: failureTotal,
+        lockouts: lockouts.length,
+        privileged_logons: sum(privilegedPoints),
+        account_changes: changes.filter((c) => ACCOUNT_CHANGE_EVENTS.includes(c.event)).length,
+        group_changes: changes.filter((c) => !ACCOUNT_CHANGE_EVENTS.includes(c.event)).length,
+      },
+      activity: { step_seconds: step, timestamps: timestamps.map((t) => t.toISOString()), lines },
+      lockouts: lockouts.length ? lockouts : null,
+      changes: changes.length ? changes : null,
+      busiest_accounts: busiest.slice(0, 10),
+      most_failures: mostFailures.slice(0, 10),
+      failure_reasons: counts(FAILURE_REASONS.map(([v, l], i) => [v, l, reasons[i]!])).slice(0, 8),
+      logon_types: counts(LOGON_TYPES.map(([v, l], i) => [v, l, types[i]!])).slice(0, 8),
+      failure_sources: counts(FAILURE_SOURCES.map(([v], i) => [v, undefined, sources[i]!])).slice(0, 10),
     })
   }),
 
@@ -2387,6 +2928,9 @@ function sourceValidationError(body: SourceInput, selfId: string | null): Respon
     if (c.protocol === 'udp' && c.max_message_bytes && Number(c.max_message_bytes) > 65535)
       complaints.push('source: max_message_bytes cannot exceed 65535 for udp')
   }
+  const template = c.template?.trim()
+  if (template && !TEMPLATES.some((t) => t.id === template))
+    complaints.push(`source: template: unknown template "${template}"`)
   const clash = [...FILE_SOURCES, ...managedSources].find(
     (s) => s.id !== selfId && s.config.name.toLowerCase() === c.name.toLowerCase(),
   )

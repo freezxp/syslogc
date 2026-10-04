@@ -1,11 +1,13 @@
 /**
- * The bar both analytics views share: which view is showing, the time range it
- * covers, and how to hand that exact view to someone else.
+ * The bar every analytics view shares: which view is showing, the time range it
+ * covers, and how to hand that exact view to someone else. Which views there
+ * are at all depends on what the sources carry; see ./analyses.ts.
  */
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Link2, Share2, ZoomOut } from 'lucide-react'
 import { useState } from 'react'
 
+import { useTemplates } from '@/api/hooks'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -21,6 +23,8 @@ import { useTimezone } from '@/lib/preferences'
 import { zoomOut } from '@/lib/time-range'
 import type { AnalyticsSearch } from '@/lib/url-state'
 
+import { analysisAvailability, analysisShown, ANALYSES, type AnalysisId } from './analyses'
+import { directoryRangePatch } from './directory'
 import { trendsRangePatch } from './service-trends'
 
 export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } | null }) {
@@ -29,6 +33,12 @@ export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } |
   const displayTz = useTimezone()
   const tz = search.tz ?? displayTz
   const [timeOpen, setTimeOpen] = useState(false)
+  // An analysis only reads fields a particular template produces, so a view
+  // whose template nothing carries is not offered — except when it is the view
+  // being looked at, where hiding the tab would leave somebody nowhere.
+  const templates = useTemplates()
+  const offered = (id: AnalysisId) =>
+    analysisShown(analysisAvailability(id, templates.data)) || search.view === ANALYSES[id].view
 
   useHotkeys({ t: () => setTimeOpen(true) })
 
@@ -41,14 +51,26 @@ export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } |
       <h1 className="mr-1 text-lg font-semibold">Analytics</h1>
       <div className="flex items-center gap-1" role="group" aria-label="Analytics view">
         <ViewTab view="explore" label="Explore" current={search.view} onSelect={() => setSearch({ view: 'explore' })} />
-        <ViewTab
-          view="trends"
-          label="Service trends"
-          current={search.view}
-          // A default hour holds a single point of the default window; the
-          // trends view only says something over a longer stretch.
-          onSelect={() => setSearch({ view: 'trends', ...trendsRangePatch(search) })}
-        />
+        {offered('dns-services') && (
+          <ViewTab
+            view="trends"
+            label={ANALYSES['dns-services'].label}
+            current={search.view}
+            // A default hour holds a single point of the default window; the
+            // trends view only says something over a longer stretch.
+            onSelect={() => setSearch({ view: 'trends', ...trendsRangePatch(search) })}
+          />
+        )}
+        {offered('directory') && (
+          <ViewTab
+            view="directory"
+            label={ANALYSES.directory.label}
+            current={search.view}
+            // An hour of a domain holds a sign-in spike but rarely the lockout
+            // that followed it.
+            onSelect={() => setSearch({ view: 'directory', ...directoryRangePatch(search) })}
+          />
+        )}
       </div>
       <TimePicker
         from={search.from}
