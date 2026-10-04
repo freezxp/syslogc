@@ -89,10 +89,15 @@ Releases publish `ghcr.io/freezxp/syslogc:<tag>` (and `:latest`) for
 keyless cosign signature:
 
 ```bash
-cosign verify ghcr.io/freezxp/syslogc:v0.1.0 \
+cosign verify ghcr.io/freezxp/syslogc:v1.0.0 \
   --certificate-identity-regexp '^https://github.com/freezxp/syslogc/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+This needs **cosign 3.0 or newer**. Releases are signed into the newer
+sigstore bundle format, which cosign 2.x cannot read: against a 2.x binary
+the command above reports `no signatures found`, which looks exactly like an
+unsigned or tampered image and is not one. Check with `cosign version`.
 
 Set `SYSLOGC_VERSION` in `.env` to run a published tag instead of building
 locally.

@@ -8,6 +8,18 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.0.1 — 2026-10-04
+
+### Fixed
+
+- The image verification command in the installation guide said nothing about
+  which cosign it needs. Releases are signed into the newer sigstore bundle
+  format, and against cosign 2.x the documented command reports `no
+  signatures found` — indistinguishable from an unsigned or tampered image.
+  It now says cosign 3.0 or newer, and names the current release rather than
+  v0.1.0. The signatures themselves were correct; only the instructions for
+  checking them were.
+
 ## 1.0.0 — 2026-10-04
 
 The first release the project considers finished: a syslog server that
