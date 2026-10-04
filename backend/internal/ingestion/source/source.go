@@ -12,6 +12,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/logentry"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 	"github.com/freezxp/syslogc/backend/internal/normalization"
+	"github.com/freezxp/syslogc/backend/internal/sourcetemplate"
 )
 
 // Settings are the resolved, read-only runtime settings of one source.
@@ -33,7 +34,10 @@ type Settings struct {
 	Norm normalization.Source
 	// Extract pulls fields out of the message; nil when none are configured.
 	Extract *extract.Extractor
-	Metrics *metrics.SourceMetrics
+	// ExtractJSON reads the message as a structured record; nil unless the
+	// source's template says its sender emits one.
+	ExtractJSON *extract.JSONExtractor
+	Metrics     *metrics.SourceMetrics
 }
 
 // New resolves cfg (which must already be validated).
@@ -113,6 +117,16 @@ func New(cfg config.Source, m *metrics.Metrics) (*Settings, error) {
 			return nil, fmt.Errorf("source %s: %w", cfg.Name, err)
 		}
 		s.Extract = ex
+	}
+	// A template may read the sender's own structured output instead of
+	// matching text, which is what makes a source robust to the sender
+	// writing its messages in another language.
+	if t, ok := sourcetemplate.ByID(cfg.Template); ok && t.JSON != nil {
+		j, err := extract.NewJSON(extract.JSONConfig{Prefix: t.JSON.Prefix, Keys: t.JSON.Keys})
+		if err != nil {
+			return nil, fmt.Errorf("source %s: template %s: %w", cfg.Name, t.ID, err)
+		}
+		s.ExtractJSON = j
 	}
 	s.Metrics = m.Source(cfg.Name, s.Protocol)
 	return s, nil

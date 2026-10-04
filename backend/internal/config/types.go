@@ -263,6 +263,11 @@ type Source struct {
 
 	// Extract pulls fields out of the message with regular expressions.
 	Extract []ExtractRule `koanf:"extract" json:"extract,omitempty"`
+	// Template names the kind of log this source carries. It supplies the
+	// parsing when the source is created, and decides which analyses are
+	// offered: a page that reads fields nothing produces is hidden rather
+	// than shown empty.
+	Template string `koanf:"template" json:"template,omitempty"`
 
 	UDP UDPConfig `koanf:"udp" json:"udp,omitempty"`
 	TLS TLSConfig `koanf:"tls" json:"tls,omitempty"`

@@ -96,10 +96,20 @@ func (w *worker) process(msg *RawMessage) {
 
 	// Extraction runs before normalization so the fields it adds go through
 	// the same naming rules, limits and sanitisation as parsed ones.
+	// A structured record is read first: when the sender emits one, its own
+	// field names are better than anything matched out of text, and a
+	// pattern rule can still add to what it produced.
+	structured := false
+	if src.ExtractJSON != nil {
+		structured = src.ExtractJSON.Apply(e)
+		if structured {
+			src.Metrics.Extracted("json").Inc()
+		}
+	}
 	if src.Extract != nil {
 		if rule := src.Extract.Apply(e); rule != "" {
 			src.Metrics.Extracted(rule).Inc()
-		} else {
+		} else if !structured {
 			src.Metrics.ExtractMisses.Inc()
 		}
 	}

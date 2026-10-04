@@ -108,6 +108,8 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/forward-targets", permitted, auth.PermForwardingManage, s.handleCreateForwardTarget)
 	add("PUT /api/v1/forward-targets/{id}", permitted, auth.PermForwardingManage, s.handleUpdateForwardTarget)
 	add("DELETE /api/v1/forward-targets/{id}", permitted, auth.PermForwardingManage, s.handleDeleteForwardTarget)
+	add("POST /api/v1/analytics/directory", permitted, auth.PermLogsSearch, s.handleDirectory)
+	add("GET /api/v1/templates", permitted, auth.PermSourcesRead, s.handleTemplates)
 	add("GET /api/v1/sources/extract-presets", permitted, auth.PermSourcesRead, s.handleExtractPresets)
 	add("GET /api/v1/sources/{id}", permitted, auth.PermSourcesRead, s.handleGetSource)
 	add("PUT /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleUpdateSource)

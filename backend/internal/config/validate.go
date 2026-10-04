@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/extract"
+	"github.com/freezxp/syslogc/backend/internal/sourcetemplate"
 )
 
 // Validate checks the configuration and returns all problems found.
@@ -213,6 +214,12 @@ func (c *Config) Validate() error {
 func validateSource(p string, s Source) []error {
 	var errs []error
 	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(p+": "+format, args...)) }
+
+	// An unknown template would silently parse nothing and offer no
+	// analysis, which looks like the source being broken.
+	if err := sourcetemplate.Valid(s.Template); err != nil {
+		add("template: %v", err)
+	}
 
 	// Patterns are compiled here so a bad one fails at startup, not on the
 	// first message that would have matched it.
