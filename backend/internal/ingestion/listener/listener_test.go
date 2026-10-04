@@ -323,3 +323,70 @@ func writeSelfSignedCert(t *testing.T) (certFile, keyFile string) {
 	_ = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600)
 	return certFile, keyFile
 }
+
+// A sender configured for TLS against a plaintext listener used to have its
+// handshake framed as a syslog message and stored as binary rubbish. It must
+// be recognised and dropped instead, with nothing reaching the sink.
+func TestTCPListenerRejectsTLSOnPlaintext(t *testing.T) {
+	src := newSource(t, func(s *config.Source) { s.Protocol = "tcp" })
+	sink := &fakeSink{}
+	l := NewTCP(src, sink, discard, nil)
+	if err := l.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, l)
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// A real client's first flight: handshake record, TLS 1.0 record version
+	// (what every client sends for compatibility), then a ClientHello.
+	if _, err := conn.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x2c, 0x01, 0x00, 0x00, 0x28, 0x03, 0x03}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The listener closes rather than answering, which is what tells the
+	// sender to stop waiting for a ServerHello.
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Error("connection stayed open; the sender would wait for a ServerHello forever")
+	}
+
+	sink.mu.Lock()
+	n := len(sink.msgs)
+	sink.mu.Unlock()
+	if n != 0 {
+		t.Errorf("stored %d messages; a TLS handshake must not be stored as a log", n)
+	}
+	if v := testutil.ToFloat64(src.Metrics.RejectedTLS); v != 1 {
+		t.Errorf("rejected_tls = %v, want 1", v)
+	}
+}
+
+func TestLooksLikeTLSClientHello(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want bool
+	}{
+		{"tls 1.0 record version", []byte{0x16, 0x03, 0x01, 0x00}, true},
+		{"tls 1.3 record version", []byte{0x16, 0x03, 0x04}, true},
+		{"ssl 3.0", []byte{0x16, 0x03, 0x00}, true},
+		{"rfc3164 message", []byte("<13>Sep 14 10:00:00 host a: hi"), false},
+		{"rfc5424 message", []byte("<14>1 - - - - - -"), false},
+		{"octet counted frame", []byte("17 <14>1 - - - -"), false},
+		{"tls alert, not a handshake", []byte{0x15, 0x03, 0x01}, false},
+		{"handshake byte but not tls", []byte{0x16, 0x20, 0x01}, false},
+		{"too short", []byte{0x16, 0x03}, false},
+		{"empty", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := looksLikeTLSClientHello(c.in); got != c.want {
+				t.Errorf("looksLikeTLSClientHello(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

@@ -155,10 +155,12 @@ func directoryTemplate() Template {
 				},
 				{
 					Title: "Add the source here, then check the logs arrive",
-					Body: "Create a syslog source on port 6514 with this template, enable it, and open the " +
-						"Logs page filtered to it. A domain controller is never quiet: if nothing arrives " +
-						"within a minute, the connection or the certificate is the thing to look at, not " +
-						"the audit policy.",
+					Body: "Create a syslog source on port 6514 with this template and enable it. Its " +
+						"protocol must be TLS, with a certificate: the configuration above uses " +
+						"om_ssl, so a plain TCP source would leave NXLog waiting for a handshake " +
+						"that never comes. Then open the Logs page filtered to it. A domain " +
+						"controller is never quiet: if nothing arrives within a minute, the " +
+						"connection or the certificate is the thing to look at, not the audit policy.",
 				},
 			},
 			Reference: "https://docs.nxlog.co/userguide/integrate/ms-windows-eventlog.html",

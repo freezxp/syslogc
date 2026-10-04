@@ -1,6 +1,7 @@
 package listener
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -19,6 +20,9 @@ import (
 
 const (
 	tlsHandshakeTimeout = 10 * time.Second
+	// tlsRecordHeaderLen is how much of a TLS record is needed to recognise
+	// one: content type, then the two version bytes.
+	tlsRecordHeaderLen = 3
 	// drainGrace is how long connections may keep delivering buffered data
 	// after Stop begins.
 	drainGrace = 2 * time.Second
@@ -158,7 +162,28 @@ func (l *TCP) serve(conn net.Conn) {
 	}
 
 	idle := l.src.Config.IdleTimeout.D()
-	dec := framing.NewDecoder(conn, l.framing, l.src.MaxMessageBytes)
+
+	var r io.Reader = conn
+	if l.tlsConfig == nil {
+		// A sender configured for TLS against a plaintext listener writes a
+		// ClientHello and waits for a ServerHello that is never coming. Without
+		// this check the handshake is framed as a syslog message and stored as
+		// binary rubbish, the sender hangs, and nothing anywhere says why — so
+		// say exactly what happened, and keep the bytes out of the logs.
+		br := bufio.NewReader(conn)
+		l.setReadDeadline(conn, idle)
+		if head, err := br.Peek(tlsRecordHeaderLen); err == nil && looksLikeTLSClientHello(head) {
+			m.RejectedTLS.Inc()
+			l.log.Warn("a sender is speaking TLS to a plaintext listener; "+
+				"give this source a certificate and set its protocol to tls, "+
+				"or configure the sender to send without TLS",
+				"peer", peer.String(), "address", l.src.Config.Address)
+			return
+		}
+		r = br
+	}
+
+	dec := framing.NewDecoder(r, l.framing, l.src.MaxMessageBytes)
 	for {
 		l.setReadDeadline(conn, idle)
 		msg, truncated, err := dec.Next()
@@ -184,6 +209,16 @@ func (l *TCP) serve(conn net.Conn) {
 			return
 		}
 	}
+}
+
+// looksLikeTLSClientHello reports whether b begins a TLS handshake record.
+//
+// A handshake record is content type 22, then the protocol version: 0x03
+// followed by 0x00 (SSL 3.0) through 0x04 (TLS 1.3). Syslog is text, and 0x16
+// is a control character no sender begins a line with, so there is no
+// plausible message this rejects.
+func looksLikeTLSClientHello(b []byte) bool {
+	return len(b) >= tlsRecordHeaderLen && b[0] == 0x16 && b[1] == 0x03 && b[2] <= 0x04
 }
 
 func (l *TCP) setReadDeadline(conn net.Conn, idle time.Duration) {

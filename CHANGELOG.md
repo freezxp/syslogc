@@ -8,6 +8,20 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.0.2 — 2026-10-04
+
+### Fixed
+
+- A sender configured for TLS against a plaintext TCP source had its
+  handshake framed as a syslog message and stored as binary rubbish, while it
+  waited for a reply that was never coming. The listener now recognises a TLS
+  handshake, closes the connection so the sender fails instead of hanging,
+  and logs which source it was and where from. Nothing is stored. This is
+  what NXLog does against a `tcp` source, because the shipped configuration
+  uses `om_ssl`.
+- The Active Directory setup guide now says the source's protocol has to be
+  TLS, which is the step that was missing when the above happened.
+
 ## 1.0.1 — 2026-10-04
 
 ### Fixed
