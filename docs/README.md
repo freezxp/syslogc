@@ -22,6 +22,7 @@ question in [roadmap.md](roadmap.md#open-questions-for-review).
 | [security.md](security.md) | Threat model, authN/authZ, query safety, audit, hardening |
 | [deployment.md](deployment.md) | Packaging, Docker Compose, scale-out topology, Kubernetes readiness, operations |
 | [testing.md](testing.md) | Test strategy, storage contract suite, load testing and benchmark methodology |
+| [releasing.md](releasing.md) | Which number to bump, cutting a tag, what the version is stamped into |
 | [roadmap.md](roadmap.md) | Phased implementation plan, exit criteria, commit plan, open questions |
 | [decisions/](decisions/README.md) | Architecture Decision Records (ADRs) |
 

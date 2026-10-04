@@ -324,7 +324,16 @@ set_env SYSLOGC_AUTH_COOKIE_SECURE false
 set_env SYSLOGC_NODE_ID "$(hostname -s)"
 [[ -n "$DOMAIN" ]] && set_env SYSLOGC_ALLOWED_ORIGINS "https://${DOMAIN},http://${DOMAIN}"
 [[ -n "$PROXY_IP" ]] && set_env SYSLOGC_TRUSTED_PROXIES "$PROXY_IP"
-[[ "$PULL" == true ]] && set_env SYSLOGC_VERSION latest
+if [[ "$PULL" == true ]]; then
+  set_env SYSLOGC_VERSION latest
+else
+  # Stamp the build with what is actually checked out, so the System page and
+  # `syslogc version` name a commit you can go back to. force_env, not
+  # set_env: this changes on every upgrade, and a stale version is worse than
+  # none — it is the number someone reads before deciding whether a fix is in.
+  force_env SYSLOGC_VERSION "$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)"
+  force_env SYSLOGC_COMMIT "$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+fi
 ok "$(grep -c '^[A-Z]' .env) settings in .env"
 
 # ---- 4b. the demo mirror, if an older version left one behind -------------------

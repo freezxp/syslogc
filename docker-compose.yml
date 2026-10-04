@@ -16,6 +16,7 @@ x-syslogc-image: &syslogc-image
     target: syslogc
     args:
       VERSION: ${SYSLOGC_VERSION:-dev}
+      COMMIT: ${SYSLOGC_COMMIT:-unknown}
 
 services:
   syslogc:

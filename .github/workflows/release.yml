@@ -58,10 +58,20 @@ jobs:
           cosign sign --yes "ghcr.io/${{ github.repository }}@${{ steps.syslogc.outputs.digest }}"
           cosign sign --yes "ghcr.io/${{ github.repository }}-loggen@${{ steps.loggen.outputs.digest }}"
 
+      # The changelog section is the release notes: it says what is different
+      # for whoever is running this, which a list of commit subjects does not.
+      # Generated notes are the fallback for a tag cut without one.
       - name: Release
         run: |
-          gh release create "${{ github.ref_name }}" --generate-notes --verify-tag \
-            --notes-start-tag "$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || echo '')" ||
-          gh release create "${{ github.ref_name }}" --generate-notes --verify-tag
+          version="${TAG#v}"
+          notes=$(sed -n "/^## ${version} /,/^## /p" CHANGELOG.md | sed '$ { /^## /d; }')
+          if [ -n "$notes" ]; then
+            printf '%s\n' "$notes" > /tmp/notes.md
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/notes.md
+          else
+            echo "::warning::CHANGELOG.md has no section for ${version}; using generated notes"
+            gh release create "$TAG" --verify-tag --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}

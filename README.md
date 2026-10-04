@@ -77,6 +77,7 @@ preserving sender IP addresses.
 | [API reference](docs/openapi.yaml) | OpenAPI 3.1 |
 | [Development](docs/development.md) | Code layout, tests, fuzzing, adding a parser |
 | [Architecture](docs/architecture.md) | Design and decisions ([ADRs](docs/decisions/README.md)) |
+| [Releasing](docs/releasing.md) | Version numbers, cutting a tag ([changelog](CHANGELOG.md)) |
 | [Roadmap](docs/roadmap.md) | Phases and status |
 
 ## Development
