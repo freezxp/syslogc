@@ -895,6 +895,21 @@ paths:
       summary: Retention settings, drift status and storage usage
       responses:
         "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/RetentionStatus"}}}}
+    put:
+      tags: [system]
+      summary: Set how long logs are kept
+      description: >-
+        Stores the period and applies it to the storage backend. Requires
+        retention:manage. The stored period takes effect when the stack is
+        restarted, which is what restart_required reports.
+      requestBody:
+        required: true
+        content:
+          application/json: {schema: {$ref: "#/components/schemas/RetentionUpdateInput"}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/RetentionUpdate"}}}}
+        "400": {$ref: "#/components/responses/Problem"}
+        "403": {$ref: "#/components/responses/Problem"}
 
   /api/v1/system/health:
     get:
@@ -1735,6 +1750,14 @@ components:
         state: {type: string, enum: [running, stopped, error, disabled]}
         error: {type: string}
         since: {type: string, format: date-time}
+        problem:
+          type: string
+          description: >-
+            Why connections are being turned away by a listener that is
+            otherwise running, such as a certificate the sender will not
+            accept. A source can be running and still receive nothing.
+        problem_since: {type: string, format: date-time, description: When it last happened}
+        problem_count: {type: integer, description: Connections turned away for this reason}
 
     SystemHealth:
       type: object
@@ -1747,6 +1770,23 @@ components:
         uptime_seconds: {type: integer}
         components: {type: array, items: {$ref: "#/components/schemas/ComponentStatus"}}
         sources: {type: array, items: {$ref: "#/components/schemas/SourceStatus"}}
+
+    RetentionUpdateInput:
+      type: object
+      required: [period]
+      properties:
+        period:
+          type: string
+          description: A Go duration ("720h") or whole days ("90d").
+          examples: ["90d"]
+
+    RetentionUpdate:
+      type: object
+      required: [desired, configured, restart_required]
+      properties:
+        desired: {type: string, description: The period just stored}
+        configured: {type: string, description: The period in force until the stack restarts}
+        restart_required: {type: boolean, description: True while desired and configured differ}
 
     SourceCounters:
       type: object

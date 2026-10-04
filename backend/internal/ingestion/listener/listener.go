@@ -5,6 +5,7 @@ package listener
 import (
 	"context"
 	"net"
+	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 )
@@ -18,6 +19,16 @@ type Sink interface {
 }
 
 // Listener is a running network receiver.
+// Diagnoser is implemented by listeners that can say why connections are
+// being turned away. That is not a failure of the listener — it is bound and
+// running — but it is the reason nothing is arriving, which is the question
+// somebody is actually asking.
+type Diagnoser interface {
+	// Problem returns the most recent reason, when it last happened, and how
+	// many times. The reason is empty when there is nothing wrong.
+	Problem() (string, time.Time, int)
+}
+
 type Listener interface {
 	// Start binds the socket and begins serving.
 	Start() error

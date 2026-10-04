@@ -8,6 +8,33 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.1.0 — 2026-10-04
+
+### Added
+
+- A source that is running but turning every connection away now says why, on
+  the System page and in `GET /system/health` as `problem`, `problem_since`
+  and `problem_count`. Its status dot turns amber: "running" and "receiving
+  nothing" used to look identical, and the second is the one people are
+  trying to explain.
+
+### Fixed
+
+- A failed TLS handshake was logged at **debug**, so on a default deployment
+  — which runs at info — the most common reason a new TLS source receives
+  nothing produced no output at all. It is now a warning, rate limited to one
+  every 30 seconds per source so a sender retrying in a loop cannot flood the
+  log, and it says what to change rather than quoting Go's error: that the
+  sender does not trust the certificate, or dialled a name it does not cover,
+  or sent no client certificate, or is not speaking TLS at all. The
+  underlying error is still attached.
+- The generated API types had not been rebuilt since 2026-09-14 while the
+  OpenAPI spec kept changing, so the browser's types and the documented API
+  had drifted apart. Rebuilding them surfaced two real faults, both fixed:
+  the audit filter's `outcome` was typed as a free string when only `success`
+  and `failure` exist, and `PUT /system/retention` was missing from the spec
+  entirely despite being implemented and used by the UI.
+
 ## 1.0.2 — 2026-10-04
 
 ### Fixed

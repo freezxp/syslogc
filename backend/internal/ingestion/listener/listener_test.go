@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -386,6 +387,72 @@ func TestLooksLikeTLSClientHello(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := looksLikeTLSClientHello(c.in); got != c.want {
 				t.Errorf("looksLikeTLSClientHello(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// A listener that is running but turning every connection away has to be able
+// to say so: that is what the interface shows against the source, and the
+// reason somebody is looking is that nothing is arriving.
+func TestTCPListenerReportsWhyConnectionsAreRefused(t *testing.T) {
+	src := newSource(t, func(s *config.Source) { s.Protocol = "tcp" })
+	l := NewTCP(src, &fakeSink{}, discard, nil)
+	if err := l.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, l)
+
+	if what, _, count := l.Problem(); what != "" || count != 0 {
+		t.Fatalf("a fresh listener reported a problem: %q (%d)", what, count)
+	}
+
+	for i := range 2 {
+		conn, err := net.Dial("tcp", l.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Write([]byte{0x16, 0x03, 0x01, 0x00, 0x2c}); err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		_, _ = conn.Read(make([]byte, 1)) // wait for the close
+		_ = conn.Close()
+		_ = i
+	}
+
+	what, at, count := l.Problem()
+	if !strings.Contains(what, "speaking TLS to a plaintext listener") {
+		t.Errorf("problem = %q", what)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2 (every attempt counts, not just the logged one)", count)
+	}
+	if time.Since(at) > time.Minute {
+		t.Errorf("problem timestamp = %v", at)
+	}
+}
+
+func TestExplainTLSError(t *testing.T) {
+	cases := []struct {
+		err  string
+		want string
+	}{
+		{"tls: first record does not look like a TLS handshake", "plain syslog to a TLS listener"},
+		{"remote error: tls: unknown certificate authority", "does not trust the issuer"},
+		{"remote error: tls: bad certificate", "does not trust the issuer"},
+		{"x509: certificate is valid for a.example, not b.example", "does not match the name it dialled"},
+		{"tls: client didn't provide a certificate", "without a client certificate"},
+		{"tls: failed to verify client certificate: x509: certificate signed by unknown authority", "client certificate was not issued"},
+		{"x509: certificate has expired or is not yet valid", "has expired"},
+		{"tls: no cipher suite supported by both client and server", "share no TLS version or cipher"},
+		{"some error nobody anticipated", "could not complete the TLS handshake"},
+	}
+	for _, c := range cases {
+		t.Run(c.err, func(t *testing.T) {
+			got := explainTLSError(errors.New(c.err))
+			if !strings.Contains(got, c.want) {
+				t.Errorf("explainTLSError(%q)\n got %q\nwant it to contain %q", c.err, got, c.want)
 			}
 		})
 	}

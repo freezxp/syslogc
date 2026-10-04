@@ -692,6 +692,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rank the values of a field by a metric
+         * @description `total` counts everything matching, including groups beyond `limit`,
+         *     so `share` is honest and the returned rows need not sum to 1.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Selection"] & {
+                        /** @example app_name */
+                        group_by: string;
+                        metric?: components["schemas"]["AnalyticsMetric"];
+                        /** @default 10 */
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BreakdownResponse"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/series": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A metric over time, optionally one series per field value
+         * @description Only the top `limit` groups are returned; there is no "other" series.
+         *     `points` aligns index-for-index with `timestamps`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["Selection"] & {
+                        /** @example severity */
+                        group_by?: string;
+                        metric?: components["schemas"]["AnalyticsMetric"];
+                        /** @default 120 */
+                        buckets?: number;
+                        /** @default 5 */
+                        limit?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SeriesResponse"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/overview": {
         parameters: {
             query?: never;
@@ -1187,6 +1291,833 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List sources from the configuration file and the database */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            sources: components["schemas"]["Source"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a database-managed source
+         * @description Requires `sources:manage`. The source starts within five seconds
+         *     without restarting the node. Names and bind addresses must not clash
+         *     with the configuration file or another managed source.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SourceInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Source"];
+                    };
+                };
+                409: components["responses"]["Problem"];
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/service-trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recorded counts of distinct clients per online service
+         * @description Reads series the rollup recorded into VictoriaMetrics: how many
+         *     distinct clients queried each service in each window, and how many
+         *     queries they sent.
+         *
+         *     `window` must be a resolution that was recorded (`5m`, `1h` or `1d`).
+         *     Distinct counts are not additive — a day's distinct clients is not the
+         *     sum of its hours — so a window that was never recorded cannot be
+         *     derived from a finer one. Answers `404 not_configured` when no
+         *     metrics store is configured.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        time_range: components["schemas"]["TimeRange"];
+                        /** @enum {string} */
+                        window: "5m" | "1h" | "1d";
+                        /**
+                         * @description `all` counts every domain a service owns; `main` counts only the domains it is reached at, which reads as who opened it rather than whose device talked to it.
+                         * @default all
+                         * @enum {string}
+                         */
+                        scope?: "all" | "main";
+                        /** @description Empty returns every service */
+                        services?: string[];
+                        /**
+                         * @default unique_clients
+                         * @enum {string}
+                         */
+                        metric?: "unique_clients" | "queries";
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            resolved_range: components["schemas"]["ResolvedRange"];
+                            window: string;
+                            step_seconds: number;
+                            metric?: string;
+                            /** @description Busiest service first. */
+                            series: {
+                                service?: string;
+                                label?: string;
+                                peak?: number;
+                                /** Format: date-time */
+                                peak_at?: string;
+                                points?: {
+                                    /** Format: date-time */
+                                    at?: string;
+                                    value?: number;
+                                }[];
+                            }[];
+                            /** @description The busiest window of the busiest service; absent when there is no data. */
+                            peak?: {
+                                service?: string;
+                                label?: string;
+                                value?: number;
+                                /** Format: date-time */
+                                at?: string;
+                            };
+                        };
+                    };
+                };
+                404: components["responses"]["Problem"];
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The service catalog the trend rollup counts against */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServiceCatalog"];
+                    };
+                };
+            };
+        };
+        /**
+         * Replace the service catalog
+         * @description Requires `analytics:manage`. The change applies from the next rollup;
+         *     windows already recorded keep the counts they were recorded with
+         *     until they are recorded again.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        services: components["schemas"]["DNSService"][];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServiceCatalog"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy a configuration-file source into the database
+         * @description Makes a read-only source from `ingestion.sources` editable here. The
+         *     copy keeps the source's name and settings, and the file entry is
+         *     ignored while it exists; deleting the copy hands control back to the
+         *     file. The listener is not interrupted. Requires `sources:manage`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Name of the configuration-file source */
+                        name: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Source"];
+                    };
+                };
+                404: components["responses"]["Problem"];
+                409: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/extract-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Built-in extract rules for common log formats
+         * @description Ready-made rules so a known format does not have to be typed out as a
+         *     regular expression. Each preset carries a sample line it matches, for
+         *     the editor's test panel. The `dnsdist` preset produces the fields the
+         *     DNS service trends rollup counts.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            presets: {
+                                id?: string;
+                                title?: string;
+                                description?: string;
+                                sample?: string;
+                                rule?: components["schemas"]["ExtractRule"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/test-extract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Try extract rules against sample lines without storing anything
+         * @description An authoring aid for the source editor: it compiles the rules, applies
+         *     them to each sample and reports which rule matched and what it would
+         *     produce. Requires `sources:manage`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        rules: components["schemas"]["ExtractRule"][];
+                        samples: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            results: {
+                                sample: string;
+                                /** @description The rule that matched; empty when none did */
+                                rule: string;
+                                fields?: {
+                                    [key: string]: string;
+                                };
+                                /** @description Field names in the order the pattern produced them */
+                                order?: string[];
+                            }[];
+                        };
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sources/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Read one database-managed source */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Source"];
+                    };
+                };
+                404: components["responses"]["Problem"];
+            };
+        };
+        /** Update a source (optimistic concurrency on `version`) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SourceInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Source"];
+                    };
+                };
+                /** @description Modified by someone else */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/problem+json": components["schemas"]["Problem"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        /** Delete a source and stop its listener */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                404: components["responses"]["Problem"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List users (requires `users:manage`) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            users: components["schemas"]["User"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Create a user
+         * @description Without `password` the server generates one and returns it once as `generated_password`.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        username: string;
+                        display_name?: string;
+                        /** @enum {string} */
+                        role: "admin" | "operator" | "viewer";
+                        password?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["User"];
+                    };
+                };
+                409: components["responses"]["Problem"];
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Change a user's profile, role, state or password
+         * @description You cannot change your own role or disable your own account.
+         *     Disabling a user, or resetting their password, ends all their sessions.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        display_name?: string;
+                        /** @enum {string} */
+                        role?: "admin" | "operator" | "viewer";
+                        disabled?: boolean;
+                        new_password?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["User"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        /** Delete a user (not yourself, not the last administrator) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Deleted */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/revoke-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign a user out of every session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Sessions revoked */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the audit log (requires `audit:view`) */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                    action?: string;
+                    actor?: string;
+                    outcome?: "success" | "failure";
+                    since?: string;
+                    before?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            events: components["schemas"]["AuditEvent"][];
+                        };
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Effective configuration of this node, with secrets redacted */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            node: string;
+                            yaml: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/system/retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Retention settings, drift status and storage usage */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RetentionStatus"];
+                    };
+                };
+            };
+        };
+        /**
+         * Set how long logs are kept
+         * @description Stores the period and applies it to the storage backend. Requires retention:manage. The stored period takes effect when the stack is restarted, which is what restart_required reports.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RetentionUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RetentionUpdate"];
+                    };
+                };
+                400: components["responses"]["Problem"];
+                403: components["responses"]["Problem"];
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/health": {
         parameters: {
             query?: never;
@@ -1321,7 +2252,7 @@ export interface components {
             }[];
         };
         /** @enum {string} */
-        Permission: "dashboard:view" | "logs:search" | "logs:tail" | "logs:view_raw" | "logs:query_native" | "logs:export" | "logs:ingest" | "searches:read" | "searches:write" | "sources:read" | "sources:manage" | "system:view" | "config:view" | "config:manage" | "retention:manage" | "users:manage" | "apikeys:own" | "apikeys:manage" | "audit:view";
+        Permission: "dashboard:view" | "logs:search" | "logs:tail" | "logs:view_raw" | "logs:query_native" | "logs:export" | "logs:ingest" | "searches:read" | "searches:write" | "sources:read" | "sources:manage" | "system:view" | "config:view" | "config:manage" | "retention:manage" | "analytics:manage" | "users:manage" | "apikeys:own" | "apikeys:manage" | "audit:view";
         /** @enum {string} */
         Role: "admin" | "operator" | "viewer";
         User: {
@@ -1331,10 +2262,256 @@ export interface components {
             display_name?: string;
             role: components["schemas"]["Role"];
             must_change_password: boolean;
+            disabled?: boolean;
+            /** @description Returned once when an administrator created the account without choosing a password. */
+            generated_password?: string;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             last_login_at?: string | null;
+        };
+        SearchStats: {
+            duration_ms: number;
+        };
+        AnalyticsMetric: {
+            /**
+             * @default count
+             * @enum {string}
+             */
+            type?: "count" | "count_distinct";
+            /** @description Required for count_distinct */
+            field?: string;
+        };
+        BreakdownResponse: {
+            resolved_range: components["schemas"]["ResolvedRange"];
+            group_by: string;
+            metric: components["schemas"]["AnalyticsMetric"];
+            rows: {
+                value: string;
+                metric: number;
+                /** @description Fraction of `total` */
+                share: number;
+            }[];
+            total: number;
+            distinct_groups: number;
+            stats?: components["schemas"]["SearchStats"];
+        };
+        SeriesResponse: {
+            resolved_range: components["schemas"]["ResolvedRange"];
+            /** @example 5m */
+            step: string;
+            step_seconds: number;
+            group_by?: string;
+            metric: components["schemas"]["AnalyticsMetric"];
+            timestamps: string[];
+            groups: {
+                value: string;
+                total: number;
+                /** @description Aligned with `timestamps` */
+                points: number[];
+            }[];
+            stats?: components["schemas"]["SearchStats"];
+        };
+        /**
+         * @description A source definition, identical to an entry under `ingestion.sources`
+         *     in the configuration file. Durations ("10m") and sizes ("64KiB") are
+         *     strings. Defaults are applied by the server.
+         */
+        SourceConfig: {
+            name: string;
+            /** @enum {string} */
+            type: "syslog" | "http_json";
+            /** @enum {string} */
+            protocol?: "udp" | "tcp" | "tls";
+            /** @description host:port to bind (syslog only) */
+            address?: string;
+            /** @enum {string} */
+            format?: "auto" | "rfc5424" | "rfc3164";
+            /** @description IANA name for RFC 3164 timestamps without an offset */
+            timezone?: string;
+            allowed_cidrs?: string[];
+            max_message_bytes?: string;
+            /** @enum {string} */
+            raw_message?: "always" | "on_error" | "never";
+            /** @enum {string} */
+            hostname_fallback?: "none" | "ip";
+            /** @enum {string} */
+            sd_flatten?: "full" | "short";
+            labels?: {
+                [key: string]: string;
+            };
+            tenant?: string;
+            /** @enum {string} */
+            framing?: "auto" | "octet_counting" | "lf" | "nul";
+            max_connections?: number;
+            idle_timeout?: string;
+            extract?: components["schemas"]["ExtractRule"][];
+            udp?: {
+                /** @description SO_REUSEPORT sockets (0 = CPU count) */
+                sockets?: number;
+                read_buffer_bytes?: string;
+            };
+            /**
+             * @description A TLS source needs a certificate from exactly one of three
+             *     places: a certificate authority (`acme`), the PEM itself
+             *     (`cert` and `key`), or files on the server (`cert_file` and
+             *     `key_file`). Pasted material takes precedence over the paths.
+             */
+            tls?: {
+                /** @description Path on the server */
+                cert_file?: string;
+                key_file?: string;
+                /** @description The certificate as PEM, for a deployment with nowhere to put a file. */
+                cert?: string;
+                /** @description The private key as PEM. Never returned: reads report `key_stored` instead, and a write that omits it keeps the stored key rather than removing it. */
+                key?: string;
+                /** @enum {string} */
+                min_version?: "1.2" | "1.3";
+                /** @enum {string} */
+                client_auth?: "none" | "request" | "require_and_verify";
+                client_ca_file?: string;
+                /** @description The client CA as PEM. */
+                client_ca?: string;
+                /**
+                 * @description Obtain the certificate from Let's Encrypt over the HTTP-01
+                 *     challenge. The host needs a public name that resolves to it
+                 *     and port 80 reachable from the internet.
+                 */
+                acme?: {
+                    enabled?: boolean;
+                    /** @description Bare hostnames; wildcards need DNS-01 */
+                    domains?: string[];
+                    /** @description Where the authority sends expiry warnings. */
+                    email?: string;
+                    /** @description Ask the test authority, whose certificates nothing trusts and whose limits forgive. Start here: the real authority allows five failed validations per hostname per hour. */
+                    staging?: boolean;
+                    /** @description Required. Records agreement to https://letsencrypt.org/repository/ */
+                    accept_terms?: boolean;
+                    /** @description Ask even when this host cannot reach its own name on port 80. */
+                    skip_preflight?: boolean;
+                };
+            };
+        };
+        /**
+         * @description Turns part of a message into fields. Capture group names become field
+         *     names; rules are tried in order and the first match wins.
+         */
+        ExtractRule: {
+            /** @description Identifies the rule in metrics */
+            name?: string;
+            /** @description Literal the message must contain before the pattern is tried */
+            contains?: string;
+            /** @description Prepended to every field name */
+            prefix?: string;
+            /** @description RE2 pattern with named capture groups */
+            regex: string;
+        };
+        SourceStatusDetail: components["schemas"]["SourceStatus"] & {
+            /** @enum {string} */
+            origin?: "file" | "database";
+        };
+        Source: {
+            /**
+             * Format: uuid
+             * @description Absent for configuration-file sources
+             */
+            id?: string;
+            config: components["schemas"]["SourceConfig"];
+            enabled: boolean;
+            /**
+             * @description `file` sources are read-only and win any name or address conflict.
+             * @enum {string}
+             */
+            origin: "file" | "database";
+            /** @description A private key is held for this source. The key itself is never returned. */
+            key_stored?: boolean;
+            /** @description What the source's certificate covers, when it has a pasted one. */
+            certificate?: {
+                subject?: string;
+                issuer?: string;
+                dns_names?: string[];
+                ip_addresses?: string[];
+                /** Format: date-time */
+                not_before?: string;
+                /** Format: date-time */
+                not_after?: string;
+                /** @description Works */
+                self_signed?: boolean;
+                /** @description How many certificates were given; a public certificate usually needs its intermediates too. */
+                chain?: number;
+            };
+            /** @description True when this database source replaces a configuration-file source of the same name, which stays in the file but is ignored. */
+            adopted?: boolean;
+            status?: components["schemas"]["SourceStatusDetail"];
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+            version?: number;
+        };
+        DNSService: {
+            /** @description Used as a metric label, so it is a slug. */
+            name: string;
+            /** @description What people see. */
+            label?: string;
+            /** @description A domain matches itself and its subdomains. */
+            domains: string[];
+            /** @description The domains the service is reached at, as opposed to the CDNs and APIs its apps query in the background. Must be a subset of `domains`; empty means the service has no separate main count. */
+            main_domains?: string[];
+            /** @description False keeps a service in the catalog without counting it. */
+            enabled?: boolean;
+        };
+        ServiceCatalog: {
+            services: components["schemas"]["DNSService"][];
+            /** @description The resolutions the rollup records. */
+            windows: string[];
+            /** @description False when no metrics store is configured. */
+            recording?: boolean;
+            /** @description Set when the stored catalog cannot be used. */
+            problem?: string;
+        };
+        SourceInput: {
+            config: components["schemas"]["SourceConfig"];
+            /** @default true */
+            enabled?: boolean;
+            /** @description Required on update; rejected with 409 when stale */
+            version?: number;
+        };
+        AuditEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            time: string;
+            /** @enum {string} */
+            actor_type: "user" | "api_key" | "anonymous" | "system";
+            /** Format: uuid */
+            actor_id?: string;
+            actor_name?: string;
+            ip?: string;
+            user_agent?: string;
+            /** @example sources.update */
+            action: string;
+            /** @enum {string} */
+            outcome: "success" | "failure";
+            details?: {
+                [key: string]: unknown;
+            };
+            request_id?: string;
+        };
+        RetentionStatus: {
+            /** @example 30d */
+            configured: string;
+            /** @example victorialogs */
+            backend: string;
+            instructions: string;
+            /** @description Drift between the configured period and the storage backend. */
+            status?: {
+                configured?: string;
+                backend?: string;
+                /** @enum {string} */
+                status?: "in_sync" | "drift" | "unknown";
+            };
+            usage?: components["schemas"]["StorageUsage"];
         };
         Session: {
             user: components["schemas"]["User"];
@@ -1719,6 +2896,15 @@ export interface components {
             error?: string;
             /** Format: date-time */
             since?: string;
+            /** @description Why connections are being turned away by a listener that is otherwise running, such as a certificate the sender will not accept. A source can be running and still receive nothing. */
+            problem?: string;
+            /**
+             * Format: date-time
+             * @description When it last happened
+             */
+            problem_since?: string;
+            /** @description Connections turned away for this reason */
+            problem_count?: number;
         };
         SystemHealth: {
             /** @enum {string} */
@@ -1729,6 +2915,21 @@ export interface components {
             uptime_seconds: number;
             components: components["schemas"]["ComponentStatus"][];
             sources?: components["schemas"]["SourceStatus"][];
+        };
+        RetentionUpdateInput: {
+            /**
+             * @description A Go duration ("720h") or whole days ("90d").
+             * @example 90d
+             */
+            period: string;
+        };
+        RetentionUpdate: {
+            /** @description The period just stored */
+            desired: string;
+            /** @description The period in force until the stack restarts */
+            configured: string;
+            /** @description True while desired and configured differ */
+            restart_required: boolean;
         };
         SourceCounters: {
             name: string;
@@ -1745,9 +2946,30 @@ export interface components {
             received_per_second?: number;
             stored_per_second?: number;
         };
+        ForwardTargetStatus: {
+            name: string;
+            /** @description False while writes to the remote are failing */
+            healthy: boolean;
+            /** @description Copies waiting to be sent */
+            queued_messages: number;
+            /** @description Copies written since this node started */
+            sent_messages: number;
+            /** @description Copies that will never be sent */
+            dropped_messages: number;
+            /** @description Why the target is unhealthy; absent while writes succeed */
+            last_error?: string;
+            /** Format: date-time */
+            last_success_at?: string;
+            /** @description Only this severity or more severe is forwarded */
+            min_severity?: string;
+            /** @description Only these sources are forwarded */
+            sources?: string[];
+        };
         SystemIngestion: {
             node: string;
             sources: components["schemas"]["SourceCounters"][];
+            /** @description Configured forward targets; absent when none are configured. */
+            forwarding?: components["schemas"]["ForwardTargetStatus"][];
             queue: {
                 messages?: number;
                 bytes?: number;

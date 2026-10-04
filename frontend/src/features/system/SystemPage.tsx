@@ -115,10 +115,23 @@ function HealthTab() {
                 <td className="mono px-3 py-2 text-sm">{s.address}</td>
                 <td className="px-3 py-2">
                   <span className="flex items-center gap-1.5">
-                    <StatusDot status={s.state === 'running' ? 'ok' : s.state === 'error' ? 'fail' : 'idle'} />
+                    {/* A bound listener refusing every connection is not "ok":
+                        it is running and receiving nothing, which is the case
+                        somebody is looking at this page to explain. */}
+                    <StatusDot
+                      status={
+                        s.state === 'error' ? 'fail' : s.state === 'running' ? (s.problem ? 'warn' : 'ok') : 'idle'
+                      }
+                    />
                     {s.state}
                   </span>
                   {s.error && <div className="text-sm text-danger">{s.error}</div>}
+                  {s.problem && (
+                    <div className="text-warning text-sm">
+                      {s.problem}
+                      {s.problem_count ? ` (${s.problem_count} ${s.problem_count === 1 ? 'attempt' : 'attempts'})` : ''}
+                    </div>
+                  )}
                 </td>
                 <td className="mono px-3 py-2 text-sm text-muted">
                   {s.since ? formatTimestamp(s.since, tz, 'yyyy-MM-dd HH:mm') : ''}

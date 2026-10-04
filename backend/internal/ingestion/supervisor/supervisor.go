@@ -40,6 +40,11 @@ type Status struct {
 	// Origin is "file" for sources from the configuration file and
 	// "database" for managed ones.
 	Origin string `json:"origin,omitempty"`
+	// Problem is why connections are being turned away by a listener that is
+	// otherwise running — the usual reason a new TLS source receives nothing.
+	Problem      string    `json:"problem,omitempty"`
+	ProblemSince time.Time `json:"problem_since,omitempty"`
+	ProblemCount int       `json:"problem_count,omitempty"`
 }
 
 type running struct {
@@ -341,6 +346,16 @@ func (s *Supervisor) Statuses() []Status {
 	defer s.mu.RUnlock()
 	out := make([]Status, 0, len(s.status))
 	for _, st := range s.status {
+		// A running listener can still be turning every connection away — a
+		// certificate the sender will not accept, say. The listener knows;
+		// the status is where somebody looks.
+		if r, ok := s.running[st.Name]; ok {
+			if d, ok := r.listener.(listener.Diagnoser); ok {
+				if what, at, count := d.Problem(); what != "" {
+					st.Problem, st.ProblemSince, st.ProblemCount = what, at, count
+				}
+			}
+		}
 		out = append(out, st)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -143,6 +143,14 @@ export interface ManagedSourceStatus {
   error?: string
   since?: string
   origin?: SourceOrigin
+  /**
+   * Why connections are being turned away by a listener that is otherwise
+   * running — a certificate the sender will not accept, say. A source can be
+   * `running` and still receive nothing, and this is the reason.
+   */
+  problem?: string
+  problem_since?: string
+  problem_count?: number
 }
 
 export interface ManagedSource {
@@ -252,11 +260,14 @@ export interface AuditEvent {
   request_id?: string
 }
 
+/** The only outcomes the audit log records, and the only ones it can be filtered by. */
+export type AuditOutcome = 'success' | 'failure'
+
 export interface AuditQuery {
   limit?: number
   action?: string
   actor?: string
-  outcome?: string
+  outcome?: AuditOutcome
   /** RFC 3339. */
   since?: string
   /** RFC 3339. */

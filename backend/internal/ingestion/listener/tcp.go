@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,9 +48,23 @@ type TCP struct {
 	stopping atomic.Bool
 	// drainDeadline (unix nanos) caps read deadlines once stopping.
 	drainDeadline atomic.Int64
+
+	// Why connections are being turned away, for the interface to show and
+	// for the rate limiter on the log.
+	problemMu     sync.Mutex
+	problem       string
+	problemAt     time.Time
+	problemCount  int
+	problemLogged time.Time
 }
 
 var _ Listener = (*TCP)(nil)
+var _ Diagnoser = (*TCP)(nil)
+
+// errTLSOnPlaintext is the cause recorded when a TLS sender reaches a
+// plaintext listener. There is no underlying error — we recognised it rather
+// than failed at it — but the report carries one for consistency.
+var errTLSOnPlaintext = errors.New("the connection began with a TLS handshake record")
 
 // NewTCP creates a TCP (or TLS) listener for src.
 func NewTCP(src *source.Settings, sink Sink, log *slog.Logger, tlsConfig *tls.Config) *TCP {
@@ -155,7 +170,12 @@ func (l *TCP) serve(conn net.Conn) {
 		cancel()
 		if err != nil {
 			m.RejectedTLS.Inc()
-			l.log.Debug("tls handshake failed", "peer", peer.String(), "error", err)
+			// A sender that cannot complete the handshake retries forever, so
+			// this is rate limited — but it is reported at warning level, not
+			// debug. It is the most common reason a new TLS source receives
+			// nothing, and a deployment at the default log level used to be
+			// told nothing at all.
+			l.reportProblem(explainTLSError(err), peer.String(), err)
 			return
 		}
 		conn = tc
@@ -174,10 +194,10 @@ func (l *TCP) serve(conn net.Conn) {
 		l.setReadDeadline(conn, idle)
 		if head, err := br.Peek(tlsRecordHeaderLen); err == nil && looksLikeTLSClientHello(head) {
 			m.RejectedTLS.Inc()
-			l.log.Warn("a sender is speaking TLS to a plaintext listener; "+
+			l.reportProblem("a sender is speaking TLS to a plaintext listener; "+
 				"give this source a certificate and set its protocol to tls, "+
 				"or configure the sender to send without TLS",
-				"peer", peer.String(), "address", l.src.Config.Address)
+				peer.String(), errTLSOnPlaintext)
 			return
 		}
 		r = br
@@ -208,6 +228,71 @@ func (l *TCP) serve(conn net.Conn) {
 			}
 			return
 		}
+	}
+}
+
+// problemLogInterval is how often one listener repeats the same complaint. A
+// misconfigured sender reconnects in a tight loop, and a log full of one
+// sentence is as unhelpful as no log at all.
+const problemLogInterval = 30 * time.Second
+
+// reportProblem records why a connection was turned away and says so in the
+// log, at most once per problemLogInterval per listener. The stored copy is
+// what the interface shows against the source, because somebody wondering
+// why nothing is arriving looks there before they look at a log file.
+func (l *TCP) reportProblem(what, peer string, err error) {
+	l.problemMu.Lock()
+	l.problem = what
+	l.problemAt = time.Now()
+	l.problemCount++
+	count := l.problemCount
+	say := time.Since(l.problemLogged) >= problemLogInterval
+	if say {
+		l.problemLogged = time.Now()
+	}
+	l.problemMu.Unlock()
+
+	if say {
+		l.log.Warn(what, "peer", peer, "address", l.src.Config.Address,
+			"attempts", count, "error", err)
+	}
+}
+
+// Problem returns the most recent reason connections were turned away, when
+// it last happened, and how many times. Empty when there is nothing wrong.
+func (l *TCP) Problem() (string, time.Time, int) {
+	l.problemMu.Lock()
+	defer l.problemMu.Unlock()
+	return l.problem, l.problemAt, l.problemCount
+}
+
+// explainTLSError turns a handshake failure into the thing to go and change.
+// The error text Go produces is accurate and nearly useless to somebody who
+// is configuring a log sender, and these few cases are almost all of them.
+func explainTLSError(err error) string {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "first record does not look like a TLS handshake"):
+		return "a sender is sending plain syslog to a TLS listener; " +
+			"turn on TLS at the sender, or set this source's protocol to tcp"
+	case strings.Contains(s, "unknown certificate authority"), strings.Contains(s, "bad certificate"),
+		strings.Contains(s, "unknown certificate"), strings.Contains(s, "certificate is not trusted"):
+		return "a sender rejected this server's certificate because it does not trust the issuer; " +
+			"give the sender the issuing CA, or use a publicly trusted certificate"
+	case strings.Contains(s, "certificate is valid for"), strings.Contains(s, "not valid for any names"):
+		return "a sender rejected this server's certificate because it does not match the name it dialled; " +
+			"point the sender at a name this certificate covers"
+	case strings.Contains(s, "client didn't provide a certificate"):
+		return "a sender connected without a client certificate, which this source requires; " +
+			"give the sender one, or stop requiring client certificates"
+	case strings.Contains(s, "failed to verify client certificate"), strings.Contains(s, "unknown authority"):
+		return "a sender's client certificate was not issued by this source's certificate authority"
+	case strings.Contains(s, "expired"):
+		return "a certificate in the handshake has expired"
+	case strings.Contains(s, "no cipher suite supported"), strings.Contains(s, "protocol version not supported"):
+		return "a sender and this server share no TLS version or cipher; the sender is probably very old"
+	default:
+		return "a sender could not complete the TLS handshake"
 	}
 }
 
