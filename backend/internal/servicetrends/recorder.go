@@ -46,7 +46,12 @@ const (
 	// maxShrinkAttempts bounds how often one run halves its query size
 	// before accepting that the window cannot be recorded, so a query that
 	// fails for some other reason is not retried all the way down.
-	maxShrinkAttempts = 6
+	//
+	// It covers both levers together — the time span and the number of
+	// services per query — so it has to be big enough to exhaust both. A
+	// five-minute window starts at 24 buckets and a full catalogue at 27
+	// services: five halvings each, and the budget is shared.
+	maxShrinkAttempts = 12
 	// maxQuerySpan bounds how much *time* one query scans, which is what
 	// actually costs: 288 five-minute buckets is a day of logs, and on a
 	// deployment counting hundreds of thousands of clients a minute that
@@ -112,6 +117,10 @@ type Recorder struct {
 	// buckets is how much of each window a single query covers, learned from
 	// what this deployment's storage can actually answer in time.
 	buckets map[string]int
+	// chunks is how many services a single query counts at once, learned the
+	// same way. A window cannot be scanned in less time than itself, so for
+	// the coarser resolutions this is the only lever left.
+	chunks map[string]int
 
 	// mu guards what monitoring reads while a rollup writes it.
 	mu sync.Mutex
@@ -336,38 +345,47 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 	written := 0
 	var recorded time.Time
 	buckets := r.bucketsPerQuery(step)
+	chunk := r.categoriesPerQuery(step, len(categories))
 	shrinks := 0
 	for start := from; start.Before(end); {
 		stop := start.Add(step * time.Duration(buckets))
 		if stop.After(end) {
 			stop = end
 		}
-		// One query is bounded on its own, so a window that cannot be counted
-		// inside the budget is given up on instead of taking the run with it.
-		qctx, cancel := context.WithTimeout(ctx, r.opts.QueryTimeout)
-		rows, err := r.opts.Querier.CategoryCounts(qctx, storage.CategoryQuery{
-			Selection: storage.Selection{
-				Tenant: r.opts.Tenant,
-				Range:  storage.TimeRange{Start: start, End: stop},
-				Filter: r.sourceFilter(),
-			},
-			Categories:    categories,
-			DistinctField: r.opts.ClientField,
-			Step:          step,
-		})
-		cancel()
+		sel := storage.Selection{
+			Tenant: r.opts.Tenant,
+			Range:  storage.TimeRange{Start: start, End: stop},
+			Filter: r.sourceFilter(),
+		}
+		rows, err := r.countInChunks(ctx, categories, chunk, sel, step)
 		if err != nil {
 			// A failed query is asking for less at a time, not for giving
 			// up. The cause is not always a deadline of ours: the storage
 			// enforces its own query limits and refuses with an error of its
-			// own, which looks nothing like a timeout. Any failure is worth
-			// one smaller attempt while there is still room to halve.
-			if buckets > 1 && shrinks < maxShrinkAttempts {
+			// own, which looks nothing like a timeout.
+			//
+			// There are two ways to ask for less, and time is only one of
+			// them. A window cannot be scanned in less than itself — an hour
+			// of logs is an hour of logs — so once the span is down to a
+			// single window the only remaining lever is how many services one
+			// query counts at once. Each service is its own count_uniq
+			// accumulator over every row in the window, and on a busy
+			// deployment the whole catalogue in one pass is what breaks.
+			switch {
+			case buckets > 1 && shrinks < maxShrinkAttempts:
 				buckets /= 2
 				shrinks++
 				r.learnBuckets(step, buckets)
-				r.opts.Log.Info("a service trend query failed; asking for less at a time",
+				r.opts.Log.Info("a service trend query failed; asking for less time at once",
 					"window", WindowName(step), "buckets_per_query", buckets,
+					"span", (step * time.Duration(buckets)).String(), "error", err.Error())
+				continue
+			case chunk > 1 && shrinks < maxShrinkAttempts:
+				chunk = (chunk + 1) / 2
+				shrinks++
+				r.learnChunk(step, chunk)
+				r.opts.Log.Info("a service trend query failed; asking for fewer services at once",
+					"window", WindowName(step), "services_per_query", chunk,
 					"span", (step * time.Duration(buckets)).String(), "error", err.Error())
 				continue
 			}
@@ -406,6 +424,57 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		start = stop
 	}
 	return written, recorded, nil
+}
+
+// countInChunks counts the categories, at most `chunk` of them per query.
+//
+// Categories are independent of each other — each is one conditional
+// aggregation over the same rows — so counting them in groups gives exactly
+// the same answer as counting them together, for more queries over less work
+// each. Each query is bounded on its own, so one that cannot be answered is
+// given up on rather than taking the whole run with it.
+func (r *Recorder) countInChunks(ctx context.Context, categories []storage.Category, chunk int,
+	sel storage.Selection, step time.Duration) ([]storage.CategoryRow, error) {
+	if chunk <= 0 || chunk > len(categories) {
+		chunk = len(categories)
+	}
+	var out []storage.CategoryRow
+	for i := 0; i < len(categories); i += chunk {
+		part := categories[i:min(i+chunk, len(categories))]
+		qctx, cancel := context.WithTimeout(ctx, r.opts.QueryTimeout)
+		rows, err := r.opts.Querier.CategoryCounts(qctx, storage.CategoryQuery{
+			Selection:     sel,
+			Categories:    part,
+			DistinctField: r.opts.ClientField,
+			Step:          step,
+		})
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		// Chunks cover disjoint categories, so the rows simply join: no row
+		// from one chunk can be a duplicate of a row from another.
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
+// categoriesPerQuery is how many services to count in one query: the size
+// learned from earlier failures, or all of them.
+func (r *Recorder) categoriesPerQuery(step time.Duration, total int) int {
+	if n, ok := r.chunks[WindowName(step)]; ok && n > 0 && n < total {
+		return n
+	}
+	return total
+}
+
+// learnChunk remembers a group size that worked, so the next run starts there
+// instead of failing its way down again.
+func (r *Recorder) learnChunk(step time.Duration, n int) {
+	if r.chunks == nil {
+		r.chunks = map[string]int{}
+	}
+	r.chunks[WindowName(step)] = max(n, 1)
 }
 
 // bucketsPerQuery is how many buckets to ask for at once: the size learned

@@ -208,7 +208,7 @@ func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *
 			"value":   overall.Peak,
 			"at":      overall.PeakAt,
 		}
-	} else if hint := s.emptyTrendHint(r, p); hint != "" {
+	} else if hint := s.emptyTrendHint(r, p, req.Window); hint != "" {
 		// An empty chart is almost always a setup problem rather than quiet
 		// traffic, and the usual cause is that nothing extracts the fields
 		// the rollup counts. Say so instead of drawing nothing.
@@ -286,7 +286,7 @@ func trendWindowNames() []string {
 
 // emptyTrendHint explains an empty result. It runs only when there is
 // nothing to chart, so the extra lookup costs nothing in the normal case.
-func (s *Server) emptyTrendHint(r *http.Request, p *auth.Principal) string {
+func (s *Server) emptyTrendHint(r *http.Request, p *auth.Principal, window string) string {
 	cfg := s.opts.API.Config.Analytics.ServiceTrends
 	domain := cfg.DomainField
 	if domain == "" {
@@ -313,6 +313,21 @@ func (s *Server) emptyTrendHint(r *http.Request, p *auth.Principal) string {
 		return fmt.Sprintf("No %s field was found in recent logs. DNS trends count fields pulled out of the "+
 			"message by an extract rule — add the dnsdist preset to the source receiving your DNS logs "+
 			"(Sources → the source → Extract rules), then the next rollup will have something to count.", domain)
+	}
+	// A window that keeps failing and a window that has not elapsed yet look
+	// identical from the stored samples, and telling somebody to wait for the
+	// second when it is the first wastes their afternoon.
+	if s.opts.API.TrendWindows != nil {
+		for _, w := range s.opts.API.TrendWindows() {
+			if w.Window != window || w.Failures == 0 {
+				continue
+			}
+			return fmt.Sprintf("The %s rollup is failing, so this window is not being recorded — this is not "+
+				"a matter of waiting for it to elapse. On a busy deployment the usual cause is that counting "+
+				"distinct clients across the whole catalogue over %s of logs is more than the storage will "+
+				"answer in one query. Check the server log for \"a service trend window could not be "+
+				"recorded\", which carries the storage's own reason.", window, window)
+		}
 	}
 	return "Nothing has been recorded for this window yet. The rollup records a window once it has fully " +
 		"elapsed, so a new deployment fills in from the oldest logs it was asked to backfill."

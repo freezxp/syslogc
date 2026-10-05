@@ -8,6 +8,24 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.1.1 — 2026-10-05
+
+### Fixed
+
+- On a busy deployment the hourly and daily service-trend windows could never
+  be recorded, leaving only the five-minute chart. When a query failed the
+  rollup asked for a shorter time span, but a window cannot be scanned in
+  less time than itself: at the hourly resolution the span was already one
+  window, so there was nothing left to try and it failed forever. It now
+  also reduces how many services one query counts at once — each service is
+  another `count_uniq` accumulator over the same rows, and the whole
+  catalogue in a single pass is what a deployment at tens of thousands of
+  queries a second cannot afford. Counting services in groups gives exactly
+  the same numbers, since the categories are independent.
+- An empty trend chart said the window had not elapsed yet even when the
+  rollup had been failing on it for days. It now says which it is, and that
+  the server log carries the storage's own reason.
+
 ## 1.1.0 — 2026-10-04
 
 ### Added

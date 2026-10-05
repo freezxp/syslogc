@@ -29,6 +29,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metrics"
 	"github.com/freezxp/syslogc/backend/internal/metricstore"
 	"github.com/freezxp/syslogc/backend/internal/query"
+	"github.com/freezxp/syslogc/backend/internal/servicetrends"
 	"github.com/freezxp/syslogc/backend/internal/storage"
 )
 
@@ -55,6 +56,9 @@ type APIDeps struct {
 	ServiceTrends ServiceTrendReader
 	// Retention returns the current retention status (for /system/storage).
 	Retention func() any
+	// TrendWindows reports how each service-trend window is faring; nil when
+	// the rollup is not running on this node.
+	TrendWindows func() []servicetrends.WindowStatus
 	// Sources returns source statuses; nil without the ingest role.
 	Sources func() []supervisor.Status
 	// FileSources are the sources defined in the configuration file; they

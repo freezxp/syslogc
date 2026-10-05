@@ -292,6 +292,7 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 	deps := &api.APIDeps{
 		Auth: authSvc, Store: a.store, Query: querySvc, Storage: a.backend,
 		ServiceTrends: a.serviceTrendReader(),
+		TrendWindows:  a.trendWindows,
 		Certificates:  a.certificateStatuses,
 		Retention:     func() any { return a.retention.Load() },
 		FileSources:   cfg.Ingestion.Sources,
@@ -916,4 +917,14 @@ func (a *App) serviceTrendReader() api.ServiceTrendReader {
 		return nil
 	}
 	return a.metricStore
+}
+
+// trendWindows reports how each rollup window is faring, so an empty chart
+// can distinguish "this window has not elapsed yet" from "this window keeps
+// failing" — which look identical from the stored samples alone.
+func (a *App) trendWindows() []servicetrends.WindowStatus {
+	if a.trends == nil {
+		return nil
+	}
+	return a.trends.Status()
 }

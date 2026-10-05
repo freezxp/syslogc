@@ -925,3 +925,85 @@ func TestStatusReportsWhatMonitoringNeeds(t *testing.T) {
 		t.Error("a window that could not be recorded was not counted")
 	}
 }
+
+// crowdedQuerier refuses a query that counts too many services at once,
+// however short its range. That is what a busy deployment looks like: every
+// service is another count_uniq accumulator over the same rows, and an hour
+// of logs cannot be scanned in less than an hour, so shrinking the time span
+// alone never makes the query affordable.
+type crowdedQuerier struct {
+	fakeQuerier
+	affordable int
+	refusals   int
+}
+
+func (c *crowdedQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	if len(q.Categories) > c.affordable {
+		c.refusals++
+		// The storage enforces its own limits and says so in its own words.
+		return nil, errors.New("cannot execute query: too many unique values")
+	}
+	return c.fakeQuerier.CategoryCounts(ctx, q)
+}
+
+func TestARollupAsksForFewerServicesWhenTimeCannotShrinkFurther(t *testing.T) {
+	now := time.Date(2026, 10, 5, 3, 7, 0, 0, time.UTC)
+	var services []Service
+	for i := range 27 {
+		services = append(services, Service{
+			Name: fmt.Sprintf("service-%02d", i), Domains: []string{fmt.Sprintf("s%d.example", i)}, Enabled: true,
+		})
+	}
+	q := &crowdedQuerier{affordable: 7}
+	w := &fakeWriter{}
+	state := State{}
+	r, err := NewRecorder(Options{
+		Querier:     q,
+		Writer:      w,
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog:     func(context.Context) (Catalog, error) { return Catalog{Services: services}, nil },
+		LoadState:   func(context.Context) (State, error) { return state, nil },
+		SaveState:   func(_ context.Context, s State) error { state = s; return nil },
+		Base:        5 * time.Minute,
+		Backfill:    6 * time.Hour,
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the rollup gave up instead of asking for fewer services: %v", err)
+	}
+	if q.refusals == 0 {
+		t.Fatal("the test did not exercise a refusal")
+	}
+
+	// The hourly window is the one that used to be impossible: its span is
+	// already a single window, so without this there is nothing left to try.
+	if state["1h"].IsZero() {
+		t.Error("the hourly window was never recorded")
+	}
+	if state["5m"].IsZero() {
+		t.Error("the five-minute window was never recorded")
+	}
+	for _, got := range q.queries {
+		if len(got.Categories) > q.affordable {
+			t.Fatalf("a query counted %d services at once, more than the %d this storage accepts",
+				len(got.Categories), q.affordable)
+		}
+	}
+	// Every service must still be counted — splitting the catalogue must not
+	// quietly drop the ones that fell off the end of a chunk.
+	seen := map[string]bool{}
+	for _, s := range w.samples {
+		if s.Labels["window"] == "1h" {
+			seen[s.Labels["service"]] = true
+		}
+	}
+	if len(seen) != len(services) {
+		t.Errorf("recorded %d services in the hourly window, want all %d", len(seen), len(services))
+	}
+}
