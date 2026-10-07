@@ -259,12 +259,14 @@ func mssqlPart() Part {
 				Contains: "Login failed for user",
 				Regex:    `Login failed for user '(?P<login_user>[^']*)'`,
 				Prefix:   "mssql.",
+				Additive: true,
 			},
 			{
 				Name:     "mssql-client",
 				Contains: "[CLIENT:",
 				Regex:    `\[CLIENT: (?P<client_ip>[^\]]+)\]`,
 				Prefix:   "mssql.",
+				Additive: true,
 			},
 		},
 		Fields: []Field{
@@ -316,6 +318,7 @@ func iisPart() Part {
 		},
 		Fields: []Field{
 			{Name: "iis.status", Description: "The response code", Example: "404"},
+			{Name: "iis.substatus", Description: "IIS's own further reason for it, which is what tells a 401 apart from a 401", Example: "2"},
 			{Name: "iis.uri", Description: "The path requested, without the query string", Example: "/app/login"},
 			{Name: "iis.method", Description: "The HTTP method", Example: "POST"},
 			{Name: "iis.client_ip", Description: "Who asked", Example: "203.0.113.9"},

@@ -334,6 +334,63 @@ paths:
         "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/SeriesResponse"}}}}
         "422": {$ref: "#/components/responses/Problem"}
 
+  /api/v1/analytics/mssql:
+    post:
+      tags: [analytics]
+      summary: Everything the SQL Server page shows, in one answer
+      description: |
+        Needs a source carrying the `mssql` part of the Windows template,
+        which is what writes the `mssql.*` fields this reads.
+
+        Every number is counted from SQL Server's error numbers, because the
+        sentence beside a number is written in the server's own language.
+        `severe_errors` counts the I/O and consistency errors (823, 824), the
+        transaction log filling (9002), memory running out (701) and the
+        scheduler stalling (17883, 17884). It deliberately excludes 825,
+        which is a read that succeeded after a retry: nothing was lost, so it
+        is counted on its own as `read_retries`.
+
+        `sign_ins` is zero on an instance whose login auditing was left at
+        failures only, which is the default on many builds — zero there means
+        "not recorded", not "nobody signed in". A zero deadlock count is
+        likewise not proof: SQL Server reports 1205 to the client that lost,
+        and it reaches the Windows Application channel only where the message
+        is marked as logged or the deadlock trace flags are on.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/AnalysisRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/MSSQLResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
+  /api/v1/analytics/iis:
+    post:
+      tags: [analytics]
+      summary: Everything the IIS page shows, in one answer
+      description: |
+        Needs a source carrying the `iis` part of the Windows template, which
+        is what writes the `iis.*` fields this reads.
+
+        The class counts need not add up to `requests`: a line whose
+        `iis.status` could not be read as a code between 100 and 599 belongs
+        to no class, and the difference is left visible rather than absorbed
+        by one of them.
+
+        There is no average or worst response time. `iis.time_taken` arrives
+        as text and the store cannot sum or average a field, so "slow" is
+        answered by counting the requests at or above
+        `slow_threshold_millis`, and `slow_urls` ranks URLs by how many slow
+        requests they had — not by how slow they were.
+
+        Distinct counts (`clients`, `urls`, `servers`) are counted over the
+        whole resolved range, because they cannot be added across buckets.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/IISRequest"}}}
+      responses:
+        "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/IISResponse"}}}}
+        "422": {$ref: "#/components/responses/Problem"}
+
   /api/v1/dashboard/overview:
     post:
       tags: [dashboard]
@@ -1065,6 +1122,183 @@ components:
               total: {type: number}
               points: {type: array, items: {type: number}, description: Aligned with `timestamps`}
         stats: {$ref: "#/components/schemas/SearchStats"}
+
+    AnalysisRequest:
+      type: object
+      description: |
+        A window of one source-template analysis. Native query text is not
+        accepted here: these endpoints build their own aggregations.
+      required: [time_range]
+      properties:
+        time_range: {$ref: "#/components/schemas/TimeRange"}
+        filter: {$ref: "#/components/schemas/FilterExpr"}
+        buckets: {type: integer, minimum: 1, maximum: 1000, default: 120, description: Points the activity chart should hold}
+        limit: {type: integer, minimum: 1, maximum: 500, default: 100, description: Caps the lists}
+
+    AnalysisCount:
+      type: object
+      required: [value, count]
+      properties:
+        value: {type: string}
+        label: {type: string, description: "`value` said in words, where there is a better way to say it"}
+        count: {type: integer}
+
+    AnalysisSeries:
+      type: object
+      description: |
+        Counted events over time. Each line's `points` aligns index-for-index
+        with `timestamps`, and counts messages rather than distinct values,
+        because distinct counts cannot be added across buckets.
+      required: [step_seconds, timestamps, lines]
+      properties:
+        step_seconds: {type: integer}
+        timestamps: {type: array, items: {type: string, format: date-time}}
+        lines:
+          type: array
+          items:
+            type: object
+            required: [name, label, points, total]
+            properties:
+              name: {type: string}
+              label: {type: string}
+              points: {type: array, items: {type: integer}}
+              total: {type: integer}
+
+    MSSQLResponse:
+      type: object
+      required: [resolved_range, overview, activity]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        overview:
+          type: object
+          required: [sign_in_failures, sign_ins, failed_accounts, failure_sources, deadlocks, severe_errors, read_retries, backups, instances, hosts]
+          properties:
+            sign_in_failures: {type: integer, description: Event 18456}
+            sign_ins: {type: integer, description: "Events 18453 and 18454; zero means not recorded"}
+            failed_accounts: {type: integer, description: Distinct accounts a failed sign-in was for, over the resolved range}
+            failure_sources: {type: integer, description: Distinct addresses those attempts came from}
+            deadlocks: {type: integer, description: Event 1205}
+            severe_errors: {type: integer, description: "Events 823, 824, 9002, 701, 17883, 17884 — not 825"}
+            read_retries: {type: integer, description: "Event 825: a read that succeeded after failing. A warning, not a failure."}
+            backups: {type: integer, description: "Event 18264. Log backups (18265) are not counted here."}
+            instances: {type: integer, description: Distinct instances that sent anything, over the resolved range}
+            hosts: {type: integer}
+        activity: {$ref: "#/components/schemas/AnalysisSeries"}
+        problems:
+          type: array
+          description: |
+            What went wrong, newest first. Failed sign-ins are left out:
+            there are usually thousands and they would bury the one
+            consistency error that matters.
+          items: {$ref: "#/components/schemas/MSSQLProblem"}
+        failed_accounts: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Accounts behind the 18456s}
+        failure_sources: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Addresses behind the 18456s}
+        top_errors: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: "Error numbers, with `label` explaining each"}
+        top_messages:
+          type: array
+          description: |
+            The commonest problem messages. Read it as "the text that
+            repeated": SQL Server writes the database, file, page and byte
+            offset into the sentence, so two errors about one broken file
+            group as two messages while a hundred identical log-full warnings
+            group as one. `top_errors` is the honest ranking of what went
+            wrong most.
+          items: {$ref: "#/components/schemas/AnalysisCount"}
+        by_instance: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Problem events per `mssql.provider`}
+        by_host: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Problem events per `mssql.host`}
+
+    MSSQLProblem:
+      type: object
+      required: [at, event, what, kind]
+      properties:
+        at: {type: string, format: date-time}
+        event: {type: string, description: The SQL Server error number, example: "824"}
+        what: {type: string, description: What it means, in words}
+        kind: {type: string, enum: [login_failure, login_success, deadlock, corruption, resource, scheduler, backup, unknown]}
+        instance: {type: string}
+        host: {type: string}
+        account: {type: string, description: Read out of the message text, so present only on a failed sign-in}
+        client_ip: {type: string, description: Likewise}
+        message: {type: string, description: The event text. The database, file, page and offset are only in here.}
+
+    IISRequest:
+      allOf:
+        - $ref: "#/components/schemas/AnalysisRequest"
+        - type: object
+          properties:
+            slow_millis:
+              type: integer
+              minimum: 1
+              default: 1000
+              description: |
+                The threshold above which a request counts as slow. It is a
+                request parameter because what counts as slow is a property
+                of the site, not of the log.
+
+    IISResponse:
+      type: object
+      required: [resolved_range, overview, activity]
+      properties:
+        resolved_range: {$ref: "#/components/schemas/ResolvedRange"}
+        overview:
+          type: object
+          required: [requests, informational, succeeded, redirected, client_errors, server_errors, auth_failures, slow_requests, slow_threshold_millis, clients, urls, servers]
+          properties:
+            requests: {type: integer, description: Every request in the window, readable status or not}
+            informational: {type: integer, description: 1xx}
+            succeeded: {type: integer, description: 2xx}
+            redirected: {type: integer, description: 3xx}
+            client_errors: {type: integer, description: 4xx}
+            server_errors: {type: integer, description: 5xx}
+            auth_failures: {type: integer, description: "401s. Also counted in `client_errors`."}
+            slow_requests: {type: integer, description: Requests at or above `slow_threshold_millis`}
+            slow_threshold_millis: {type: integer}
+            clients: {type: integer, description: Distinct `iis.client_ip` over the resolved range}
+            urls: {type: integer}
+            servers: {type: integer}
+        activity: {$ref: "#/components/schemas/AnalysisSeries"}
+        server_errors: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: URLs behind the 5xxs}
+        client_errors: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: URLs behind the 4xxs}
+        recent_server_errors: {type: array, items: {$ref: "#/components/schemas/IISRequestRow"}, description: The 5xxs themselves, newest first}
+        slow_urls:
+          type: array
+          description: |
+            URLs ranked by how many of their requests were slow — not by how
+            slow they were. A page called once that took a minute will not
+            appear above a page called ten thousand times of which fifty were
+            slow.
+          items: {$ref: "#/components/schemas/AnalysisCount"}
+        top_urls: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}}
+        top_clients: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}}
+        status_codes: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: "Response codes, with `label` explaining each"}
+        auth_failure_accounts: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Accounts behind the 401s}
+        auth_failure_sources: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}}
+        auth_failure_reasons:
+          type: array
+          description: |
+            IIS's own sub-status for each 401, with `label` explaining it.
+            The number after the dot is IIS's rather than HTTP's, and it is
+            the difference between a wrong password and a permission on a
+            folder.
+          items: {$ref: "#/components/schemas/AnalysisCount"}
+        by_server: {type: array, items: {$ref: "#/components/schemas/AnalysisCount"}, description: Requests per `iis.server_ip`}
+
+    IISRequestRow:
+      type: object
+      required: [at, status]
+      properties:
+        at: {type: string, format: date-time}
+        status: {type: string, example: "500"}
+        class: {type: string, enum: [1xx, 2xx, 3xx, 4xx, 5xx], description: Omitted when `status` is not a code between 100 and 599}
+        substatus: {type: string}
+        method: {type: string}
+        uri: {type: string}
+        query: {type: string}
+        client_ip: {type: string}
+        username: {type: string}
+        user_agent: {type: string}
+        server_ip: {type: string}
+        time_taken_millis: {type: integer, description: Omitted when IIS wrote something that is not a number}
 
     SourceConfig:
       type: object
