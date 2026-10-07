@@ -34,9 +34,9 @@ type Settings struct {
 	Norm normalization.Source
 	// Extract pulls fields out of the message; nil when none are configured.
 	Extract *extract.Extractor
-	// ExtractJSON reads the message as a structured record; nil unless the
+	// ExtractJSON reads the message as a structured record; empty unless the
 	// source's template says its sender emits one.
-	ExtractJSON *extract.JSONExtractor
+	ExtractJSON []*extract.JSONExtractor
 	Metrics     *metrics.SourceMetrics
 }
 
@@ -121,12 +121,27 @@ func New(cfg config.Source, m *metrics.Metrics) (*Settings, error) {
 	// A template may read the sender's own structured output instead of
 	// matching text, which is what makes a source robust to the sender
 	// writing its messages in another language.
-	if t, ok := sourcetemplate.ByID(cfg.Template); ok && t.JSON != nil {
-		j, err := extract.NewJSON(extract.JSONConfig{Prefix: t.JSON.Prefix, Keys: t.JSON.Keys})
-		if err != nil {
-			return nil, fmt.Errorf("source %s: template %s: %w", cfg.Name, t.ID, err)
+	if t, ok := sourcetemplate.ByID(cfg.Template); ok {
+		rules := []*sourcetemplate.JSONExtract{}
+		if t.JSON != nil {
+			rules = append(rules, t.JSON)
 		}
-		s.ExtractJSON = j
+		// A template built from parts contributes one rule per part the
+		// source carries. Each is restricted to its own records, so a server
+		// sending its Security log, SQL Server log and IIS log down one
+		// connection still gets three different sets of fields.
+		for _, part := range t.SelectedParts(templateParts(cfg)) {
+			if part.JSON != nil {
+				rules = append(rules, part.JSON)
+			}
+		}
+		for _, r := range rules {
+			j, err := extract.NewJSON(extract.JSONConfig{Prefix: r.Prefix, Keys: r.Keys, When: r.When})
+			if err != nil {
+				return nil, fmt.Errorf("source %s: template %s: %w", cfg.Name, t.ID, err)
+			}
+			s.ExtractJSON = append(s.ExtractJSON, j)
+		}
 	}
 	s.Metrics = m.Source(cfg.Name, s.Protocol)
 	return s, nil
@@ -144,4 +159,13 @@ func (s *Settings) Allowed(addr netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+// templateParts is the parts a source carries: the ones it names, or the
+// defaults implied by the template id it was saved with.
+func templateParts(cfg config.Source) []string {
+	if len(cfg.TemplateParts) > 0 {
+		return cfg.TemplateParts
+	}
+	return sourcetemplate.DefaultParts(cfg.Template)
 }

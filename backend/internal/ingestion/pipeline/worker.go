@@ -100,11 +100,18 @@ func (w *worker) process(msg *RawMessage) {
 	// field names are better than anything matched out of text, and a
 	// pattern rule can still add to what it produced.
 	structured := false
-	if src.ExtractJSON != nil {
-		structured = src.ExtractJSON.Apply(e)
-		if structured {
-			src.Metrics.Extracted("json").Inc()
+	// A source may carry several kinds of record — a Windows server sends
+	// its Security log, its SQL Server log and its IIS log down one
+	// connection — so every rule is offered the message and each one decides
+	// whether it is about this record. One of them recognising it as JSON is
+	// enough to call the message structured.
+	for _, j := range src.ExtractJSON {
+		if j.Apply(e) {
+			structured = true
 		}
+	}
+	if structured {
+		src.Metrics.Extracted("json").Inc()
 	}
 	if src.Extract != nil {
 		if rule := src.Extract.Apply(e); rule != "" {

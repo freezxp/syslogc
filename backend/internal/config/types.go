@@ -268,6 +268,10 @@ type Source struct {
 	// offered: a page that reads fields nothing produces is hidden rather
 	// than shown empty.
 	Template string `koanf:"template" json:"template,omitempty"`
+	// TemplateParts are the parts of that template this source carries, for
+	// templates that have them. Empty means the template's own defaults, so
+	// a source written before parts existed keeps its behaviour.
+	TemplateParts []string `koanf:"template_parts" json:"template_parts,omitempty"`
 
 	UDP UDPConfig `koanf:"udp" json:"udp,omitempty"`
 	TLS TLSConfig `koanf:"tls" json:"tls,omitempty"`
