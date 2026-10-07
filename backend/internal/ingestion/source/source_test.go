@@ -1,6 +1,7 @@
 package source
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -161,5 +162,48 @@ func TestTheGeneratedNXLogConfigMatchesTheChosenParts(t *testing.T) {
 	// records apart once they share a connection.
 	if n := strings.Count(cfg, "$syslogc_part ="); n != 2 {
 		t.Errorf("found %d marker assignments, want one per chosen part", n)
+	}
+}
+
+// SQL Server does not give the account or the address a field of their own:
+// both are inside the message. These are read out of it, so they have to
+// survive being embedded in the JSON record the sender actually transmits.
+func TestSQLServerLoginFailureNamesTheAccountAndTheAddress(t *testing.T) {
+	s := windowsSource(t, "windows-server", []string{sourcetemplate.PartMSSQL})
+	// A real 18456, as NXLog transmits it: the message is a JSON string, so
+	// its double quotes are escaped and its single quotes are not.
+	raw, err := json.Marshal(map[string]any{
+		"syslogc_part": "mssql",
+		"EventID":      18456,
+		"SourceName":   "MSSQLSERVER",
+		"Severity":     "ERROR",
+		"Message": "Login failed for user 'sa'. Reason: Password did not match that for the login provided. " +
+			"[CLIENT: 10.20.4.19]",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := &logentry.Entry{Message: string(raw)}
+	for _, j := range s.ExtractJSON {
+		j.Apply(e)
+	}
+	if s.Extract == nil {
+		t.Fatal("the part's rules were not compiled, so the account and address can never be read")
+	}
+	s.Extract.Apply(e)
+
+	got := map[string]string{}
+	for _, f := range e.Fields {
+		got[f.Key] = f.Value
+	}
+	for name, want := range map[string]string{
+		"mssql.event_id":   "18456",
+		"mssql.login_user": "sa",
+		"mssql.client_ip":  "10.20.4.19",
+	} {
+		if got[name] != want {
+			t.Errorf("%s = %q, want %q", name, got[name], want)
+		}
 	}
 }

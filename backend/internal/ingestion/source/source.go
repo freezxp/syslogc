@@ -107,11 +107,22 @@ func New(cfg config.Source, m *metrics.Metrics) (*Settings, error) {
 		HostnameFallbackIP: cfg.HostnameFallback == config.HostnameFallbackIP,
 		Labels:             normalization.LabelFields(cfg.Labels),
 	}
-	if len(cfg.Extract) > 0 {
-		rules := make([]extract.Config, 0, len(cfg.Extract))
-		for _, r := range cfg.Extract {
-			rules = append(rules, extract.Config{Name: r.Name, Contains: r.Contains, Regex: r.Regex, Prefix: r.Prefix})
+	rules := make([]extract.Config, 0, len(cfg.Extract))
+	for _, r := range cfg.Extract {
+		rules = append(rules, extract.Config{Name: r.Name, Contains: r.Contains, Regex: r.Regex, Prefix: r.Prefix})
+	}
+	// A part may need a value the sender buries in the message text rather
+	// than giving a field of its own — SQL Server names the account and the
+	// address inside the sentence. These rules belong to the part rather than
+	// to the source, so they are compiled here instead of being copied into
+	// the source's own rules, where editing them would silently break the
+	// analysis that reads them. The source's own rules are tried first.
+	if t, ok := sourcetemplate.ByID(cfg.Template); ok {
+		for _, part := range t.SelectedParts(templateParts(cfg)) {
+			rules = append(rules, part.Extract...)
 		}
+	}
+	if len(rules) > 0 {
 		ex, err := extract.New(rules)
 		if err != nil {
 			return nil, fmt.Errorf("source %s: %w", cfg.Name, err)

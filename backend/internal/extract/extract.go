@@ -34,8 +34,12 @@ type Rule struct {
 	Contains string
 	// Prefix is prepended to every field name the rule produces.
 	Prefix string
-	re     *regexp.Regexp
-	names  []string
+	// Additive marks a rule that reads one value out of a message rather
+	// than describing its whole shape, so matching it does not stop the
+	// rules after it.
+	Additive bool
+	re       *regexp.Regexp
+	names    []string
 }
 
 // Extractor applies rules to an entry.
@@ -51,6 +55,16 @@ type Config struct {
 	Contains string `json:"contains,omitempty"`
 	Regex    string `json:"regex"`
 	Prefix   string `json:"prefix,omitempty"`
+	// Additive marks a rule that reads one value out of a message rather
+	// than describing its whole shape, so matching it does not stop the
+	// rules after it.
+	//
+	// The default is the opposite because most rules do describe a whole
+	// shape — a dnsdist query line is one thing, and once it has matched
+	// there is nothing left for another rule to find. A SQL Server event is
+	// the other kind: the account and the client address sit in different
+	// parts of one sentence, and both are wanted.
+	Additive bool `json:"additive,omitempty"`
 }
 
 // New compiles rules. Every rule must have at least one named capture group,
@@ -93,7 +107,8 @@ func New(cfgs []Config) (*Extractor, error) {
 				return nil, fmt.Errorf("extract %s: prefix %q: %w", name, c.Prefix, err)
 			}
 		}
-		e.rules = append(e.rules, Rule{Name: name, Contains: c.Contains, Prefix: c.Prefix, re: re, names: re.SubexpNames()})
+		e.rules = append(e.rules, Rule{Name: name, Contains: c.Contains, Prefix: c.Prefix,
+			Additive: c.Additive, re: re, names: re.SubexpNames()})
 	}
 	return e, nil
 }
@@ -117,6 +132,9 @@ func (e *Extractor) Apply(entry *logentry.Entry) string {
 	if e == nil || len(e.rules) == 0 || entry.Message == "" {
 		return ""
 	}
+	// The name reported is the first rule that matched, which is what the
+	// metric counts; additive rules after it still get to add their fields.
+	matched := ""
 	for i := range e.rules {
 		r := &e.rules[i]
 		if r.Contains != "" && !strings.Contains(entry.Message, r.Contains) {
@@ -133,9 +151,14 @@ func (e *Extractor) Apply(entry *logentry.Entry) string {
 			}
 			entry.AddField(r.Prefix+name, value)
 		}
-		return r.Name
+		if matched == "" {
+			matched = r.Name
+		}
+		if !r.Additive {
+			return matched
+		}
 	}
-	return ""
+	return matched
 }
 
 // validFieldName rejects names that would be unusable as log fields.
