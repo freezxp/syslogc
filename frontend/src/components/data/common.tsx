@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/overlay'
 import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/cn'
+import { formatCount, formatDuration, formatExact } from '@/lib/format'
 import { severityColor, severityLabel } from '@/lib/severity'
 
 export function SeverityBadge({ severity, className }: { severity: string | undefined; className?: string }) {
@@ -120,11 +121,80 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cn('skeleton', className)} />
 }
 
+/**
+ * One headline number on an analysis page. The tone is a second signal only:
+ * what it means is always in the note underneath, so nothing here is said by
+ * colour alone.
+ */
+export interface StatTileSpec {
+  label: string
+  value: number
+  note: string
+  tone: 'neutral' | 'warn' | 'alert'
+  /** Milliseconds rather than a count, so it reads as a duration. */
+  unit?: 'ms'
+  /**
+   * The number is absent rather than zero — the sender does not record it at
+   * all. Shown as a dash, because a nought somebody believes is worse than no
+   * answer: "0 successful sign-ins" reads as a domain where nobody signed in.
+   */
+  missing?: boolean
+}
+
+const TILE_TONES: Record<StatTileSpec['tone'], string> = {
+  neutral: 'border-border',
+  warn: 'border-warning/40',
+  alert: 'border-danger/40',
+}
+
+export function StatTile({ tile, loading }: { tile: StatTileSpec; loading: boolean }) {
+  const shown = tile.unit === 'ms' ? formatDuration(tile.value / 1000) : formatCount(tile.value)
+  const exact = tile.unit === 'ms' ? `${formatExact(tile.value)} ms` : formatExact(tile.value)
+  return (
+    <li className={cn('min-w-0 rounded-md border bg-surface p-2.5', TILE_TONES[tile.tone])}>
+      <div className="flex items-center gap-1.5">
+        {tile.tone !== 'neutral' && (
+          <AlertTriangle
+            className={cn('size-3.5 shrink-0', tile.tone === 'alert' ? 'text-danger' : 'text-warning')}
+            aria-hidden
+          />
+        )}
+        <h3 className="truncate text-xs tracking-wide text-muted uppercase">{tile.label}</h3>
+      </div>
+      {loading ? (
+        <Skeleton className="mt-1 h-7 w-16" />
+      ) : tile.missing ? (
+        <p className="mono text-2xl text-subtle" title="Not recorded by the sender">
+          —
+        </p>
+      ) : (
+        <p className="mono text-2xl tabular-nums" title={exact}>
+          {shown}
+        </p>
+      )}
+      <p className="text-xs text-subtle">{tile.note}</p>
+    </li>
+  )
+}
+
 export function Kbd({ children }: { children: ReactNode }) {
   return (
     <kbd className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border-strong bg-surface-2 px-1 font-mono text-[10px] text-muted">
       {children}
     </kbd>
+  )
+}
+
+/**
+ * A value the sender did not record, which is a different thing from an empty
+ * one: Windows leaves the address off a Kerberos failure and IIS leaves the
+ * account off an anonymous request, and a blank cell would read as a bug.
+ */
+export function NotRecorded() {
+  return (
+    <span className="text-subtle" title="Not recorded in the event">
+      —
+    </span>
   )
 }
 

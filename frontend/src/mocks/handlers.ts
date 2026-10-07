@@ -22,9 +22,13 @@ import type {
   ForwardTargetInput,
   ForwardTargetStatus,
   HistogramRequest,
+  IISRequest,
   LogRow,
+  IISRequestRow,
   ManagedForwardTarget,
   ManagedSource,
+  MSSQLProblem,
+  MSSQLRequest,
   Problem,
   RetentionUpdateInput,
   SourceACMEStatus,
@@ -623,7 +627,7 @@ let managedSources: ManagedSource[] = [
   {
     // A domain controller shipping its Security channel, which is what unlocks
     // the Active Directory analysis: without an enabled source carrying the
-    // template, that view is not offered at all.
+    // template — and that part of it — the view is not offered at all.
     id: '0192f0c4-3333-7000-8000-000000000006',
     config: {
       name: 'ad-dc',
@@ -637,7 +641,8 @@ let managedSources: ManagedSource[] = [
       sd_flatten: 'full',
       allowed_cidrs: ['10.10.0.0/16'],
       labels: { site: 'dc1', env: 'prod' },
-      template: 'active-directory',
+      template: 'windows-server',
+      template_parts: ['active-directory'],
       tls: { cert_file: '/etc/syslogc/tls/logs.crt', key_file: '/etc/syslogc/tls/logs.key', min_version: '1.2' },
     },
     enabled: true,
@@ -654,6 +659,41 @@ let managedSources: ManagedSource[] = [
     created_at: new Date(NOW - 9 * 86400_000).toISOString(),
     updated_at: new Date(NOW - 31 * 3600_000).toISOString(),
     version: 2,
+  },
+  {
+    // An application server carrying the other two parts of the same template.
+    // Two sources rather than one so the parts in use are gathered across them,
+    // which is what `parts_in_use` is for: the same template, different parts.
+    id: '0192f0c4-3333-7000-8000-000000000009',
+    config: {
+      name: 'win-app01',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6516',
+      format: 'rfc5424',
+      timezone: 'UTC',
+      raw_message: 'on_error',
+      hostname_fallback: 'ip',
+      sd_flatten: 'full',
+      labels: { site: 'dc1', env: 'prod' },
+      template: 'windows-server',
+      template_parts: ['mssql', 'iis'],
+      tls: { cert_file: '/etc/syslogc/tls/logs.crt', key_file: '/etc/syslogc/tls/logs.key', min_version: '1.2' },
+    },
+    enabled: true,
+    origin: 'database',
+    status: {
+      name: 'win-app01',
+      type: 'syslog',
+      protocol: 'tls',
+      address: ':6516',
+      state: 'running',
+      since: new Date(NOW - 26 * 3600_000).toISOString(),
+      origin: 'database',
+    },
+    created_at: new Date(NOW - 5 * 86400_000).toISOString(),
+    updated_at: new Date(NOW - 26 * 3600_000).toISOString(),
+    version: 1,
   },
   {
     // The one that simply works, so the success state has something to be.
@@ -1313,56 +1353,6 @@ function catalogValidationError(services: TrendService[]): Response | null {
 
 // ---- source templates --------------------------------------------------------
 
-/**
- * A complete, working NXLog configuration for a domain controller, as the
- * server ships it. It is the thing somebody actually copies, so the mock
- * carries it verbatim rather than a placeholder: the setup guide is what this
- * screen is for before any log has ever arrived.
- */
-const NXLOG_CONFIG = `## Syslogc — Windows Security log
-## Install NXLog Community Edition, then replace nxlog.conf with this and
-## restart the nxlog service.
-
-define SYSLOGC_HOST syslog.example.com
-define SYSLOGC_PORT 6514
-
-<Extension json>
-    Module  xm_json
-</Extension>
-
-<Extension syslog>
-    Module  xm_syslog
-</Extension>
-
-<Input security>
-    Module  im_msvistalog
-    # The whole Security channel. Audit policy decides what lands in it; see
-    # the step below.
-    <QueryXML>
-        <QueryList>
-            <Query Id="0">
-                <Select Path="Security">*</Select>
-            </Query>
-        </QueryList>
-    </QueryXML>
-</Input>
-
-<Output syslogc>
-    Module  om_ssl
-    Host    %SYSLOGC_HOST%
-    Port    %SYSLOGC_PORT%
-    # Set to TRUE only while testing against a self-signed certificate.
-    AllowUntrusted FALSE
-
-    Exec    $Message = to_json();
-    Exec    $SyslogFacility = 'AUDIT';
-    Exec    to_syslog_ietf();
-</Output>
-
-<Route security_to_syslogc>
-    Path    security => syslogc
-</Route>`
-
 const AD_AUDIT_POLICY = `:: Run on each domain controller, elevated.
 :: Sign-in activity
 auditpol /set /subcategory:"Logon" /success:enable /failure:enable
@@ -1383,6 +1373,113 @@ auditpol /set /subcategory:"Computer Account Management" /success:enable /failur
 :: Policy changes
 auditpol /set /subcategory:"Audit Policy Change" /success:enable /failure:enable
 auditpol /set /subcategory:"Authentication Policy Change" /success:enable /failure:enable`
+
+const MSSQL_AUDIT = `-- Run as sysadmin, then restart the SQL Server service.
+-- 3 = both failed and successful logins. 2 is failures only, which is the
+-- default on many builds and hides every successful sign-in.
+EXEC xp_instance_regwrite
+    N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer',
+    N'AuditLevel', REG_DWORD, 3;`
+
+const IIS_FIELDS = `:: Run elevated, then: iisreset
+:: Sets the W3C fields the analysis reads, for every site.
+%windir%\\system32\\inetsrv\\appcmd set config /section:httpLogging /dontLog:False
+%windir%\\system32\\inetsrv\\appcmd set config /section:sites ^
+  /siteDefaults.logFile.logFormat:W3C ^
+  /siteDefaults.logFile.logExtFileFlags:"Date,Time,ServerIP,Method,UriStem,UriQuery,ServerPort,UserName,ClientIP,UserAgent,Referer,HttpStatus,HttpSubStatus,Win32Status,TimeTaken"`
+
+/**
+ * The generated NXLog configuration, assembled from the parts a source carries,
+ * exactly as the server assembles it: a header, one input block per part, one
+ * output, and one route carrying them all. It is the thing somebody actually
+ * copies, so the mock carries it verbatim rather than a placeholder — the setup
+ * guide is what this screen is for before any log has ever arrived.
+ */
+const NXLOG_HEADER = `## Syslogc — Microsoft Windows Server
+## Install NXLog Community Edition, then replace nxlog.conf with this and
+## restart the service:  Restart-Service nxlog
+
+define SYSLOGC_HOST syslog.example.com
+define SYSLOGC_PORT 6514
+
+<Extension json>
+    Module  xm_json
+</Extension>
+
+<Extension syslog>
+    Module  xm_syslog
+</Extension>`
+
+const NXLOG_OUTPUT = `<Output syslogc>
+    Module  om_ssl
+    Host    %SYSLOGC_HOST%
+    Port    %SYSLOGC_PORT%
+    # Set to TRUE only while testing against a self-signed certificate.
+    AllowUntrusted FALSE
+
+    Exec    $Message = to_json();
+    Exec    $SyslogFacility = 'AUDIT';
+    Exec    to_syslog_ietf();
+</Output>`
+
+/** Part id → the input block it contributes, and the route name it is given. */
+const NXLOG_INPUTS: Record<string, { name: string; block: string }> = {
+  'active-directory': {
+    name: 'ad',
+    block: `<Input ad>
+    Module  im_msvistalog
+    # The whole Security channel. Audit policy decides what lands in it.
+    <QueryXML>
+        <QueryList>
+            <Query Id="0">
+                <Select Path="Security">*</Select>
+            </Query>
+        </QueryList>
+    </QueryXML>
+    Exec    $syslogc_part = 'ad';
+</Input>`,
+  },
+  mssql: {
+    name: 'mssql',
+    block: `<Input mssql>
+    Module  im_msvistalog
+    <QueryXML>
+        <QueryList>
+            <Query Id="0">
+                <Select Path="Application">*</Select>
+            </Query>
+        </QueryList>
+    </QueryXML>
+    # Keeps SQL Server's own events, including named instances, and drops the
+    # rest of the Application log.
+    Exec    if not ($SourceName =~ /^MSSQL/) drop();
+    Exec    $syslogc_part = 'mssql';
+</Input>`,
+  },
+  iis: {
+    name: 'iis',
+    block: `<Extension iis_w3c>
+    Module      xm_csv
+    Fields      $date, $time, $s_ip, $cs_method, $cs_uri_stem, $cs_uri_query, $s_port, \\
+                $cs_username, $c_ip, $cs_user_agent, $cs_referer, $sc_status, \\
+                $sc_substatus, $sc_win32_status, $time_taken
+    Delimiter   ' '
+    QuoteChar   '"'
+    EscapeControl FALSE
+</Extension>
+
+<Input iis>
+    Module      im_file
+    File        'C:\\inetpub\\logs\\LogFiles\\W3SVC*\\*.log'
+    SavePos     TRUE
+    # IIS writes #Software, #Fields and so on at the top of every file.
+    Exec        if $raw_event =~ /^#/ drop();
+    Exec        iis_w3c->parse_csv();
+    Exec        delete($raw_event);
+    Exec        $syslogc_part = 'iis';
+</Input>`,
+  },
+}
 
 const DNSCOLLECTOR_OUTPUT = `  - name: out
     syslog:
@@ -1438,85 +1535,196 @@ const TEMPLATES: Omit<SourceTemplate, 'in_use' | 'sources'>[] = [
     },
   },
   {
-    id: 'active-directory',
-    title: 'Active Directory (Windows Security log)',
+    id: 'windows-server',
+    title: 'Microsoft Windows Server',
     description:
-      "Sign-ins, lockouts, privilege use and account changes from a domain controller's Security channel, shipped " +
-      'by NXLog as JSON.',
-    json: {
-      prefix: 'ad.',
-      keys: {
-        EventID: 'event_id',
-        TargetUserName: 'user',
-        TargetDomainName: 'domain',
-        SubjectUserName: 'actor',
-        LogonType: 'logon_type',
-        IpAddress: 'source_ip',
-        IpPort: 'source_port',
-        WorkstationName: 'workstation',
-        Status: 'status',
-        SubStatus: 'sub_status',
-        FailureReason: 'failure_reason',
-        CallerComputerName: 'caller_computer',
-        MemberName: 'member',
-        Hostname: 'dc',
-      },
-    },
-    fields: [
-      { name: 'ad.event_id', description: 'Which Windows event this is', example: '4624' },
-      { name: 'ad.user', description: 'The account the event is about', example: 'a.hassan' },
-      { name: 'ad.domain', description: 'Its domain', example: 'CORP' },
-      { name: 'ad.actor', description: 'The account that caused the event, where different', example: 'SYSTEM' },
+      'Active Directory, SQL Server and IIS from a Windows server, shipped by NXLog as JSON. Choose which of them ' +
+      'this source carries.',
+    parts: [
       {
-        name: 'ad.logon_type',
-        description: 'How they signed in: 2 console, 3 network, 10 remote desktop',
-        example: '3',
+        id: 'active-directory',
+        title: 'Active Directory',
+        default: true,
+        description:
+          'Sign-ins, lockouts, privilege use and account changes from the Security channel of a domain controller.',
+        analyses: ['directory'],
+        json: {
+          prefix: 'ad.',
+          keys: {
+            EventID: 'event_id',
+            TargetUserName: 'user',
+            TargetDomainName: 'domain',
+            SubjectUserName: 'actor',
+            LogonType: 'logon_type',
+            IpAddress: 'source_ip',
+            IpPort: 'source_port',
+            WorkstationName: 'workstation',
+            Status: 'status',
+            SubStatus: 'sub_status',
+            FailureReason: 'failure_reason',
+            CallerComputerName: 'caller_computer',
+            MemberName: 'member',
+            Hostname: 'dc',
+          },
+        },
+        fields: [
+          { name: 'ad.event_id', description: 'Which Windows event this is', example: '4624' },
+          { name: 'ad.user', description: 'The account the event is about', example: 'a.hassan' },
+          { name: 'ad.domain', description: 'Its domain', example: 'CORP' },
+          { name: 'ad.actor', description: 'The account that caused the event, where different', example: 'SYSTEM' },
+          {
+            name: 'ad.logon_type',
+            description: 'How they signed in: 2 console, 3 network, 10 remote desktop',
+            example: '3',
+          },
+          { name: 'ad.source_ip', description: 'Where the attempt came from', example: '10.20.4.19' },
+          { name: 'ad.workstation', description: 'The machine named by the client', example: 'LAPTOP-07' },
+          {
+            name: 'ad.caller_computer',
+            description: 'On a lockout, the machine whose attempts caused it',
+            example: 'LAPTOP-07',
+          },
+          { name: 'ad.status', description: 'The failure code, on a failed sign-in', example: '0xC000006D' },
+          { name: 'ad.dc', description: 'The domain controller that recorded it', example: 'DC01' },
+        ],
+        steps: [
+          {
+            title: 'Turn on the auditing the sign-in analyses read',
+            body:
+              'Run this on every domain controller, elevated. Windows records far less than people expect by ' +
+              'default — successful sign-ins among them — so the pages stay empty until this is done.',
+            language: 'batch',
+            config: AD_AUDIT_POLICY,
+          },
+        ],
       },
-      { name: 'ad.source_ip', description: 'Where the attempt came from', example: '10.20.4.19' },
-      { name: 'ad.workstation', description: 'The machine named by the client', example: 'LAPTOP-07' },
       {
-        name: 'ad.caller_computer',
-        description: 'On a lockout, the machine whose attempts caused it',
-        example: 'LAPTOP-07',
+        id: 'mssql',
+        title: 'SQL Server',
+        description:
+          'Failed sign-ins and who they were for, deadlocks, backups and the errors that precede an outage, from ' +
+          "SQL Server's events in the Application channel.",
+        analyses: ['mssql'],
+        json: {
+          prefix: 'mssql.',
+          keys: {
+            EventID: 'event_id',
+            SourceName: 'provider',
+            Severity: 'severity',
+            Channel: 'channel',
+            Hostname: 'host',
+            Message: 'message',
+          },
+        },
+        extract: [
+          {
+            name: 'mssql-login-failure',
+            contains: 'Login failed for user',
+            prefix: 'mssql.',
+            regex: "Login failed for user '(?P<login_user>[^']*)'",
+          },
+          {
+            name: 'mssql-client',
+            contains: '[CLIENT:',
+            prefix: 'mssql.',
+            regex: '\\[CLIENT: (?P<client_ip>[^\\]]+)\\]',
+          },
+        ],
+        fields: [
+          { name: 'mssql.event_id', description: 'Which SQL Server event this is', example: '18456' },
+          { name: 'mssql.provider', description: 'The instance that recorded it', example: 'MSSQLSERVER' },
+          { name: 'mssql.severity', description: 'Error, Warning or Information', example: 'ERROR' },
+          { name: 'mssql.login_user', description: 'The account a failed sign-in was for', example: 'sa' },
+          { name: 'mssql.client_ip', description: 'Where that attempt came from', example: '10.20.4.19' },
+          { name: 'mssql.host', description: 'The server that recorded it', example: 'SQL01' },
+          {
+            name: 'mssql.message',
+            description: 'The event text, for the detail the fields do not carry',
+            example: "Login failed for user 'sa'.",
+          },
+        ],
+        steps: [
+          {
+            title: 'Record successful sign-ins as well as failed ones',
+            body:
+              'SQL Server records failed sign-ins out of the box and successful ones only if asked. Run this on ' +
+              'each instance and restart the SQL Server service. Skip it if you only care about failures.',
+            language: 'sql',
+            config: MSSQL_AUDIT,
+          },
+        ],
       },
-      { name: 'ad.status', description: 'The failure code, on a failed sign-in', example: '0xC000006D' },
-      { name: 'ad.dc', description: 'The domain controller that recorded it', example: 'DC01' },
+      {
+        id: 'iis',
+        title: 'IIS (web requests)',
+        description:
+          'Requests, response codes, the slowest URLs and who is calling them, from the W3C log files IIS writes ' +
+          'to disk.',
+        analyses: ['iis'],
+        json: {
+          prefix: 'iis.',
+          keys: {
+            cs_method: 'method',
+            cs_uri_stem: 'uri',
+            sc_status: 'status',
+            time_taken: 'time_taken',
+            c_ip: 'client_ip',
+            cs_username: 'username',
+            cs_user_agent: 'user_agent',
+            s_ip: 'server_ip',
+            s_port: 'port',
+          },
+        },
+        fields: [
+          { name: 'iis.status', description: 'The response code', example: '404' },
+          { name: 'iis.uri', description: 'The path requested, without the query string', example: '/app/login' },
+          { name: 'iis.method', description: 'The HTTP method', example: 'POST' },
+          { name: 'iis.client_ip', description: 'Who asked', example: '203.0.113.9' },
+          { name: 'iis.time_taken', description: 'How long it took, in milliseconds', example: '1240' },
+          {
+            name: 'iis.username',
+            description: 'The authenticated account, where there is one',
+            example: 'CORP\\a.hassan',
+          },
+          { name: 'iis.user_agent', description: 'The client that sent it', example: 'Mozilla/5.0' },
+          { name: 'iis.server_ip', description: 'Which server answered', example: '10.20.1.8' },
+          { name: 'iis.port', description: 'The port it came in on', example: '443' },
+        ],
+        steps: [
+          {
+            title: 'Make IIS write the fields this reads',
+            body:
+              'The log line is read by position, so IIS has to write exactly these fields in this order. Run ' +
+              'elevated, then run iisreset. If your log files are not under C:\\inetpub\\logs\\LogFiles, change the ' +
+              'File line in the generated configuration.',
+            language: 'batch',
+            config: IIS_FIELDS,
+          },
+        ],
+      },
     ],
-    analyses: ['directory'],
     setup: {
       sender: 'NXLog Community Edition',
       summary:
-        'NXLog reads the Security channel on each domain controller and sends it here as JSON over TLS. Audit ' +
-        'policy decides what Windows writes to that channel in the first place, so both have to be set.',
+        'NXLog reads the logs you choose and sends them here as JSON over TLS, all on one connection. Each part ' +
+        'needs something turned on in Windows first — Windows and SQL Server both record far less than people ' +
+        'expect by default.',
       steps: [
         {
-          title: 'Turn on the auditing these analyses read',
+          title: 'Install NXLog Community Edition on the server',
           body:
-            'Run this on every domain controller, elevated. Windows records far less than people expect by ' +
-            'default — successful sign-ins among them — so the pages stay empty until this is done.',
-          language: 'batch',
-          config: AD_AUDIT_POLICY,
+            'Download it from nxlog.co. The Community Edition is free and reads the Windows event log and log ' +
+            'files directly; nothing needs installing on this server.',
         },
-        {
-          title: 'Install NXLog Community Edition on each domain controller',
-          body:
-            'Download it from nxlog.co. The Community Edition is free and reads the Windows event log directly; ' +
-            'nothing needs installing on this server.',
-        },
-        {
-          title: 'Replace nxlog.conf with this, then restart the NXLog service',
-          body:
-            "Change SYSLOGC_HOST to this server's name. The name has to match its TLS certificate or NXLog will " +
-            'refuse to connect, which is the behaviour you want. Restart with: Restart-Service nxlog',
-          language: 'apache',
-          config: NXLOG_CONFIG,
-        },
+      ],
+      closing: [
         {
           title: 'Add the source here, then check the logs arrive',
           body:
-            'Create a syslog source on port 6514 with this template, enable it, and open the Logs page filtered ' +
-            'to it. A domain controller is never quiet: if nothing arrives within a minute, the connection or the ' +
-            'certificate is the thing to look at, not the audit policy.',
+            'Create a syslog source on port 6514 with this template and enable it. Its protocol must be TLS, with ' +
+            'a certificate: the generated configuration uses om_ssl, so a plain TCP source would leave NXLog ' +
+            'waiting for a handshake that never comes. Then open the Logs page filtered to it — a Windows server ' +
+            'is never quiet for long.',
         },
       ],
       reference: 'https://docs.nxlog.co/userguide/integrate/ms-windows-eventlog.html',
@@ -1525,18 +1733,30 @@ const TEMPLATES: Omit<SourceTemplate, 'in_use' | 'sources'>[] = [
 ]
 
 /**
- * Template id → the enabled sources carrying it. Only enabled sources count: a
- * disabled one produces nothing, so an analysis resting on it would be
- * permanently empty, which is what the gating exists to avoid.
+ * Template id → the enabled sources carrying it, and which of its parts they
+ * carry. Only enabled sources count: a disabled one produces nothing, so an
+ * analysis resting on it would be permanently empty, which is what the gating
+ * exists to avoid.
+ *
+ * Parts matter as much as the template: a Windows source carrying only IIS must
+ * not unlock an Active Directory page it can never fill.
  */
-function templatesInUse(): Map<string, string[]> {
+function templatesInUse(): Map<string, { sources: string[]; parts: Set<string> }> {
   const adopted = new Set(managedSources.filter((s) => s.adopted).map((s) => s.config.name))
   const all = [...FILE_SOURCES.filter((s) => !adopted.has(s.config.name)), ...managedSources]
-  const out = new Map<string, string[]>()
+  const out = new Map<string, { sources: string[]; parts: Set<string> }>()
   for (const s of all) {
     const id = s.config.template?.trim().toLowerCase()
     if (!id || !s.enabled) continue
-    out.set(id, [...(out.get(id) ?? []), s.config.name])
+    const template = TEMPLATES.find((t) => t.id === id)
+    const entry = out.get(id) ?? { sources: [], parts: new Set<string>() }
+    entry.sources.push(s.config.name)
+    const named = s.config.template_parts ?? []
+    const chosen = named.length
+      ? (template?.parts ?? []).filter((part) => named.some((n) => n.toLowerCase() === part.id.toLowerCase()))
+      : (template?.parts ?? []).filter((part) => part.default)
+    for (const part of chosen) entry.parts.add(part.id)
+    out.set(id, entry)
   }
   return out
 }
@@ -1665,6 +1885,293 @@ function counts(pairs: [string, string | undefined, number][]): DirectoryCount[]
   return pairs
     .filter(([, , count]) => count > 0)
     .map(([value, label, count]) => ({ value, ...(label ? { label } : {}), count }))
+}
+
+// ---- SQL Server --------------------------------------------------------------
+
+/**
+ * Three instances across two servers, with distinct names: the per-instance
+ * list is keyed by the name SQL Server reports itself as, so two instances
+ * called MSSQLSERVER would collapse into one row and hide a whole server.
+ */
+const MSSQL_INSTANCES: [string, string, number][] = [
+  ['MSSQLSERVER', 'SQL01', 60],
+  ['MSSQL$SALES', 'SQL01', 28],
+  ['MSSQL$REPORTS', 'SQL02', 12],
+]
+
+/**
+ * The accounts being refused. `sa` dominates on purpose: a stale password in
+ * one connection string is the usual answer, and the page has to make that
+ * shape obvious rather than only reporting a total.
+ */
+const MSSQL_FAILED_ACCOUNTS: [string, number][] = [
+  ['sa', 62],
+  ['svc-reports', 23],
+  ['CORP\\j.novak', 9],
+  ['app_rw', 6],
+]
+
+const MSSQL_FAILURE_SOURCES: [string, number][] = [
+  ['10.20.4.19', 55],
+  ['198.51.100.7', 30],
+  ['10.20.1.44', 15],
+]
+
+/**
+ * Error numbers with what each one means, as the server labels them. 18456 is
+ * among them: it is a failure, so it is ranked here even though the problems
+ * table leaves it out.
+ */
+const MSSQL_TOP_ERRORS: [string, string, number][] = [
+  ['18456', 'sign-in failed', 62],
+  ['1205', 'a transaction was chosen as a deadlock victim', 14],
+  ['9002', 'the transaction log is full', 9],
+  ['824', 'a page read back damaged', 6],
+  ['17883', 'a worker stopped yielding its scheduler', 5],
+  ['823', 'the operating system refused an I/O request', 4],
+]
+
+/**
+ * The commonest message texts. Two of these are the same 824 about different
+ * pages, which is exactly the weakness the view warns about: the page number
+ * is in the sentence, so one broken file reads as several problems.
+ */
+const MSSQL_TOP_MESSAGES: [string, number][] = [
+  ["Login failed for user 'sa'. Reason: Password did not match that for the login provided. [CLIENT: 10.20.4.19]", 41],
+  ["The transaction log for database 'orders' is full due to 'ACTIVE_TRANSACTION'.", 9],
+  ['SQL Server detected a logical consistency-based I/O error: incorrect checksum. Page (1:884215), database ID 7.', 4],
+  ['SQL Server detected a logical consistency-based I/O error: incorrect checksum. Page (1:884216), database ID 7.', 2],
+]
+
+type MockProblem = Omit<MSSQLProblem, 'at'> & { minutesAgo: number }
+
+/**
+ * What went wrong, in the shape the server returns it: failed sign-ins are
+ * absent on purpose, and so are backups and retried reads — neither is a
+ * failure, and both are counted in the overview instead.
+ */
+const MSSQL_PROBLEMS: MockProblem[] = [
+  {
+    minutesAgo: 35,
+    event: '1205',
+    what: 'a transaction was chosen as a deadlock victim',
+    kind: 'deadlock',
+    instance: 'MSSQLSERVER',
+    host: 'SQL01',
+    message:
+      'Transaction (Process ID 88) was deadlocked on lock resources with another process and has been chosen as ' +
+      'the deadlock victim. Rerun the transaction.',
+  },
+  {
+    minutesAgo: 72,
+    event: '9002',
+    what: 'the transaction log is full',
+    kind: 'resource',
+    instance: 'MSSQLSERVER',
+    host: 'SQL01',
+    message: "The transaction log for database 'orders' is full due to 'ACTIVE_TRANSACTION'.",
+  },
+  {
+    minutesAgo: 143,
+    event: '1205',
+    what: 'a transaction was chosen as a deadlock victim',
+    kind: 'deadlock',
+    instance: 'MSSQL$SALES',
+    host: 'SQL01',
+    message:
+      'Transaction (Process ID 141) was deadlocked on lock resources with another process and has been chosen as ' +
+      'the deadlock victim. Rerun the transaction.',
+  },
+  {
+    minutesAgo: 418,
+    event: '824',
+    what: 'a page read back damaged',
+    kind: 'corruption',
+    instance: 'MSSQL$REPORTS',
+    host: 'SQL02',
+    message:
+      'SQL Server detected a logical consistency-based I/O error: incorrect checksum (expected: 0x7d4f1a2b; ' +
+      'actual: 0x1c0a55de). It occurred during a read of page (1:884215) in database ID 7.',
+  },
+  {
+    minutesAgo: 690,
+    event: '17883',
+    what: 'a worker stopped yielding its scheduler',
+    kind: 'scheduler',
+    instance: 'MSSQLSERVER',
+    host: 'SQL01',
+    message: 'Process 0:0:0 (0x1f4c) Worker 0x000001F2 appears to be non-yielding on Scheduler 3.',
+  },
+  {
+    minutesAgo: 980,
+    event: '823',
+    what: 'the operating system refused an I/O request',
+    kind: 'corruption',
+    instance: 'MSSQLSERVER',
+    host: 'SQL01',
+    message:
+      'The operating system returned error 1117 to SQL Server during a read at offset 0x00000d7f4000 in file ' +
+      "'F:\\data\\orders.mdf'.",
+  },
+]
+
+/** The one instance a SQL Server request was narrowed to, or "" for all of them. */
+function mssqlInstance(filter: FilterExpr | undefined): string {
+  if (!filter || !('field' in filter) || filter.field !== 'mssql.provider') return ''
+  return 'value' in filter && filter.op === 'eq' ? filter.value : ''
+}
+
+// ---- IIS ---------------------------------------------------------------------
+
+/**
+ * A believable small site: a landing page and a health check that are fast and
+ * busy, an orders API that is neither, one report that nobody should be running
+ * synchronously, and the WordPress login a scanner asks for all day on a server
+ * that has never run WordPress.
+ *
+ * `slow` is the share of that URL's requests that take at least a second, which
+ * is what makes the slow list rank by count rather than by duration — exactly
+ * the distinction the view has to make clear.
+ */
+const IIS_URLS: { uri: string; weight: number; slow: number }[] = [
+  { uri: '/', weight: 30, slow: 0.002 },
+  { uri: '/api/orders', weight: 22, slow: 0.06 },
+  { uri: '/app/login', weight: 18, slow: 0.01 },
+  { uri: '/health', weight: 16, slow: 0 },
+  { uri: '/wp-login.php', weight: 8, slow: 0 },
+  { uri: '/api/report', weight: 6, slow: 0.72 },
+]
+
+/** Response codes with what each one means, and roughly how much of the traffic. */
+const IIS_STATUS_CODES: [string, string, number][] = [
+  ['200', 'ok', 86],
+  ['302', 'found', 4],
+  ['404', 'not found', 4],
+  ['401', 'not authenticated', 2],
+  ['304', 'not modified', 2],
+  ['500', 'the application failed', 1],
+  ['503', 'service unavailable', 1],
+]
+
+const IIS_SERVER_ERROR_URLS: [string, number][] = [
+  ['/api/orders', 62],
+  ['/api/report', 28],
+  ['/app/login', 10],
+]
+
+const IIS_CLIENT_ERROR_URLS: [string, number][] = [
+  ['/wp-login.php', 48],
+  ['/favicon.ico', 24],
+  ['/app/login', 18],
+  ['/api/orders', 10],
+]
+
+const IIS_CLIENTS: [string, number][] = [
+  ['10.20.8.31', 34],
+  ['10.20.8.32', 26],
+  ['203.0.113.9', 21],
+  ['198.51.100.7', 12],
+  ['10.20.4.19', 7],
+]
+
+const IIS_SERVERS: [string, number][] = [
+  ['10.20.1.8', 58],
+  ['10.20.1.9', 42],
+]
+
+/** One address against everything: the shape of a password being guessed. */
+const IIS_AUTH_FAILURE_SOURCES: [string, number][] = [
+  ['203.0.113.9', 74],
+  ['198.51.100.7', 16],
+  ['10.20.4.19', 10],
+]
+
+const IIS_AUTH_FAILURE_ACCOUNTS: [string, number][] = [
+  ['CORP\\a.hassan', 54],
+  ['CORP\\svc-portal', 31],
+  ['administrator', 15],
+]
+
+/** IIS's own sub-status for a 401, which is the number after the dot. */
+const IIS_AUTH_FAILURE_REASONS: [string, string, number][] = [
+  ['1', 'the credentials were wrong', 68],
+  ['3', 'the account has no permission on the file or folder', 22],
+  ['2', 'the site is configured so that this authentication cannot succeed', 10],
+]
+
+/** Weight of each status class, summed from the codes above. */
+const IIS_CLASS_WEIGHTS: [string, string, number][] = [
+  ['2xx', 'Succeeded', 86],
+  ['3xx', 'Redirected', 6],
+  ['4xx', 'Client errors', 6],
+  ['5xx', 'Server errors', 2],
+]
+
+type MockRequestRow = Omit<IISRequestRow, 'at'> & { minutesAgo: number }
+
+/** The 5xxs themselves. One has no time taken, because IIS writes "-" sometimes. */
+const IIS_RECENT_SERVER_ERRORS: MockRequestRow[] = [
+  {
+    minutesAgo: 4,
+    status: '500',
+    class: '5xx',
+    method: 'POST',
+    uri: '/api/orders',
+    query: 'id=88213',
+    client_ip: '10.20.8.31',
+    user_agent: 'Mozilla/5.0',
+    server_ip: '10.20.1.8',
+    time_taken_millis: 4_912,
+  },
+  {
+    minutesAgo: 17,
+    status: '503',
+    class: '5xx',
+    method: 'GET',
+    uri: '/api/report',
+    query: 'from=2026-10-01&to=2026-10-07',
+    client_ip: '10.20.8.32',
+    username: 'CORP\\a.hassan',
+    user_agent: 'Mozilla/5.0',
+    server_ip: '10.20.1.9',
+    time_taken_millis: 30_041,
+  },
+  {
+    minutesAgo: 39,
+    status: '500',
+    class: '5xx',
+    method: 'POST',
+    uri: '/app/login',
+    client_ip: '203.0.113.9',
+    user_agent: 'curl/8.5.0',
+    server_ip: '10.20.1.8',
+    // IIS wrote "-" here, which is absent rather than instantaneous.
+  },
+  {
+    minutesAgo: 112,
+    status: '502',
+    class: '5xx',
+    method: 'GET',
+    uri: '/api/orders',
+    client_ip: '10.20.8.31',
+    user_agent: 'Mozilla/5.0',
+    server_ip: '10.20.1.9',
+    time_taken_millis: 61_204,
+  },
+]
+
+/** A web day: busy from mid-morning to early evening, never entirely quiet. */
+function webShape(at: Date): number {
+  const hour = at.getHours() + at.getMinutes() / 60
+  const away = Math.min(Math.abs(hour - 13), 24 - Math.abs(hour - 13))
+  return Math.exp(-(away * away) / (2 * 4.5 * 4.5)) + 0.18
+}
+
+/** The one path an IIS request was narrowed to, or "" for the whole site. */
+function iisUrl(filter: FilterExpr | undefined): string {
+  if (!filter || !('field' in filter) || filter.field !== 'iis.uri') return ''
+  return 'value' in filter && filter.op === 'eq' ? filter.value : ''
 }
 
 const api = (path: string) => `*/api/v1${path}`
@@ -2098,14 +2605,79 @@ export const handlers = [
     const auth = requireAuth()
     if (auth) return auth
     const using = templatesInUse()
-    const templates = TEMPLATES.map((t) => {
-      const sources = using.get(t.id) ?? []
-      return { ...t, in_use: sources.length > 0, ...(sources.length ? { sources } : {}) }
+    const rows = TEMPLATES.map((t) => {
+      const entry = using.get(t.id)
+      return {
+        template: t,
+        sources: entry?.sources ?? [],
+        // In the template's own order, so the interface reads consistently.
+        partsInUse: (t.parts ?? []).filter((p) => entry?.parts.has(p.id)).map((p) => p.id),
+      }
     })
-    const analyses = [...new Set(templates.filter((t) => t.in_use).flatMap((t) => t.analyses ?? []))].sort()
+    const templates: SourceTemplate[] = rows.map(({ template, sources, partsInUse }) => ({
+      ...template,
+      in_use: sources.length > 0,
+      ...(sources.length ? { sources } : {}),
+      ...(partsInUse.length ? { parts_in_use: partsInUse } : {}),
+    }))
+    // An analysis is unlocked by the template that feeds it, or by a part of it
+    // that some enabled source actually carries.
+    const analyses = [
+      ...new Set(
+        rows.flatMap(({ template, sources, partsInUse }) => [
+          ...(sources.length ? (template.analyses ?? []) : []),
+          ...(template.parts ?? []).filter((p) => partsInUse.includes(p.id)).flatMap((p) => p.analyses ?? []),
+        ]),
+      ),
+    ].sort()
     // The server answers null rather than an empty list when no template is in
     // use at all, and the gating has to read that as "nothing to offer".
     return HttpResponse.json({ templates, analyses: analyses.length ? analyses : null })
+  }),
+
+  http.get(api('/templates/:id/config'), ({ params, request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    // A retired id resolves to the template that replaced it, so the guide on
+    // an existing source shows what that source actually does.
+    const id = String(params.id).toLowerCase()
+    const resolvedId = id === 'active-directory' ? 'windows-server' : id
+    const template = TEMPLATES.find((t) => t.id === resolvedId)
+    if (!template) {
+      return problem(404, 'not_found', 'Not found', `unknown template "${String(params.id)}"`)
+    }
+    const known = (template.parts ?? []).map((p) => p.id)
+    const asked = new URL(request.url).searchParams.getAll('part')
+    for (const part of asked) {
+      if (!known.some((k) => k.toLowerCase() === part.toLowerCase())) {
+        return validationProblem(
+          '/part',
+          `unknown part ${part} for template ${template.id}; known parts are ${known.join(', ')}`,
+        )
+      }
+    }
+    // No parts asked for means the defaults implied by the id: for the retired
+    // one that is the single part it used to be, which is also this template's
+    // default, so both come out the same.
+    const want = new Set(asked.map((v) => v.toLowerCase()))
+    const chosen = (template.parts ?? []).filter((p) => (asked.length ? want.has(p.id.toLowerCase()) : p.default))
+    if (!chosen.length) {
+      return problem(404, 'not_configured', 'Not found', `template ${template.id} generates no sender configuration`)
+    }
+    const inputs = chosen.map((p) => NXLOG_INPUTS[p.id]).filter((i) => !!i)
+    const config = [
+      NXLOG_HEADER,
+      ...inputs.map((i) => i.block),
+      NXLOG_OUTPUT,
+      `<Route to_syslogc>\n    Path    ${inputs.map((i) => i.name).join(', ')} => syslogc\n</Route>`,
+    ].join('\n\n')
+    return HttpResponse.json({
+      template: template.id,
+      parts: chosen.map((p) => p.id),
+      filename: 'nxlog.conf',
+      language: 'apache',
+      config,
+    })
   }),
 
   http.post(api('/analytics/directory'), async ({ request }) => {
@@ -2235,6 +2807,323 @@ export const handlers = [
       failure_reasons: counts(FAILURE_REASONS.map(([v, l], i) => [v, l, reasons[i]!])).slice(0, 8),
       logon_types: counts(LOGON_TYPES.map(([v, l], i) => [v, l, types[i]!])).slice(0, 8),
       failure_sources: counts(FAILURE_SOURCES.map(([v], i) => [v, undefined, sources[i]!])).slice(0, 10),
+    })
+  }),
+
+  http.post(api('/analytics/mssql'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as MSSQLRequest
+    const { start, end } = resolve(body.time_range)
+    const target = body.buckets && body.buckets > 0 && body.buckets <= 1000 ? body.buckets : 120
+    const limit = body.limit && body.limit > 0 ? Math.min(body.limit, 500) : 100
+    const instance = mssqlInstance(body.filter)
+    await delay(180)
+
+    const span = (end.getTime() - start.getTime()) / 1000
+    const step = STEPS.find((st) => span / st <= target) ?? 86400
+    const first = Math.floor(start.getTime() / 1000 / step) * step
+    const n = Math.max(1, Math.ceil((end.getTime() / 1000 - first) / step))
+    const timestamps = Array.from({ length: n }, (_, i) => new Date((first + i * step) * 1000))
+    const inWindow = (at: Date) => at >= start && at < end
+    const ago = (minutes: number) => new Date(NOW - minutes * 60_000)
+
+    const problems: MSSQLProblem[] = MSSQL_PROBLEMS.map(({ minutesAgo, ...rest }) => ({
+      ...rest,
+      at: ago(minutesAgo).toISOString(),
+    }))
+      .filter((p) => inWindow(new Date(p.at)) && (!instance || p.instance === instance))
+      .slice(0, limit)
+
+    // Narrowing to one instance has to move the numbers the way the real
+    // aggregation would, not just filter the table.
+    const instances = instance ? MSSQL_INSTANCES.filter(([name]) => name === instance) : MSSQL_INSTANCES
+    const whole = MSSQL_INSTANCES.reduce((t, [, , w]) => t + w, 0)
+    const share = instances.reduce((t, [, , w]) => t + w, 0) / whole
+    const hosts = new Set(instances.map(([, host]) => host)).size
+
+    const stepHours = step / 3600
+    const events = (perHour: number, name: string, at: Date) => {
+      const want =
+        perHour * stepHours * directoryShape(at) * (0.85 + (hashString(`mssql:${name}:${at.getTime()}`) % 300) / 1000)
+      const carry = hashString(`mssql-carry:${name}:${at.getTime()}`) % 1000 < (want % 1) * 1000 ? 1 : 0
+      return Math.floor(want) + carry
+    }
+
+    const failurePoints = timestamps.map((t) => events(2.6 * share, 'sign_in_failures', t))
+    const retryPoints = timestamps.map((t) => events(0.35 * share, 'read_retries', t))
+    const deadlockPoints = timestamps.map(() => 0)
+    const severePoints = timestamps.map(() => 0)
+    const backupPoints = timestamps.map(() => 0)
+    const mark = (into: number[], at: string) => {
+      const i = Math.floor(new Date(at).getTime() / 1000 / step - first / step)
+      if (i >= 0 && i < n) into[i] = into[i]! + 1
+    }
+    for (const p of problems) {
+      if (p.kind === 'deadlock') mark(deadlockPoints, p.at)
+      else mark(severePoints, p.at)
+    }
+    // The nightly backup, which is a different event from anything in the
+    // problems list: it finished, so nothing went wrong.
+    const backupAt = ago(430)
+    if (inWindow(backupAt)) mark(backupPoints, backupAt.toISOString())
+
+    const sum = (points: number[]) => points.reduce((t, v) => t + v, 0)
+    const signInFailures = sum(failurePoints)
+    const lines = [
+      { name: 'sign_in_failures', label: 'Failed sign-ins', points: failurePoints, total: signInFailures },
+      { name: 'deadlocks', label: 'Deadlocks', points: deadlockPoints, total: sum(deadlockPoints) },
+      { name: 'severe_errors', label: 'Severe errors', points: severePoints, total: sum(severePoints) },
+      { name: 'read_retries', label: 'Reads that needed a retry', points: retryPoints, total: sum(retryPoints) },
+      { name: 'backups', label: 'Backups finished', points: backupPoints, total: sum(backupPoints) },
+    ]
+
+    const byCount = (a: DirectoryCount, b: DirectoryCount) => b.count - a.count || a.value.localeCompare(b.value)
+    const perAccount = allocate(
+      signInFailures,
+      MSSQL_FAILED_ACCOUNTS.map(([, w]) => w),
+    )
+    const perSource = allocate(
+      signInFailures,
+      MSSQL_FAILURE_SOURCES.map(([, w]) => w),
+    )
+    const failedAccounts = counts(MSSQL_FAILED_ACCOUNTS.map(([v], i) => [v, undefined, perAccount[i]!])).sort(byCount)
+    const failureSources = counts(MSSQL_FAILURE_SOURCES.map(([v], i) => [v, undefined, perSource[i]!])).sort(byCount)
+
+    // Everything ranked below counts the failures: the sign-in failures plus
+    // the problems, which is what the server's ProblemEvents() selects.
+    const problemTotal = signInFailures + problems.length
+    const perError = allocate(
+      problemTotal,
+      MSSQL_TOP_ERRORS.map(([, , w]) => w),
+    )
+    const perMessage = allocate(
+      problemTotal,
+      MSSQL_TOP_MESSAGES.map(([, w]) => w),
+    )
+    const perInstance = allocate(
+      problemTotal,
+      instances.map(([, , w]) => w),
+    )
+    const hostWeights = new Map<string, number>()
+    for (const [, host, weight] of instances) hostWeights.set(host, (hostWeights.get(host) ?? 0) + weight)
+    const hostRows = [...hostWeights]
+    const perHost = allocate(
+      problemTotal,
+      hostRows.map(([, w]) => w),
+    )
+
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      overview: {
+        sign_in_failures: signInFailures,
+        // Zero on purpose: login auditing is left at failures only on this
+        // deployment, which is the default on many builds. The page has to
+        // render that as "not recorded" rather than as nobody signing in.
+        sign_ins: 0,
+        failed_accounts: failedAccounts.length,
+        failure_sources: failureSources.length,
+        deadlocks: sum(deadlockPoints),
+        severe_errors: sum(severePoints),
+        read_retries: sum(retryPoints),
+        backups: sum(backupPoints),
+        instances: instances.length,
+        hosts,
+      },
+      activity: { step_seconds: step, timestamps: timestamps.map((t) => t.toISOString()), lines },
+      problems: problems.length ? problems : [],
+      failed_accounts: failedAccounts.slice(0, 10),
+      failure_sources: failureSources.slice(0, 10),
+      top_errors: counts(MSSQL_TOP_ERRORS.map(([v, l], i) => [v, l, perError[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      top_messages: counts(MSSQL_TOP_MESSAGES.map(([v], i) => [v, undefined, perMessage[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      by_instance: counts(instances.map(([v], i) => [v, undefined, perInstance[i]!])).sort(byCount),
+      by_host: counts(hostRows.map(([v], i) => [v, undefined, perHost[i]!])).sort(byCount),
+    })
+  }),
+
+  http.post(api('/analytics/iis'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const body = (await request.json()) as IISRequest
+    const { start, end } = resolve(body.time_range)
+    const target = body.buckets && body.buckets > 0 && body.buckets <= 1000 ? body.buckets : 120
+    const limit = body.limit && body.limit > 0 ? Math.min(body.limit, 500) : 100
+    const slowMillis = body.slow_millis && body.slow_millis > 0 ? body.slow_millis : 1000
+    const url = iisUrl(body.filter)
+    await delay(180)
+
+    const span = (end.getTime() - start.getTime()) / 1000
+    const step = STEPS.find((st) => span / st <= target) ?? 86400
+    const first = Math.floor(start.getTime() / 1000 / step) * step
+    const n = Math.max(1, Math.ceil((end.getTime() / 1000 - first) / step))
+    const timestamps = Array.from({ length: n }, (_, i) => new Date((first + i * step) * 1000))
+
+    // Narrowing to one path moves every number, the way the real aggregation
+    // would: a page showing site-wide totals under a URL filter would lie.
+    const urls = url ? IIS_URLS.filter((u) => u.uri === url) : IIS_URLS
+    const whole = IIS_URLS.reduce((t, u) => t + u.weight, 0)
+    const share = urls.reduce((t, u) => t + u.weight, 0) / whole
+
+    const stepHours = step / 3600
+    const requestsAt = (at: Date) => {
+      const want = 1_400 * share * stepHours * webShape(at) * (0.88 + (hashString(`iis:${at.getTime()}`) % 240) / 1000)
+      const carry = hashString(`iis-carry:${at.getTime()}`) % 1000 < (want % 1) * 1000 ? 1 : 0
+      return Math.floor(want) + carry
+    }
+
+    // Each class gets its own rate rather than a share of the bucket:
+    // allocating 2% of a dozen requests rounds every 5xx away, and a window
+    // that reports no server errors at all is the one shape this page must not
+    // invent.
+    const classTotal = IIS_CLASS_WEIGHTS.reduce((t, [, , w]) => t + w, 0)
+    const perBucket = timestamps.map(requestsAt)
+    const spread = (at: Date, weight: number, name: string) => {
+      const want = (requestsAt(at) * weight) / classTotal
+      const carry = hashString(`iis-${name}:${at.getTime()}`) % 1000 < (want % 1) * 1000 ? 1 : 0
+      return Math.floor(want) + carry
+    }
+    const classLines = IIS_CLASS_WEIGHTS.map(([name, label, weight]) => {
+      const points = timestamps.map((at) => spread(at, weight, name))
+      return { name, label, points, total: points.reduce((t, v) => t + v, 0) }
+    })
+    // The slow line cuts across the classes rather than being one of them: a
+    // slow request is also counted in whatever it answered with. A lower
+    // threshold catches more of each URL's requests.
+    const slowShare =
+      urls.reduce((t, u) => t + u.weight * u.slow * Math.min(4, 1000 / slowMillis), 0) /
+      Math.max(
+        1,
+        urls.reduce((t, u) => t + u.weight, 0),
+      )
+    const slowPoints = timestamps.map((at, i) => {
+      const want = perBucket[i]! * slowShare
+      const carry = hashString(`iis-slow:${at.getTime()}`) % 1000 < (want % 1) * 1000 ? 1 : 0
+      return Math.floor(want) + carry
+    })
+    const slowTotal = slowPoints.reduce((t, v) => t + v, 0)
+    const lines = [
+      ...classLines,
+      { name: 'slow', label: `Slower than ${slowMillis} ms`, points: slowPoints, total: slowTotal },
+    ]
+
+    const classTotalOf = (name: string) => classLines.find((l) => l.name === name)?.total ?? 0
+    const succeeded = classTotalOf('2xx')
+    const redirected = classTotalOf('3xx')
+    const clientErrors = classTotalOf('4xx')
+    const serverErrors = classTotalOf('5xx')
+    // 1xx is rare, and a handful of lines have a status IIS never wrote — both
+    // are why the classes deliberately do not add up to the request count.
+    const informational = Math.round(succeeded * 0.001)
+    const unreadable = Math.round(succeeded * 0.002)
+    const requests = succeeded + redirected + clientErrors + serverErrors + informational + unreadable
+    // 401s are a third of the 4xx weight above, so the two numbers agree.
+    const authFailures = Math.round(clientErrors / 3)
+
+    const byCount = (a: DirectoryCount, b: DirectoryCount) => b.count - a.count || a.value.localeCompare(b.value)
+    const topUrls = allocate(
+      requests,
+      urls.map((u) => u.weight),
+    )
+    const serverErrorUrls = url ? IIS_SERVER_ERROR_URLS.filter(([u]) => u === url) : IIS_SERVER_ERROR_URLS
+    const clientErrorUrls = url ? IIS_CLIENT_ERROR_URLS.filter(([u]) => u === url) : IIS_CLIENT_ERROR_URLS
+    const perServerErrorUrl = allocate(
+      serverErrors,
+      serverErrorUrls.map(([, w]) => w),
+    )
+    const perClientErrorUrl = allocate(
+      clientErrors,
+      clientErrorUrls.map(([, w]) => w),
+    )
+    const perClient = allocate(
+      requests,
+      IIS_CLIENTS.map(([, w]) => w),
+    )
+    const perServer = allocate(
+      requests,
+      IIS_SERVERS.map(([, w]) => w),
+    )
+    const perAuthSource = allocate(
+      authFailures,
+      IIS_AUTH_FAILURE_SOURCES.map(([, w]) => w),
+    )
+    const perAuthAccount = allocate(
+      authFailures,
+      IIS_AUTH_FAILURE_ACCOUNTS.map(([, w]) => w),
+    )
+    const perAuthReason = allocate(
+      authFailures,
+      IIS_AUTH_FAILURE_REASONS.map(([, , w]) => w),
+    )
+    const perStatus = allocate(
+      requests,
+      IIS_STATUS_CODES.map(([, , w]) => w),
+    )
+    // Ranked by how many of a URL's requests were slow, which is the whole
+    // point: /api/report is slower but asked for far less often.
+    const perSlowUrl = allocate(
+      slowTotal,
+      urls.map((u) => u.weight * u.slow),
+    )
+
+    const ago = (minutes: number) => new Date(NOW - minutes * 60_000)
+    const recent: IISRequestRow[] = IIS_RECENT_SERVER_ERRORS.map(({ minutesAgo, ...rest }) => ({
+      ...rest,
+      at: ago(minutesAgo).toISOString(),
+    }))
+      .filter((r) => {
+        const at = new Date(r.at)
+        return at >= start && at < end && (!url || r.uri === url)
+      })
+      .slice(0, limit)
+
+    return HttpResponse.json({
+      resolved_range: resolved(start, end),
+      overview: {
+        requests,
+        informational,
+        succeeded,
+        redirected,
+        client_errors: clientErrors,
+        server_errors: serverErrors,
+        auth_failures: authFailures,
+        slow_requests: slowTotal,
+        slow_threshold_millis: slowMillis,
+        clients: requests ? IIS_CLIENTS.length : 0,
+        urls: requests ? urls.length : 0,
+        servers: requests ? IIS_SERVERS.length : 0,
+      },
+      activity: { step_seconds: step, timestamps: timestamps.map((t) => t.toISOString()), lines },
+      server_errors: counts(serverErrorUrls.map(([v], i) => [v, undefined, perServerErrorUrl[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      client_errors: counts(clientErrorUrls.map(([v], i) => [v, undefined, perClientErrorUrl[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      recent_server_errors: recent,
+      slow_urls: counts(urls.map((u, i) => [u.uri, undefined, perSlowUrl[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      top_urls: counts(urls.map((u, i) => [u.uri, undefined, topUrls[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      top_clients: counts(IIS_CLIENTS.map(([v], i) => [v, undefined, perClient[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      status_codes: counts(IIS_STATUS_CODES.map(([v, l], i) => [v, l, perStatus[i]!])).sort(byCount),
+      auth_failure_accounts: counts(IIS_AUTH_FAILURE_ACCOUNTS.map(([v], i) => [v, undefined, perAuthAccount[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      auth_failure_sources: counts(IIS_AUTH_FAILURE_SOURCES.map(([v], i) => [v, undefined, perAuthSource[i]!]))
+        .sort(byCount)
+        .slice(0, 10),
+      auth_failure_reasons: counts(IIS_AUTH_FAILURE_REASONS.map(([v, l], i) => [v, l, perAuthReason[i]!]))
+        .sort(byCount)
+        .slice(0, 8),
+      by_server: counts(IIS_SERVERS.map(([v], i) => [v, undefined, perServer[i]!])).sort(byCount),
     })
   }),
 

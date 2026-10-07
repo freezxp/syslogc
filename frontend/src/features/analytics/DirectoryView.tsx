@@ -8,24 +8,25 @@
  * the domain, its shape over time, then the lockouts that brought them here.
  */
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
-import { AlertTriangle, ExternalLink, Lock, X } from 'lucide-react'
+import { ExternalLink, Lock, X } from 'lucide-react'
 import { useCallback, useMemo } from 'react'
 
 import { useDirectory } from '@/api/hooks'
-import type { DirectoryCount, TimeRange } from '@/api/types'
-import { Donut, GroupedSeriesChart, TopList } from '@/components/charts'
-import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
+import type { TimeRange } from '@/api/types'
+import { Donut, GroupedSeriesChart } from '@/components/charts'
+import { EmptyState, ErrorPanel, NotRecorded, Panel, Skeleton, StatTile } from '@/components/data/common'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/overlay'
 import { seriesColor } from '@/lib/chart-colors'
 import { cn } from '@/lib/cn'
-import { formatCount, formatExact, formatTimestamp } from '@/lib/format'
+import { formatExact, formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 import { resolveRange, TimeRangeError } from '@/lib/time-range'
 import type { AnalyticsSearch } from '@/lib/url-state'
 
 import { AnalyticsHeader } from './AnalyticsHeader'
+import { CountList } from './CountList'
 import {
   activityChartData,
   activityStepLabel,
@@ -41,7 +42,6 @@ import {
   encodeDirectory,
   lockoutSentence,
   type DirectoryQuery,
-  type DirectoryTile,
 } from './directory'
 
 export function DirectoryView() {
@@ -128,7 +128,7 @@ export function DirectoryView() {
           <div className={cn('space-y-3', directory.isPlaceholderData && 'opacity-50')}>
             <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
               {tiles.map((tile) => (
-                <Tile key={tile.name} tile={tile} loading={directory.isLoading} />
+                <StatTile key={tile.name} tile={tile} loading={directory.isLoading} />
               ))}
             </ul>
 
@@ -249,10 +249,10 @@ export function DirectoryView() {
                             <td className="px-3 py-1">
                               <AccountButton user={l.user} onSelect={(account) => setQuery({ account })} />
                             </td>
-                            <td className="mono px-3 py-1">{l.caller || <Unknown />}</td>
-                            <td className="mono px-3 py-1">{l.source_ip || <Unknown />}</td>
+                            <td className="mono px-3 py-1">{l.caller || <NotRecorded />}</td>
+                            <td className="mono px-3 py-1">{l.source_ip || <NotRecorded />}</td>
                             <td className="mono px-3 py-1 text-right tabular-nums">{formatExact(l.failures_before)}</td>
-                            <td className="mono px-3 py-1">{l.dc || <Unknown />}</td>
+                            <td className="mono px-3 py-1">{l.dc || <NotRecorded />}</td>
                             <td className="px-2 py-1">
                               <Tooltip content="Open this account in the explorer">
                                 <Link
@@ -366,10 +366,10 @@ export function DirectoryView() {
                               {c.what}
                               <span className="mono ml-1.5 text-xs text-subtle">{c.event}</span>
                             </td>
-                            <td className="mono px-3 py-1">{c.subject || <Unknown />}</td>
-                            <td className="mono px-3 py-1">{c.actor || <Unknown />}</td>
-                            <td className="mono px-3 py-1">{c.member || <Unknown />}</td>
-                            <td className="mono px-3 py-1">{c.dc || <Unknown />}</td>
+                            <td className="mono px-3 py-1">{c.subject || <NotRecorded />}</td>
+                            <td className="mono px-3 py-1">{c.actor || <NotRecorded />}</td>
+                            <td className="mono px-3 py-1">{c.member || <NotRecorded />}</td>
+                            <td className="mono px-3 py-1">{c.dc || <NotRecorded />}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -385,49 +385,6 @@ export function DirectoryView() {
   )
 }
 
-/** A value Windows did not record, which is different from an empty one. */
-function Unknown() {
-  return (
-    <span className="text-subtle" title="Not recorded in the event">
-      —
-    </span>
-  )
-}
-
-const TILE_TONES: Record<DirectoryTile['tone'], string> = {
-  neutral: 'border-border',
-  warn: 'border-warning/40',
-  alert: 'border-danger/40',
-}
-
-/**
- * One headline number. The tone shows in the border and the icon, but what it
- * means is always in the note underneath: nothing here is said by colour alone.
- */
-function Tile({ tile, loading }: { tile: DirectoryTile; loading: boolean }) {
-  return (
-    <li className={cn('min-w-0 rounded-md border bg-surface p-2.5', TILE_TONES[tile.tone])}>
-      <div className="flex items-center gap-1.5">
-        {tile.tone !== 'neutral' && (
-          <AlertTriangle
-            className={cn('size-3.5 shrink-0', tile.tone === 'alert' ? 'text-danger' : 'text-warning')}
-            aria-hidden
-          />
-        )}
-        <h3 className="truncate text-xs tracking-wide text-muted uppercase">{tile.label}</h3>
-      </div>
-      {loading ? (
-        <Skeleton className="mt-1 h-7 w-16" />
-      ) : (
-        <p className="mono text-2xl tabular-nums" title={formatExact(tile.value)}>
-          {formatCount(tile.value)}
-        </p>
-      )}
-      <p className="text-xs text-subtle">{tile.note}</p>
-    </li>
-  )
-}
-
 function AccountButton({ user, onSelect }: { user: string; onSelect: (user: string) => void }) {
   return (
     <button
@@ -438,42 +395,5 @@ function AccountButton({ user, onSelect }: { user: string; onSelect: (user: stri
     >
       {user}
     </button>
-  )
-}
-
-/**
- * A top-N list. The server labels what it can — a status code's meaning, a
- * logon type's name — so the label is shown and the raw value kept in the
- * title, where somebody looking for the code itself can still find it.
- */
-function CountList({
-  counts,
-  loading,
-  empty,
-  onSelect,
-}: {
-  counts: DirectoryCount[]
-  loading: boolean
-  empty: string
-  onSelect?: (value: string) => void
-}) {
-  if (loading) {
-    return (
-      <div className="space-y-1">
-        {Array.from({ length: 5 }, (_, i) => (
-          <Skeleton key={i} className="h-6" />
-        ))}
-      </div>
-    )
-  }
-  if (!counts.length) return <EmptyState title="Nothing to show" hint={empty} />
-  // The rows show the label; a click has to carry the value the server
-  // actually stores, which for a status code is not the words beside it.
-  const values = new Map(counts.map((c) => [countLabel(c), c.value]))
-  return (
-    <TopList
-      values={counts.map((c) => ({ value: countLabel(c), count: c.count }))}
-      onSelect={onSelect && ((shown) => onSelect(values.get(shown) ?? shown))}
-    />
   )
 }

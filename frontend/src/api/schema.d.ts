@@ -796,6 +796,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/mssql": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Everything the SQL Server page shows, in one answer
+         * @description Needs a source carrying the `mssql` part of the Windows template,
+         *     which is what writes the `mssql.*` fields this reads.
+         *
+         *     Every number is counted from SQL Server's error numbers, because the
+         *     sentence beside a number is written in the server's own language.
+         *     `severe_errors` counts the I/O and consistency errors (823, 824), the
+         *     transaction log filling (9002), memory running out (701) and the
+         *     scheduler stalling (17883, 17884). It deliberately excludes 825,
+         *     which is a read that succeeded after a retry: nothing was lost, so it
+         *     is counted on its own as `read_retries`.
+         *
+         *     `sign_ins` is zero on an instance whose login auditing was left at
+         *     failures only, which is the default on many builds — zero there means
+         *     "not recorded", not "nobody signed in". A zero deadlock count is
+         *     likewise not proof: SQL Server reports 1205 to the client that lost,
+         *     and it reaches the Windows Application channel only where the message
+         *     is marked as logged or the deadlock trace flags are on.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["AnalysisRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MSSQLResponse"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/iis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Everything the IIS page shows, in one answer
+         * @description Needs a source carrying the `iis` part of the Windows template, which
+         *     is what writes the `iis.*` fields this reads.
+         *
+         *     The class counts need not add up to `requests`: a line whose
+         *     `iis.status` could not be read as a code between 100 and 599 belongs
+         *     to no class, and the difference is left visible rather than absorbed
+         *     by one of them.
+         *
+         *     There is no average or worst response time. `iis.time_taken` arrives
+         *     as text and the store cannot sum or average a field, so "slow" is
+         *     answered by counting the requests at or above
+         *     `slow_threshold_millis`, and `slow_urls` ranks URLs by how many slow
+         *     requests they had — not by how slow they were.
+         *
+         *     Distinct counts (`clients`, `urls`, `servers`) are counted over the
+         *     whole resolved range, because they cannot be added across buckets.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["IISRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["IISResponse"];
+                    };
+                };
+                422: components["responses"]["Problem"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/overview": {
         parameters: {
             query?: never;
@@ -2311,6 +2430,202 @@ export interface components {
                 points: number[];
             }[];
             stats?: components["schemas"]["SearchStats"];
+        };
+        /**
+         * @description A window of one source-template analysis. Native query text is not
+         *     accepted here: these endpoints build their own aggregations.
+         */
+        AnalysisRequest: {
+            time_range: components["schemas"]["TimeRange"];
+            filter?: components["schemas"]["FilterExpr"];
+            /**
+             * @description Points the activity chart should hold
+             * @default 120
+             */
+            buckets?: number;
+            /**
+             * @description Caps the lists
+             * @default 100
+             */
+            limit?: number;
+        };
+        AnalysisCount: {
+            value: string;
+            /** @description `value` said in words, where there is a better way to say it */
+            label?: string;
+            count: number;
+        };
+        /**
+         * @description Counted events over time. Each line's `points` aligns index-for-index
+         *     with `timestamps`, and counts messages rather than distinct values,
+         *     because distinct counts cannot be added across buckets.
+         */
+        AnalysisSeries: {
+            step_seconds: number;
+            timestamps: string[];
+            lines: {
+                name: string;
+                label: string;
+                points: number[];
+                total: number;
+            }[];
+        };
+        MSSQLResponse: {
+            resolved_range: components["schemas"]["ResolvedRange"];
+            overview: {
+                /** @description Event 18456 */
+                sign_in_failures: number;
+                /** @description Events 18453 and 18454; zero means not recorded */
+                sign_ins: number;
+                /** @description Distinct accounts a failed sign-in was for */
+                failed_accounts: number;
+                /** @description Distinct addresses those attempts came from */
+                failure_sources: number;
+                /** @description Event 1205 */
+                deadlocks: number;
+                /** @description Events 823, 824, 9002, 701, 17883, 17884 — not 825 */
+                severe_errors: number;
+                /** @description Event 825: a read that succeeded after failing. A warning, not a failure. */
+                read_retries: number;
+                /** @description Event 18264. Log backups (18265) are not counted here. */
+                backups: number;
+                /** @description Distinct instances that sent anything */
+                instances: number;
+                hosts: number;
+            };
+            activity: components["schemas"]["AnalysisSeries"];
+            /**
+             * @description What went wrong, newest first. Failed sign-ins are left out:
+             *     there are usually thousands and they would bury the one
+             *     consistency error that matters.
+             */
+            problems?: components["schemas"]["MSSQLProblem"][];
+            /** @description Accounts behind the 18456s */
+            failed_accounts?: components["schemas"]["AnalysisCount"][];
+            /** @description Addresses behind the 18456s */
+            failure_sources?: components["schemas"]["AnalysisCount"][];
+            /** @description Error numbers, with `label` explaining each */
+            top_errors?: components["schemas"]["AnalysisCount"][];
+            /**
+             * @description The commonest problem messages. Read it as "the text that
+             *     repeated": SQL Server writes the database, file, page and byte
+             *     offset into the sentence, so two errors about one broken file
+             *     group as two messages while a hundred identical log-full warnings
+             *     group as one. `top_errors` is the honest ranking of what went
+             *     wrong most.
+             */
+            top_messages?: components["schemas"]["AnalysisCount"][];
+            /** @description Problem events per `mssql.provider` */
+            by_instance?: components["schemas"]["AnalysisCount"][];
+            /** @description Problem events per `mssql.host` */
+            by_host?: components["schemas"]["AnalysisCount"][];
+        };
+        MSSQLProblem: {
+            /** Format: date-time */
+            at: string;
+            /**
+             * @description The SQL Server error number
+             * @example 824
+             */
+            event: string;
+            /** @description What it means */
+            what: string;
+            /** @enum {string} */
+            kind: "login_failure" | "login_success" | "deadlock" | "corruption" | "resource" | "scheduler" | "backup" | "unknown";
+            instance?: string;
+            host?: string;
+            /** @description Read out of the message text */
+            account?: string;
+            /** @description Likewise */
+            client_ip?: string;
+            /** @description The event text. The database */
+            message?: string;
+        };
+        IISRequest: components["schemas"]["AnalysisRequest"] & {
+            /**
+             * @description The threshold above which a request counts as slow. It is a
+             *     request parameter because what counts as slow is a property
+             *     of the site, not of the log.
+             * @default 1000
+             */
+            slow_millis?: number;
+        };
+        IISResponse: {
+            resolved_range: components["schemas"]["ResolvedRange"];
+            overview: {
+                /** @description Every request in the window */
+                requests: number;
+                /** @description 1xx */
+                informational: number;
+                /** @description 2xx */
+                succeeded: number;
+                /** @description 3xx */
+                redirected: number;
+                /** @description 4xx */
+                client_errors: number;
+                /** @description 5xx */
+                server_errors: number;
+                /** @description 401s. Also counted in `client_errors`. */
+                auth_failures: number;
+                /** @description Requests at or above `slow_threshold_millis` */
+                slow_requests: number;
+                slow_threshold_millis: number;
+                /** @description Distinct `iis.client_ip` over the resolved range */
+                clients: number;
+                urls: number;
+                servers: number;
+            };
+            activity: components["schemas"]["AnalysisSeries"];
+            /** @description URLs behind the 5xxs */
+            server_errors?: components["schemas"]["AnalysisCount"][];
+            /** @description URLs behind the 4xxs */
+            client_errors?: components["schemas"]["AnalysisCount"][];
+            /** @description The 5xxs themselves */
+            recent_server_errors?: components["schemas"]["IISRequestRow"][];
+            /**
+             * @description URLs ranked by how many of their requests were slow — not by how
+             *     slow they were. A page called once that took a minute will not
+             *     appear above a page called ten thousand times of which fifty were
+             *     slow.
+             */
+            slow_urls?: components["schemas"]["AnalysisCount"][];
+            top_urls?: components["schemas"]["AnalysisCount"][];
+            top_clients?: components["schemas"]["AnalysisCount"][];
+            /** @description Response codes, with `label` explaining each */
+            status_codes?: components["schemas"]["AnalysisCount"][];
+            /** @description Accounts behind the 401s */
+            auth_failure_accounts?: components["schemas"]["AnalysisCount"][];
+            auth_failure_sources?: components["schemas"]["AnalysisCount"][];
+            /**
+             * @description IIS's own sub-status for each 401, with `label` explaining it.
+             *     The number after the dot is IIS's rather than HTTP's, and it is
+             *     the difference between a wrong password and a permission on a
+             *     folder.
+             */
+            auth_failure_reasons?: components["schemas"]["AnalysisCount"][];
+            /** @description Requests per `iis.server_ip` */
+            by_server?: components["schemas"]["AnalysisCount"][];
+        };
+        IISRequestRow: {
+            /** Format: date-time */
+            at: string;
+            /** @example 500 */
+            status: string;
+            /**
+             * @description Omitted when `status` is not a code between 100 and 599
+             * @enum {string}
+             */
+            class?: "1xx" | "2xx" | "3xx" | "4xx" | "5xx";
+            substatus?: string;
+            method?: string;
+            uri?: string;
+            query?: string;
+            client_ip?: string;
+            username?: string;
+            user_agent?: string;
+            server_ip?: string;
+            /** @description Omitted when IIS wrote something that is not a number */
+            time_taken_millis?: number;
         };
         /**
          * @description A source definition, identical to an entry under `ingestion.sources`

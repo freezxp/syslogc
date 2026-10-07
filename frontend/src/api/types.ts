@@ -54,11 +54,31 @@ export type SystemHealth = S['SystemHealth']
 export type SystemIngestion = S['SystemIngestion'] & { forwarding?: ForwardTarget[] | null }
 export type SystemStorage = S['SystemStorage']
 export type SourceStatus = S['SourceStatus']
+/**
+ * The SQL Server and IIS analyses, which the spec describes (unlike the Active
+ * Directory one, whose types are still hand-written in ./operations.ts).
+ */
+export type MSSQLRequest = S['AnalysisRequest']
+export type MSSQLResponse = S['MSSQLResponse']
+export type MSSQLOverview = S['MSSQLResponse']['overview']
+export type MSSQLProblem = S['MSSQLProblem']
+/** What somebody reading a problem would do about it. */
+export type MSSQLProblemKind = MSSQLProblem['kind']
+export type IISRequest = S['IISRequest']
+export type IISResponse = S['IISResponse']
+export type IISOverview = S['IISResponse']['overview']
+export type IISRequestRow = S['IISRequestRow']
+/** The status class a request fell into, where its code could be read at all. */
+export type IISStatusClass = NonNullable<IISRequestRow['class']>
 export type SourceCounters = S['SourceCounters']
 export type StorageUsage = S['StorageUsage']
 
 export type {
   AdminUser,
+  AnalysisActivity,
+  AnalysisCount,
+  AnalysisLine,
+  AnalysisRequest,
   AnalyticsMetric,
   AnalyticsMetricType,
   AuditEvent,
@@ -117,8 +137,10 @@ export type {
   SourceUDPConfig,
   SystemConfig,
   SystemRetention,
+  TemplateConfig,
   TemplateField,
   TemplateJSONExtract,
+  TemplatePart,
   TemplateSetup,
   TemplateStep,
   TemplatesResponse,

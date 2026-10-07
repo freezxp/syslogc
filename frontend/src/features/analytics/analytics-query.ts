@@ -2,7 +2,14 @@
  * Pure logic behind the analytics page: the URL codec, the previous-period
  * comparison and the mapping from a series response to chart rows.
  */
-import type { AnalyticsMetric, BreakdownResponse, BreakdownRow, SeriesResponse } from '@/api/types'
+import type {
+  AnalysisActivity,
+  AnalysisCount,
+  AnalyticsMetric,
+  BreakdownResponse,
+  BreakdownRow,
+  SeriesResponse,
+} from '@/api/types'
 import type { AnalyticsSearch } from '@/lib/url-state'
 
 export const DEFAULT_GROUP_BY = 'app_name'
@@ -168,6 +175,85 @@ export function seriesChartData(res: SeriesResponse | undefined): ChartData {
     return row
   })
   return { rows, series }
+}
+
+/**
+ * One named line of an activity chart. `key` is index-based so a line's own
+ * name is never read as a Recharts path, and the colour travels with it so the
+ * legend beside the chart cannot disagree with the chart.
+ */
+export interface LineSeries {
+  key: string
+  name: string
+  label: string
+  total: number
+  color: string
+}
+
+export interface LineChartData {
+  rows: ChartRow[]
+  series: LineSeries[]
+}
+
+/**
+ * Turns an analysis activity response into Recharts rows. Points align
+ * index-for-index with `timestamps`; a line short of points is padded with
+ * zeroes rather than shifting the rest of the series.
+ *
+ * Shared by the three template analyses: they count different things, but a
+ * chart of counts over a bucket grid is the same chart on each of them.
+ */
+export function lineChartData(
+  activity: AnalysisActivity | undefined,
+  colorOf: (name: string, index: number) => string,
+): LineChartData {
+  if (!activity) return { rows: [], series: [] }
+  const lines = activity.lines ?? []
+  const series = lines.map((l, i) => ({
+    key: `s${i}`,
+    name: l.name,
+    label: l.label,
+    total: l.total,
+    color: colorOf(l.name, i),
+  }))
+  const rows = (activity.timestamps ?? []).map((t, i) => {
+    const row: ChartRow = { t: new Date(t).getTime() }
+    lines.forEach((l, j) => {
+      row[`s${j}`] = l.points[i] ?? 0
+    })
+    return row
+  })
+  return { rows, series }
+}
+
+/**
+ * The bucket width as somebody would say it. The server chooses it from the
+ * range, so it is reported rather than controlled: "5m buckets" is what makes
+ * a point on the chart mean something.
+ */
+export function stepLabel(seconds: number): string {
+  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  return `${Math.round(seconds / 3600)}h`
+}
+
+/**
+ * A counted value in the words the server gave it, falling back to the raw
+ * value. The server knows that 0xC000006D means a wrong user name or password,
+ * and that 18456 is a failed sign-in; the browser should not have to.
+ */
+export function countLabel(count: Pick<AnalysisCount, 'value' | 'label'>): string {
+  return count.label?.trim() || count.value || '(none)'
+}
+
+/**
+ * A code and its gloss together, for values whose code is the thing somebody is
+ * looking for: 404 is what they came to find and "not found" is the gloss, so
+ * showing only the words would hide the answer.
+ */
+export function codeAndLabel(count: Pick<AnalysisCount, 'value' | 'label'>): string {
+  return count.label?.trim() ? `${count.value} — ${count.label.trim()}` : count.value || '(none)'
 }
 
 /** "showing 10 of 143 values", or just the count when nothing is hidden. */

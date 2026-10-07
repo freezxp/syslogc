@@ -75,3 +75,72 @@ export function ChoiceCards<T extends string>({
     </fieldset>
   )
 }
+
+/**
+ * The same cards where the options are not exclusive — a Windows server sends
+ * its Security log, SQL Server's log and IIS's log down one connection, and a
+ * source may carry any combination of them.
+ *
+ * Checkboxes rather than a multi-select for the same reason the cards above are
+ * cards: each option needs a sentence saying what it is for, and a list of
+ * highlighted rows has nowhere to put one.
+ */
+export function CheckCards<T extends string>({
+  legend,
+  description,
+  choices,
+  value,
+  editable,
+  columns = 1,
+  error,
+  onChange,
+}: {
+  legend: string
+  /** One line above the boxes, for what choosing any of them means. */
+  description?: string
+  choices: readonly Choice<T>[]
+  /** The options that are on. */
+  value: readonly T[]
+  editable: boolean
+  columns?: 1 | 2 | 3
+  error?: string
+  onChange: (value: T, checked: boolean) => void
+}) {
+  const on = new Set<string>(value)
+  return (
+    <fieldset>
+      <legend className="mb-1 text-sm font-medium text-muted">{legend}</legend>
+      {description && <p className="mb-2 text-xs text-subtle">{description}</p>}
+      <div className={cn('grid gap-2', { 1: '', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-3' }[columns])}>
+        {choices.map((c) => (
+          <label
+            key={c.value}
+            className={cn(
+              'flex cursor-pointer items-start gap-2 rounded-md border p-2',
+              on.has(c.value) ? 'border-accent bg-accent-muted' : 'border-border-strong bg-surface-2',
+              !editable && 'cursor-default opacity-70',
+            )}
+          >
+            <input
+              type="checkbox"
+              value={c.value}
+              className="mt-1"
+              checked={on.has(c.value)}
+              disabled={!editable}
+              onChange={(e) => onChange(c.value, e.target.checked)}
+            />
+            <span className="min-w-0">
+              <span className="block text-base text-fg">{c.label}</span>
+              <span className="block text-xs text-subtle">{c.hint}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {error && (
+        <p role="alert" className="mt-1 text-sm text-danger">
+          {error}
+        </p>
+      )}
+    </fieldset>
+  )
+}

@@ -128,6 +128,14 @@ export interface SourceConfig {
    * offered at all; absent means a plain source, which most are.
    */
   template?: string
+  /**
+   * Which of the template's parts this source carries (`TemplatePart.id`s).
+   * One sender on one server delivers all of them over one connection, so
+   * they belong to the source rather than to separate templates. Empty means
+   * the template's own defaults, so a source saved before parts existed keeps
+   * doing exactly what it did.
+   */
+  template_parts?: string[]
 }
 
 export type SourceOrigin = 'file' | 'database'
@@ -635,9 +643,42 @@ export interface TemplateSetup {
   /** What produces the logs, e.g. "NXLog Community Edition". */
   sender: string
   summary: string
+  /** What to do first. A template with parts shows these before the parts' own. */
   steps?: TemplateStep[]
+  /**
+   * The steps shown after the parts' steps and the generated configuration —
+   * adding the source, and checking that logs actually arrive.
+   */
+  closing?: TemplateStep[]
   /** The sender's own documentation. */
   reference?: string
+}
+
+/**
+ * One kind of log a template can carry, turned on per source. A Windows server
+ * sends its Security log, SQL Server's log and IIS's log down one connection,
+ * so which of them a source carries is a choice rather than three templates.
+ */
+export interface TemplatePart {
+  id: string
+  title: string
+  /** What somebody choosing parts reads. */
+  description: string
+  /** Whether it is on when the template is first chosen. */
+  default?: boolean
+  /**
+   * Rules that read a value the sender buries in its message text. Unlike a
+   * template's, these are applied by the server and are not copied into the
+   * source's own rules — editing them would silently break the analysis that
+   * reads them.
+   */
+  extract?: ExtractRule[]
+  json?: TemplateJSONExtract
+  /** What it produces, and what it unlocks. */
+  fields?: TemplateField[]
+  analyses?: string[]
+  /** The setup this part needs beyond the template's own. */
+  steps?: TemplateStep[]
 }
 
 /**
@@ -652,13 +693,42 @@ export interface SourceTemplate {
   extract?: ExtractRule[]
   json?: TemplateJSONExtract
   fields?: TemplateField[]
-  /** Analysis ids this template unlocks, e.g. "directory". */
+  /**
+   * Analysis ids this template unlocks on its own, e.g. "directory". A
+   * template built from parts leaves this empty: what it unlocks depends on
+   * which parts a source carries.
+   */
   analyses?: string[]
+  /** The kinds of log it can carry, chosen per source. Absent for a template with one shape. */
+  parts?: TemplatePart[]
   setup: TemplateSetup
   /** An enabled source carries this template, so its analyses are worth offering. */
   in_use: boolean
   /** The enabled sources using it, so the interface can say where data comes from. */
   sources?: string[]
+  /**
+   * The parts some enabled source actually carries. A template can be in use
+   * while most of its parts are not, and only the ones that are unlock
+   * anything.
+   */
+  parts_in_use?: string[]
+}
+
+/**
+ * The sender configuration for a template and a chosen set of parts, built by
+ * the server. The parts decide what is in it — a server sending only IIS needs
+ * none of the event-log inputs — so it is asked for rather than kept as a fixed
+ * snippet, and never assembled in the browser.
+ */
+export interface TemplateConfig {
+  template: string
+  /** The parts it was built for, in the template's own order. */
+  parts: string[]
+  /** What the file is called on the sender, e.g. "nxlog.conf". */
+  filename: string
+  /** Labels the snippet, e.g. "apache". */
+  language?: string
+  config: string
 }
 
 export interface TemplatesResponse {
@@ -670,16 +740,28 @@ export interface TemplatesResponse {
   analyses?: string[] | null
 }
 
+// ---- shared analysis shapes ------------------------------------------------
+//
+// The three template analyses answer different questions but are shaped the
+// same way: a window, a chart over it, and top lists. These come from the
+// generated schema, which now describes the SQL Server and IIS endpoints; they
+// are aliased here so the hand-written Active Directory types — which the spec
+// does not describe yet — can be written in the same terms.
+
+/** A window, optionally narrowed, with how many points and how long a list. */
+export type AnalysisRequest = S['AnalysisRequest']
+
+/** One value and how often it occurred; `label` explains codes like 0xC000006D. */
+export type AnalysisCount = S['AnalysisCount']
+
+export type AnalysisActivity = S['AnalysisSeries']
+
+/** One counted thing over time; `points` aligns index-for-index with the timestamps. */
+export type AnalysisLine = AnalysisActivity['lines'][number]
+
 // ---- Active Directory ------------------------------------------------------
 
-export interface DirectoryRequest {
-  time_range: S['TimeRange']
-  filter?: S['FilterExpr']
-  /** Target point count for the activity chart, at most 1000. */
-  buckets?: number
-  /** Caps the lists. */
-  limit?: number
-}
+export type DirectoryRequest = AnalysisRequest
 
 /** The headline numbers, in the terms somebody asks about a domain. */
 export interface DirectoryOverview {
@@ -701,20 +783,8 @@ export interface DirectoryOverview {
   group_changes: number
 }
 
-/** One counted thing over time; `points` aligns index-for-index with the timestamps. */
-export interface DirectoryLine {
-  /** Stable key, e.g. "logons". */
-  name: string
-  label: string
-  points: number[]
-  total: number
-}
-
-export interface DirectoryActivity {
-  step_seconds: number
-  timestamps: string[]
-  lines: DirectoryLine[]
-}
+export type DirectoryLine = AnalysisLine
+export type DirectoryActivity = AnalysisActivity
 
 /** One account locking, with what caused it. */
 export interface DirectoryLockout {
@@ -743,12 +813,7 @@ export interface DirectoryChange {
   dc?: string
 }
 
-/** One value and how often it occurred; `label` explains codes like 0xC000006D. */
-export interface DirectoryCount {
-  value: string
-  label?: string
-  count: number
-}
+export type DirectoryCount = AnalysisCount
 
 export interface DirectoryResponse {
   resolved_range: S['ResolvedRange']
@@ -851,6 +916,11 @@ export interface OperationsPaths {
   }
   '/api/v1/templates': {
     get: Read<TemplatesResponse>
+  }
+  '/api/v1/templates/{id}/config': {
+    // A repeated `part` parameter rather than one comma-joined value, so the
+    // server reads the ticked boxes without having to split anything.
+    get: Read<TemplateConfig, { query?: { part?: string[] }; header?: never; path: { id: string }; cookie?: never }>
   }
   '/api/v1/sources/{id}': {
     get: Read<ManagedSource, ById>

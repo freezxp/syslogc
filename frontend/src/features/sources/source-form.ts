@@ -13,6 +13,9 @@ import type {
   SourceConfig,
   SourceState,
   SourceTemplate,
+  TemplateField,
+  TemplatePart,
+  TemplateStep,
 } from '@/api/types'
 import { quote } from '@/lib/filter-text'
 import type { ExplorerSearch } from '@/lib/url-state'
@@ -120,6 +123,134 @@ export function templateChoices(templates: SourceTemplate[]): Choice<string>[] {
   ]
 }
 
+// ---- template parts --------------------------------------------------------
+//
+// A template may carry several kinds of log, chosen per source: one NXLog
+// instance on one Windows server sends the Security log, SQL Server's log and
+// IIS's log down a single connection, so which of them a source carries is a
+// set of checkboxes rather than three templates. An empty stored list means
+// the template's own defaults, so a source saved before parts existed keeps
+// doing exactly what it did.
+
+/** The parts a template turns on when it is first chosen. */
+export function templateDefaultParts(template: SourceTemplate | undefined): string[] {
+  return (template?.parts ?? []).filter((p) => p.default).map((p) => p.id)
+}
+
+/**
+ * The parts a source carries, as ids in the template's own order: the ones it
+ * names, or the defaults when it names none. Ids the template does not know
+ * are dropped — a part can be retired, and a checkbox for one that no longer
+ * exists could never be unticked.
+ */
+export function resolveTemplateParts(template: SourceTemplate | undefined, stored: string[]): string[] {
+  const parts = template?.parts ?? []
+  if (!parts.length) return []
+  if (!stored.length) return templateDefaultParts(template)
+  const want = new Set(stored.map((id) => id.trim().toLowerCase()))
+  return parts.filter((p) => want.has(p.id.toLowerCase())).map((p) => p.id)
+}
+
+/** The chosen parts themselves, in the template's order, for showing what they produce. */
+export function selectedTemplateParts(template: SourceTemplate | undefined, stored: string[]): TemplatePart[] {
+  const on = new Set(resolveTemplateParts(template, stored))
+  return (template?.parts ?? []).filter((p) => on.has(p.id))
+}
+
+/**
+ * Turning one part on or off. The result is always explicit and in the
+ * template's order: once somebody has touched the checkboxes, what the source
+ * carries should be what they can see rather than a default they would have to
+ * know about.
+ */
+export function toggleTemplatePart(
+  template: SourceTemplate | undefined,
+  stored: string[],
+  id: string,
+  on: boolean,
+): string[] {
+  const current = new Set(resolveTemplateParts(template, stored))
+  if (on) current.add(id)
+  else current.delete(id)
+  return (template?.parts ?? []).filter((p) => current.has(p.id)).map((p) => p.id)
+}
+
+/**
+ * The fields a source will produce: the template's own, plus those of every
+ * part it carries. A part that is switched off produces nothing, so listing its
+ * fields would promise something the source does not do.
+ */
+export function templateFields(template: SourceTemplate | undefined, parts: string[]): TemplateField[] {
+  return [...(template?.fields ?? []), ...selectedTemplateParts(template, parts).flatMap((p) => p.fields ?? [])]
+}
+
+/** The analyses a source will unlock, without duplicates: the template's and its parts'. */
+export function templateAnalyses(template: SourceTemplate | undefined, parts: string[]): string[] {
+  const all = [
+    ...(template?.analyses ?? []),
+    ...selectedTemplateParts(template, parts).flatMap((p) => p.analyses ?? []),
+  ]
+  return Array.from(new Set(all))
+}
+
+/** One run of setup steps, and which part — if any — they belong to. */
+export interface TemplateStepGroup {
+  key: string
+  /** Absent for the template's own steps and for the closing ones. */
+  part?: TemplatePart
+  steps: TemplateStep[]
+  /**
+   * How many steps come before this group. The guide is one sequence to work
+   * through, so the numbering runs across the whole of it rather than
+   * restarting under each part, which would read as four separate guides.
+   */
+  start: number
+}
+
+/**
+ * The step that carries the generated sender configuration.
+ *
+ * It is written here rather than coming from the template because the file
+ * itself comes from an endpoint of its own — the server builds it from the
+ * chosen parts — so there is no step in the template to hang it on. The
+ * hostname is the whole of the warning: `SYSLOGC_HOST` ships as an example,
+ * and a wrong one fails the TLS handshake rather than anything that looks like
+ * a configuration mistake.
+ */
+export const GENERATED_CONFIG_STEP: TemplateStep = {
+  title: 'Replace nxlog.conf with this, then restart the NXLog service',
+  body:
+    'Built from the parts ticked above: one input block per part, one output, and one route carrying them all. ' +
+    'Change SYSLOGC_HOST to this server’s own name before using it — it ships as an example, and the name has to ' +
+    'match the TLS certificate or NXLog refuses the connection, which looks like nothing arriving rather than like ' +
+    'a mistake. Then restart with: Restart-Service nxlog',
+  language: 'apache',
+}
+
+/**
+ * The setup guide for the chosen parts: the template's steps, then each chosen
+ * part's, then the generated configuration, then the closing steps. Switching a
+ * part off takes its steps out, because they are then no longer things to do.
+ *
+ * A template built from parts gets the configuration step; one with a single
+ * shape carries its own configuration in its own steps and gets none.
+ */
+export function templateSteps(template: SourceTemplate, parts: string[]): TemplateStepGroup[] {
+  const runs: Omit<TemplateStepGroup, 'start'>[] = []
+  const first = template.setup.steps ?? []
+  if (first.length) runs.push({ key: 'setup', steps: first })
+  for (const part of selectedTemplateParts(template, parts)) {
+    if (part.steps?.length) runs.push({ key: `part:${part.id}`, part, steps: part.steps })
+  }
+  if (template.parts?.length) runs.push({ key: 'config', steps: [GENERATED_CONFIG_STEP] })
+  const closing = template.setup.closing ?? []
+  if (closing.length) runs.push({ key: 'closing', steps: closing })
+  return runs.reduce<TemplateStepGroup[]>((out, run) => {
+    const previous = out.at(-1)
+    return [...out, { ...run, start: previous ? previous.start + previous.steps.length : 0 }]
+  }, [])
+}
+
 /**
  * What a copyable block of a setup guide is. A template labels its snippets
  * with a highlighting language, and nothing here highlights code, so the label
@@ -136,6 +267,7 @@ const CONFIG_LANGUAGES: Record<string, string> = {
   yaml: 'YAML',
   json: 'JSON',
   xml: 'XML',
+  sql: 'SQL',
 }
 
 export function configLanguageLabel(language: string | undefined): string {
@@ -170,7 +302,16 @@ export function applyTemplate(
     )
   // The template's own rules go first: rules are tried in order, and a broad
   // rule written earlier would otherwise match first and hide the template's.
-  return { ...form, template: next?.id ?? TEMPLATE_NONE, extract: [...added, ...kept] }
+  //
+  // A part's rules are not copied in: the server compiles those from the
+  // chosen parts, so editing a copy here would silently break the analysis
+  // that reads them. Only the parts themselves are stored.
+  return {
+    ...form,
+    template: next?.id ?? TEMPLATE_NONE,
+    template_parts: templateDefaultParts(next),
+    extract: [...added, ...kept],
+  }
 }
 
 export interface SourceFormState {
@@ -219,6 +360,11 @@ export interface SourceFormState {
   extract: ExtractRuleForm[]
   /** A `SourceTemplate.id`, or empty for a source that carries anything else. */
   template: string
+  /**
+   * The parts of that template this source carries. Empty means the template's
+   * defaults, which is what a source saved before parts existed stores.
+   */
+  template_parts: string[]
 }
 
 export type SourceFormField = keyof SourceFormState
@@ -265,6 +411,7 @@ export const DEFAULT_SOURCE_FORM: SourceFormState = {
   tls_acme_skip_preflight: false,
   extract: [],
   template: TEMPLATE_NONE,
+  template_parts: [],
 }
 
 /** Which parts of the editor apply to a given type and protocol. */
@@ -342,6 +489,7 @@ export function configToForm(source: Pick<ManagedSource, 'config' | 'enabled' | 
       newExtractRule({ name: r.name ?? '', contains: r.contains ?? '', prefix: r.prefix ?? '', regex: r.regex ?? '' }),
     ),
     template: c.template ?? TEMPLATE_NONE,
+    template_parts: c.template_parts ?? [],
   }
 }
 
@@ -432,8 +580,11 @@ export function formToConfig(f: SourceFormState): { config: SourceConfig; errors
   const extract = extractRules(f.extract, errors)
   if (extract.length) config.extract = extract
   // A plain source carries no template at all, rather than an empty one: the
-  // stored config stays what an operator would have written by hand.
+  // stored config stays what an operator would have written by hand. Parts
+  // follow the same rule: an empty list is the template's own defaults, and
+  // writing it out would only repeat them.
   if (f.template) config.template = f.template
+  if (f.template && f.template_parts.length) config.template_parts = [...f.template_parts]
   return { config, errors }
 }
 

@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import type {
+  AnalysisActivity,
+  AnalysisCount,
   DirectoryActivity,
   DirectoryOverview,
   FilterExpr,
+  IISOverview,
+  IISRequestRow,
   ManagedForwardTarget,
+  MSSQLOverview,
   Problem,
   SourceTemplate,
   TemplatesResponse,
@@ -16,6 +21,7 @@ import { exportFilename } from '@/features/explorer/export'
 import {
   CERT_EXPIRY_WARNING_DAYS,
   DEFAULT_SOURCE_FORM,
+  GENERATED_CONFIG_STEP,
   TEMPLATE_NONE,
   acmeStatus,
   applyTemplate,
@@ -32,16 +38,25 @@ import {
   sourceProblemErrors,
   sourceRouteId,
   sourceSections,
+  resolveTemplateParts,
+  selectedTemplateParts,
+  templateAnalyses,
   templateById,
   templateChoices,
+  templateDefaultParts,
+  templateFields,
+  templateSteps,
   tlsMode,
+  toggleTemplatePart,
   type SourceFormState,
   rawMessageHint,
 } from '@/features/sources/source-form'
 import {
   analysisAvailability,
   analysisGateMessage,
+  analysisPartName,
   analysisShown,
+  analysisSource,
   templateForAnalysis,
 } from '@/features/analytics/analyses'
 import {
@@ -68,12 +83,52 @@ import {
   decodeAnalytics,
   encodeAnalytics,
   formatDelta,
+  lineChartData,
   metricComplete,
   previousRange,
   rowDelta,
   metricUnit,
   seriesChartData,
+  stepLabel,
 } from '@/features/analytics/analytics-query'
+import {
+  DEFAULT_MSSQL_RANGE,
+  DEFAULT_MSSQL_ROWS,
+  decodeMSSQL,
+  encodeMSSQL,
+  failedSignInSentence,
+  mssqlEmptyHint,
+  mssqlExplorerSearch,
+  mssqlFilter,
+  mssqlIsEmpty,
+  mssqlLineColor,
+  mssqlRangePatch,
+  mssqlTiles,
+  problemKindLabel,
+  problemTone,
+  problemWhere,
+  topMessagesCaveat,
+} from '@/features/analytics/mssql'
+import {
+  DEFAULT_IIS_RANGE,
+  DEFAULT_IIS_ROWS,
+  DEFAULT_IIS_SLOW_MILLIS,
+  decodeIIS,
+  encodeIIS,
+  formatMillis,
+  iisEmptyHint,
+  iisExplorerSearch,
+  iisFilter,
+  iisHeadline,
+  iisIsEmpty,
+  iisLineColor,
+  iisRangePatch,
+  iisTiles,
+  requestPath,
+  requestSentence,
+  slowUrlsCaveat,
+  IIS_LINES_ADD_UP,
+} from '@/features/analytics/iis'
 import {
   catalogProblemErrors,
   catalogToForm,
@@ -1900,5 +1955,650 @@ describe('directory analysis', () => {
     // Both causes, in the order they happen.
     expect(directoryEmptyHint()).toMatch(/just been added/)
     expect(directoryEmptyHint()).toMatch(/audit policy/)
+  })
+})
+
+describe('template parts', () => {
+  const windows: SourceTemplate = {
+    id: 'windows-server',
+    title: 'Microsoft Windows Server',
+    description: 'Active Directory, SQL Server and IIS from a Windows server.',
+    parts: [
+      {
+        id: 'active-directory',
+        title: 'Active Directory',
+        description: 'Sign-ins, lockouts and account changes.',
+        default: true,
+        analyses: ['directory'],
+        json: { prefix: 'ad.' },
+        fields: [{ name: 'ad.user', description: 'The account the event is about' }],
+        steps: [{ title: 'Turn on the auditing', config: 'auditpol …', language: 'batch' }],
+      },
+      {
+        id: 'mssql',
+        title: 'SQL Server',
+        description: 'Failed sign-ins, deadlocks and backups.',
+        analyses: ['mssql'],
+        json: { prefix: 'mssql.' },
+        extract: [{ name: 'mssql-client', regex: '\\[CLIENT: (?P<client_ip>[^\\]]+)\\]', prefix: 'mssql.' }],
+        fields: [{ name: 'mssql.login_user', description: 'The account a failed sign-in was for' }],
+        steps: [{ title: 'Record successful sign-ins too', config: 'EXEC …', language: 'sql' }],
+      },
+      {
+        id: 'iis',
+        title: 'IIS (web requests)',
+        description: 'Requests, response codes and slow URLs.',
+        analyses: ['iis'],
+        json: { prefix: 'iis.' },
+        fields: [{ name: 'iis.status', description: 'The response code' }],
+        // No steps on purpose: a part need not have any, and the guide must
+        // not grow an empty heading for it.
+      },
+    ],
+    setup: {
+      sender: 'NXLog Community Edition',
+      summary: 'NXLog reads the logs you choose.',
+      steps: [{ title: 'Install NXLog' }],
+      closing: [{ title: 'Add the source here' }],
+    },
+    in_use: true,
+    sources: ['ad-dc'],
+    parts_in_use: ['active-directory'],
+  }
+
+  it('starts from the template’s defaults, and treats an empty list as those', () => {
+    expect(templateDefaultParts(windows)).toEqual(['active-directory'])
+    expect(templateDefaultParts(undefined)).toEqual([])
+    // A source saved before parts existed names none, and must keep doing
+    // exactly what it did.
+    expect(resolveTemplateParts(windows, [])).toEqual(['active-directory'])
+    expect(resolveTemplateParts(windows, ['iis', 'mssql'])).toEqual(['mssql', 'iis'])
+    // Template order, not the order they happen to be stored in.
+    expect(resolveTemplateParts(windows, ['IIS'])).toEqual(['iis'])
+    // A part the template no longer has could never be unticked, so it goes.
+    expect(resolveTemplateParts(windows, ['mssql', 'retired'])).toEqual(['mssql'])
+    expect(resolveTemplateParts(undefined, ['mssql'])).toEqual([])
+  })
+
+  it('toggles one part at a time and stays explicit afterwards', () => {
+    // Switching one on from the defaults writes both out, so what the source
+    // carries is what the checkboxes show rather than a hidden default.
+    expect(toggleTemplatePart(windows, [], 'iis', true)).toEqual(['active-directory', 'iis'])
+    expect(toggleTemplatePart(windows, [], 'active-directory', false)).toEqual([])
+    expect(toggleTemplatePart(windows, ['mssql'], 'active-directory', true)).toEqual(['active-directory', 'mssql'])
+    // Already on: nothing changes, and the order is still the template's.
+    expect(toggleTemplatePart(windows, ['iis', 'mssql'], 'mssql', true)).toEqual(['mssql', 'iis'])
+  })
+
+  it('promises only the fields and analyses the chosen parts produce', () => {
+    expect(selectedTemplateParts(windows, ['mssql']).map((p) => p.id)).toEqual(['mssql'])
+    expect(templateFields(windows, []).map((f) => f.name)).toEqual(['ad.user'])
+    expect(templateFields(windows, ['mssql', 'iis']).map((f) => f.name)).toEqual(['mssql.login_user', 'iis.status'])
+    expect(templateAnalyses(windows, [])).toEqual(['directory'])
+    expect(templateAnalyses(windows, ['active-directory', 'mssql', 'iis'])).toEqual(['directory', 'mssql', 'iis'])
+    expect(templateAnalyses(undefined, ['mssql'])).toEqual([])
+  })
+
+  it('builds the guide as one numbered sequence: setup, each part, the file, then closing', () => {
+    const groups = templateSteps(windows, ['active-directory', 'mssql', 'iis'])
+    // The generated configuration sits after the parts' own steps and before
+    // the closing ones, which is where it is actually needed.
+    expect(groups.map((g) => g.key)).toEqual(['setup', 'part:active-directory', 'part:mssql', 'config', 'closing'])
+    // Numbered across the whole guide: restarting at 1 under each part would
+    // read as several separate guides.
+    expect(groups.map((g) => g.start)).toEqual([0, 1, 2, 3, 4])
+    expect(groups[1]!.part?.title).toBe('Active Directory')
+    // Switching a part off takes its steps out, because they are no longer
+    // things to do — the file itself stays, and is rebuilt without it.
+    expect(templateSteps(windows, ['iis']).map((g) => g.key)).toEqual(['setup', 'config', 'closing'])
+  })
+
+  it('stores the chosen parts, and nothing when they are the defaults', () => {
+    const picked = applyTemplate({ ...DEFAULT_SOURCE_FORM }, windows, undefined)
+    expect(picked.template).toBe('windows-server')
+    expect(picked.template_parts).toEqual(['active-directory'])
+    // A part's own rules are not copied into the form: the server compiles them
+    // from the parts, and an edited copy would break the analysis silently.
+    expect(picked.extract).toEqual([])
+
+    const config = formToConfig({ ...picked, name: 'win-app01', template_parts: ['mssql', 'iis'] }).config
+    expect(config.template_parts).toEqual(['mssql', 'iis'])
+    // Nothing stored means the template's defaults, so an empty list is left out.
+    expect('template_parts' in formToConfig({ ...picked, name: 's', template_parts: [] }).config).toBe(false)
+    // A plain source cannot carry parts at all.
+    expect(
+      'template_parts' in formToConfig({ ...DEFAULT_SOURCE_FORM, name: 's', template_parts: ['mssql'] }).config,
+    ).toBe(false)
+    expect(
+      configToForm({
+        config: { name: 's', type: 'syslog', template: 'windows-server', template_parts: ['iis'] },
+        enabled: true,
+      }).template_parts,
+    ).toEqual(['iis'])
+    expect(configToForm({ config: { name: 's', type: 'syslog' }, enabled: true }).template_parts).toEqual([])
+  })
+
+  it('takes the parts back when the template changes', () => {
+    const picked = applyTemplate({ ...DEFAULT_SOURCE_FORM }, windows, undefined)
+    const plain = applyTemplate(picked, undefined, windows)
+    expect(plain.template).toBe(TEMPLATE_NONE)
+    expect(plain.template_parts).toEqual([])
+  })
+
+  it('names a SQL snippet, which the Windows template is the first to use', () => {
+    expect(configLanguageLabel('sql')).toBe('SQL')
+  })
+})
+
+describe('analysis gating by part', () => {
+  const windows: SourceTemplate = {
+    id: 'windows-server',
+    title: 'Microsoft Windows Server',
+    description: 'Active Directory, SQL Server and IIS from a Windows server.',
+    parts: [
+      {
+        id: 'active-directory',
+        title: 'Active Directory',
+        description: 'Sign-ins and lockouts.',
+        default: true,
+        analyses: ['directory'],
+      },
+      { id: 'mssql', title: 'SQL Server', description: 'Failed sign-ins and deadlocks.', analyses: ['mssql'] },
+      { id: 'iis', title: 'IIS (web requests)', description: 'Requests and response codes.', analyses: ['iis'] },
+    ],
+    setup: { sender: 'NXLog Community Edition', summary: 'NXLog reads the logs you choose.' },
+    in_use: true,
+    parts_in_use: ['active-directory'],
+  }
+  const templates = (analyses: string[] | null): TemplatesResponse => ({ templates: [windows], analyses })
+
+  it('offers a part’s view only while a source carries that part', () => {
+    // The template is in use either way; the part is what decides.
+    expect(analysisAvailability('directory', templates(['directory']))).toBe('available')
+    expect(analysisAvailability('mssql', templates(['directory']))).toBe('unavailable')
+    expect(analysisAvailability('iis', templates(['directory', 'mssql', 'iis']))).toBe('available')
+    expect(analysisAvailability('mssql', undefined)).toBe('unknown')
+    expect(analysisShown(analysisAvailability('mssql', undefined))).toBe(true)
+  })
+
+  it('finds the part that feeds a view, not just the template', () => {
+    // A template built from parts leaves its own `analyses` empty, so looking
+    // only there would leave these views with nothing to name.
+    expect(analysisSource('mssql', templates(null))?.part?.title).toBe('SQL Server')
+    expect(templateForAnalysis('iis', templates(null))?.id).toBe('windows-server')
+    expect(analysisSource('dns-services', templates(null))).toBeUndefined()
+    expect(analysisPartName('iis', templates(null))).toBe('IIS (web requests)')
+    // Without the list there is still a part to name, from the registry.
+    expect(analysisPartName('mssql', undefined)).toBe('SQL Server')
+  })
+
+  it('tells somebody which checkbox to find, not just which template', () => {
+    const message = analysisGateMessage('mssql', templates(['directory']))
+    expect(message.title).toMatch(/SQL Server/)
+    expect(message.hint).toContain('“SQL Server” part of the “Microsoft Windows Server” template')
+    expect(message.hint).toMatch(/Switch that part on/)
+    expect(message.hint).toContain('deadlocks')
+    // A template with no parts still reads as it did.
+    expect(analysisGateMessage('dns-services', undefined).hint).toMatch(/Add a source with that template/)
+  })
+})
+
+describe('shared analysis charting', () => {
+  const activity: AnalysisActivity = {
+    step_seconds: 300,
+    timestamps: ['2026-10-04T10:00:00Z', '2026-10-04T10:05:00Z'],
+    lines: [
+      { name: 'events', label: 'Events', points: [7, 9], total: 16 },
+      { name: 'severe_errors', label: 'Severe errors', points: [1], total: 1 },
+    ],
+  }
+
+  it('pads a short line with zeroes rather than shifting the rest', () => {
+    const chart = lineChartData(activity, mssqlLineColor)
+    expect(chart.series.map((s) => [s.key, s.name, s.color])).toEqual([
+      ['s0', 'events', 'var(--accent)'],
+      ['s1', 'severe_errors', 'var(--danger)'],
+    ])
+    expect(chart.rows).toEqual([
+      { t: Date.parse('2026-10-04T10:00:00Z'), s0: 7, s1: 1 },
+      { t: Date.parse('2026-10-04T10:05:00Z'), s0: 9, s1: 0 },
+    ])
+    expect(lineChartData(undefined, mssqlLineColor)).toEqual({ rows: [], series: [] })
+  })
+
+  it('reports the bucket width the way a person would say it', () => {
+    expect(stepLabel(30)).toBe('30s')
+    expect(stepLabel(600)).toBe('10m')
+    expect(stepLabel(21_600)).toBe('6h')
+    expect(stepLabel(172_800)).toBe('2d')
+    // The directory view's own export is the same function, so the three pages
+    // cannot describe the same bucket differently.
+    expect(activityStepLabel(600)).toBe(stepLabel(600))
+  })
+})
+
+describe('SQL Server analysis', () => {
+  const base = { inst: undefined, rows: undefined }
+
+  it('defaults to every instance, and ignores a row count it cannot use', () => {
+    expect(decodeMSSQL(base)).toEqual({ instance: '', rows: DEFAULT_MSSQL_ROWS })
+    expect(decodeMSSQL({ ...base, rows: '25' }).rows).toBe(25)
+    expect(decodeMSSQL({ ...base, rows: '7' }).rows).toBe(DEFAULT_MSSQL_ROWS)
+    expect(decodeMSSQL({ ...base, inst: '  MSSQL$SALES  ' }).instance).toBe('MSSQL$SALES')
+  })
+
+  it('round-trips through the URL, dropping defaults', () => {
+    const q = { instance: 'MSSQL$SALES', rows: 100 }
+    expect(encodeMSSQL(q)).toEqual({ inst: 'MSSQL$SALES', rows: '100' })
+    expect(decodeMSSQL(encodeMSSQL(q))).toEqual(q)
+    expect(encodeMSSQL({ instance: ' ', rows: DEFAULT_MSSQL_ROWS })).toEqual({ inst: undefined, rows: undefined })
+  })
+
+  it('widens the explorer default to a day, but leaves a chosen range alone', () => {
+    expect(mssqlRangePatch({ from: 'now-1h', to: 'now' })).toEqual(DEFAULT_MSSQL_RANGE)
+    expect(mssqlRangePatch({ from: 'now-7d', to: 'now' })).toEqual({})
+  })
+
+  it('narrows the request by instance, and only when there is one', () => {
+    expect(mssqlFilter('MSSQLSERVER')).toEqual({ op: 'eq', field: 'mssql.provider', value: 'MSSQLSERVER' })
+    expect(mssqlFilter('  ')).toBeUndefined()
+    // A named instance contains a $, which the filter text has to survive.
+    expect(mssqlExplorerSearch('MSSQL$SALES', { from: 'now-24h', to: 'now', tz: undefined }).q).toBe(
+      'mssql.provider=MSSQL$SALES',
+    )
+  })
+
+  const overview: MSSQLOverview = {
+    sign_in_failures: 31,
+    sign_ins: 0,
+    failed_accounts: 4,
+    failure_sources: 3,
+    deadlocks: 2,
+    severe_errors: 1,
+    read_retries: 5,
+    backups: 0,
+    instances: 3,
+    hosts: 2,
+  }
+
+  it('says who the failures were for and from how many addresses, in the tile', () => {
+    const tiles = mssqlTiles(overview)
+    const failures = tiles.find((t) => t.name === 'sign_in_failures')!
+    expect(failures.value).toBe(31)
+    expect(failures.tone).toBe('warn')
+    expect(failures.note).toBe('For 4 accounts, from 3 addresses.')
+    // The same count against one account from one address is a stale password,
+    // so the singular has to read properly too.
+    expect(
+      mssqlTiles({ ...overview, failed_accounts: 1, failure_sources: 1 }).find((t) => t.name === 'sign_in_failures')!
+        .note,
+    ).toBe('For 1 account, from 1 address.')
+  })
+
+  it('shows no successful sign-ins as not recorded, never as a zero', () => {
+    // SQL Server logs only failures until auditing is set to both, so a nought
+    // here would read as a server nobody signed in to.
+    const none = mssqlTiles(overview).find((t) => t.name === 'sign_ins')!
+    expect(none.missing).toBe(true)
+    expect(none.note).toMatch(/Not recorded/)
+    expect(none.note).toMatch(/auditing is set to both/)
+    const some = mssqlTiles({ ...overview, sign_ins: 12 }).find((t) => t.name === 'sign_ins')!
+    expect(some.missing).toBe(false)
+    expect(some.value).toBe(12)
+  })
+
+  it('does not let a zero deadlock count read as reassurance', () => {
+    const none = mssqlTiles({ ...overview, deadlocks: 0 }).find((t) => t.name === 'deadlocks')!
+    expect(none.tone).toBe('neutral')
+    // 1205 only reaches the event log under certain settings, so "none" is not
+    // the same claim as "there were none".
+    expect(none.note).toMatch(/not proof there were none/)
+    expect(mssqlTiles(overview).find((t) => t.name === 'deadlocks')!.tone).toBe('alert')
+  })
+
+  it('keeps retried reads apart from the severe errors, and below them', () => {
+    const tiles = mssqlTiles(overview)
+    const retries = tiles.find((t) => t.name === 'read_retries')!
+    const severe = tiles.find((t) => t.name === 'severe_errors')!
+    // 825 is a read that succeeded on the second attempt: a disk worth
+    // watching, not an outage, so it never carries the alarming tone.
+    expect(retries.value).toBe(5)
+    expect(retries.tone).toBe('warn')
+    expect(severe.tone).toBe('alert')
+    expect(retries.note).toMatch(/Nothing was lost/)
+    // They are two numbers and must stay two: nothing anywhere adds them.
+    expect(retries.value + severe.value).not.toBe(severe.value)
+    expect(mssqlTiles({ ...overview, read_retries: 0 }).find((t) => t.name === 'read_retries')!.tone).toBe('neutral')
+  })
+
+  it('counts the instances across the servers they run on', () => {
+    expect(mssqlTiles(overview).find((t) => t.name === 'instances')!.note).toBe(
+      'Instances that sent anything at all, across 2 servers.',
+    )
+    expect(mssqlTiles(undefined).map((t) => t.value)).toEqual([0, 0, 0, 0, 0, 0, 0])
+  })
+
+  it('keeps a warning line looking like a warning', () => {
+    expect(mssqlLineColor('sign_in_failures')).toBe('var(--warning)')
+    expect(mssqlLineColor('severe_errors')).toBe('var(--danger)')
+    expect(mssqlLineColor('backups')).toBe('var(--success)')
+    // A retried read is neither a failure nor a success, and looks like neither.
+    expect(mssqlLineColor('read_retries')).not.toBe(mssqlLineColor('severe_errors'))
+    expect(mssqlLineColor('read_retries')).not.toBe(mssqlLineColor('backups'))
+  })
+
+  it('grades a problem by what it is rather than by its wording', () => {
+    expect(problemTone('corruption')).toBe('alert')
+    expect(problemTone('resource')).toBe('alert')
+    expect(problemTone('scheduler')).toBe('alert')
+    expect(problemTone('deadlock')).toBe('warn')
+    expect(problemTone('backup')).toBe('neutral')
+    expect(problemTone('unknown')).toBe('neutral')
+    expect(problemKindLabel('corruption')).toBe('data')
+    expect(problemKindLabel('login_failure')).toBe('sign-in')
+  })
+
+  it('spells out the failed sign-ins, and says when one address is the whole story', () => {
+    const accounts: AnalysisCount[] = [
+      { value: 'sa', count: 24 },
+      { value: 'svc-reports', count: 7 },
+    ]
+    const oneSource: AnalysisCount[] = [{ value: '10.20.4.19', count: 31 }]
+    expect(failedSignInSentence(accounts, oneSource, 31)).toBe(
+      'sa was refused 24 times from 10.20.4.19, of 31 failed sign-ins in this window',
+    )
+    // Several addresses: naming the busiest would read as though it were the
+    // only one, so the count of them is given instead.
+    const many: AnalysisCount[] = [
+      { value: '10.20.4.19', count: 20 },
+      { value: '198.51.100.7', count: 11 },
+    ]
+    expect(failedSignInSentence([{ value: 'sa', count: 31 }], many, 31)).toBe(
+      'sa was refused 31 times, from 2 addresses',
+    )
+    expect(failedSignInSentence([{ value: 'sa', count: 1 }], oneSource, 1)).toBe(
+      'sa was refused 1 time from 10.20.4.19',
+    )
+    // Nothing failed: there is no headline, rather than a headline about zero.
+    expect(failedSignInSentence([], oneSource, 0)).toBeUndefined()
+    expect(failedSignInSentence(accounts, [], 0)).toBeUndefined()
+  })
+
+  it('says where a problem happened, and reads without the parts that are missing', () => {
+    expect(
+      problemWhere({
+        at: 'x',
+        event: '824',
+        what: 'a page read back damaged',
+        kind: 'corruption',
+        instance: 'MSSQLSERVER',
+        host: 'SQL01',
+      }),
+    ).toBe('824 — a page read back damaged, MSSQLSERVER on SQL01')
+    expect(problemWhere({ at: 'x', event: '9002', what: 'the transaction log is full', kind: 'resource' })).toBe(
+      '9002 — the transaction log is full',
+    )
+  })
+
+  it('warns that the commonest message is not the commonest problem', () => {
+    // SQL Server writes the page number into the sentence, so one broken file
+    // can appear as several rows; a ranking that looks authoritative and is not
+    // needs saying so.
+    expect(topMessagesCaveat()).toMatch(/the text that repeated/)
+    expect(topMessagesCaveat()).toMatch(/two errors about one broken file/)
+  })
+
+  it('tells an empty window apart from a quiet server, and names the part', () => {
+    expect(mssqlIsEmpty(undefined)).toBe(true)
+    // A server that is simply behaving itself has instances but no problems.
+    expect(
+      mssqlIsEmpty({ ...overview, sign_in_failures: 0, deadlocks: 0, severe_errors: 0, read_retries: 0, backups: 0 }),
+    ).toBe(false)
+    expect(
+      mssqlIsEmpty({
+        sign_in_failures: 0,
+        sign_ins: 0,
+        failed_accounts: 0,
+        failure_sources: 0,
+        deadlocks: 0,
+        severe_errors: 0,
+        read_retries: 0,
+        backups: 0,
+        instances: 0,
+        hosts: 0,
+      }),
+    ).toBe(true)
+    const hint = mssqlEmptyHint('SQL Server')
+    expect(hint).toMatch(/just been added/)
+    expect(hint).toContain('“SQL Server” part')
+    expect(hint).toMatch(/Application channel/)
+  })
+})
+
+describe('IIS analysis', () => {
+  const base = { uri: undefined, rows: undefined, slow: undefined }
+
+  it('defaults to the whole site at the server’s own threshold', () => {
+    expect(decodeIIS(base)).toEqual({ url: '', rows: DEFAULT_IIS_ROWS, slowMillis: DEFAULT_IIS_SLOW_MILLIS })
+    expect(decodeIIS({ ...base, rows: '100' }).rows).toBe(100)
+    expect(decodeIIS({ ...base, rows: '7' }).rows).toBe(DEFAULT_IIS_ROWS)
+    expect(decodeIIS({ ...base, slow: '3000' }).slowMillis).toBe(3000)
+    // A threshold the server was never asked for would make the count and the
+    // label disagree, so an unusable one falls back rather than being sent.
+    expect(decodeIIS({ ...base, slow: '1234' }).slowMillis).toBe(DEFAULT_IIS_SLOW_MILLIS)
+    expect(decodeIIS({ ...base, uri: '  /api/orders  ' }).url).toBe('/api/orders')
+  })
+
+  it('round-trips through the URL, dropping defaults', () => {
+    const q = { url: '/api/orders', rows: 25, slowMillis: 3000 }
+    expect(encodeIIS(q)).toEqual({ uri: '/api/orders', rows: '25', slow: '3000' })
+    expect(decodeIIS(encodeIIS(q))).toEqual(q)
+    expect(encodeIIS({ url: ' ', rows: DEFAULT_IIS_ROWS, slowMillis: DEFAULT_IIS_SLOW_MILLIS })).toEqual({
+      uri: undefined,
+      rows: undefined,
+      slow: undefined,
+    })
+  })
+
+  it('widens the explorer default, but leaves a chosen range alone', () => {
+    expect(iisRangePatch({ from: 'now-1h', to: 'now' })).toEqual(DEFAULT_IIS_RANGE)
+    expect(iisRangePatch({ from: 'now-7d', to: 'now' })).toEqual({})
+  })
+
+  it('narrows the request by path, and only when there is one', () => {
+    expect(iisFilter('/api/orders')).toEqual({ op: 'eq', field: 'iis.uri', value: '/api/orders' })
+    expect(iisFilter('  ')).toBeUndefined()
+    const search = iisExplorerSearch('/api/orders', { from: 'now-6h', to: 'now', tz: undefined })
+    expect(search.q).toBe('iis.uri=/api/orders')
+    expect(search.from).toBe('now-6h')
+    // A path with a space in it still has to parse back out of the filter.
+    expect(iisExplorerSearch('/my docs/a.aspx', { from: 'now-1h', to: 'now', tz: 'UTC' }).q).toBe(
+      'iis.uri="/my docs/a.aspx"',
+    )
+  })
+
+  const overview: IISOverview = {
+    requests: 18_400,
+    informational: 20,
+    succeeded: 17_200,
+    redirected: 240,
+    client_errors: 736,
+    server_errors: 184,
+    auth_failures: 245,
+    slow_requests: 410,
+    slow_threshold_millis: 1000,
+    clients: 42,
+    urls: 36,
+    servers: 2,
+  }
+
+  it('puts the server’s own failures above the clients’, and says the share', () => {
+    const tiles = iisTiles(overview)
+    expect(tiles.map((t) => t.name)).toEqual([
+      'requests',
+      'succeeded',
+      'client_errors',
+      'server_errors',
+      'auth_failures',
+      'slow_requests',
+    ])
+    const server = tiles.find((t) => t.name === 'server_errors')!
+    expect(server.tone).toBe('alert')
+    expect(server.note).toMatch(/1\.0% of requests/)
+    // A 404 is usually a scanner, so the 4xx tile is a warning rather than an
+    // alarm even when it is four times larger.
+    expect(tiles.find((t) => t.name === 'client_errors')!.tone).toBe('warn')
+    const quiet = iisTiles({ ...overview, server_errors: 0, client_errors: 0, auth_failures: 0 })
+    expect(quiet.find((t) => t.name === 'server_errors')!.tone).toBe('neutral')
+    expect(quiet.find((t) => t.name === 'server_errors')!.note).toMatch(/nothing failed inside the site/)
+    expect(iisTiles(undefined).map((t) => t.value)).toEqual([0, 0, 0, 0, 0, 0])
+  })
+
+  it('admits that the classes do not add up to the requests', () => {
+    // 1xx is counted on its own and a line whose status could not be read is
+    // counted in none of them, so somebody who adds the tiles up and finds a
+    // shortfall has found the truth rather than a bug.
+    const note = iisTiles(overview).find((t) => t.name === 'requests')!.note
+    expect(note).toMatch(/42 addresses across 36 paths on 2 servers/)
+    expect(note).toMatch(/20 had no readable status/)
+    // Where they do add up, nothing is claimed about it.
+    const exact = iisTiles({ ...overview, informational: 0, requests: 18_360 }).find((t) => t.name === 'requests')!.note
+    expect(exact).not.toMatch(/readable status/)
+  })
+
+  it('reports the slow count with the threshold it was counted at', () => {
+    const slow = iisTiles(overview).find((t) => t.name === 'slow_requests')!
+    expect(slow.value).toBe(410)
+    // The count means nothing without the threshold, so they travel together.
+    expect(slow.note).toMatch(/1,000 ms or more/)
+    expect(
+      iisTiles({ ...overview, slow_threshold_millis: 3000 }).find((t) => t.name === 'slow_requests')!.note,
+    ).toMatch(/3,000 ms or more/)
+  })
+
+  it('reads a status class as a scale from fine to broken, with slow across it', () => {
+    expect(iisLineColor('2xx')).toBe('var(--success)')
+    expect(iisLineColor('4xx')).toBe('var(--warning)')
+    expect(iisLineColor('5xx')).toBe('var(--danger)')
+    expect(iisLineColor('2xx')).not.toBe(iisLineColor('3xx'))
+    // A slow request is also counted in whatever class it answered with, so the
+    // lines must never be totalled.
+    expect(IIS_LINES_ADD_UP).toBe(false)
+  })
+
+  it('says a duration the way a person would, from the milliseconds IIS records', () => {
+    expect(formatMillis(840)).toBe('840 ms')
+    expect(formatMillis(1_240)).toBe('1.2 s')
+    expect(formatMillis(0)).toBe('0 ms')
+    expect(formatMillis(undefined)).toBe('—')
+  })
+
+  it('leads with the failures only the site itself can cause', () => {
+    const urls: AnalysisCount[] = [
+      { value: '/api/orders', count: 140 },
+      { value: '/api/report', count: 44 },
+    ]
+    expect(iisHeadline(overview, urls)).toBe(
+      '184 requests failed inside the site — 1.0% of the window. Most of them on /api/orders.',
+    )
+    // No 5xx: there is no headline rather than a headline about 4xx, which on
+    // anything public is background noise.
+    expect(iisHeadline({ ...overview, server_errors: 0 }, urls)).toBeUndefined()
+    expect(iisHeadline(undefined, urls)).toBeUndefined()
+    expect(iisHeadline({ ...overview, server_errors: 1 }, [])).toMatch(/^1 request failed inside the site/)
+  })
+
+  it('says the slow list ranks by how many, not by how slow', () => {
+    const caveat = slowUrlsCaveat(1000)
+    expect(caveat).toMatch(/1,000 ms or more/)
+    expect(caveat).toMatch(/not by how slow they were/)
+    // There is no average or worst time anywhere, and the page says why rather
+    // than leaving somebody looking for one.
+    expect(caveat).toMatch(/cannot be summed/)
+    expect(slowUrlsCaveat(3000)).toMatch(/3,000 ms or more/)
+  })
+
+  const row: IISRequestRow = {
+    at: '2026-10-07T09:14:02Z',
+    status: '500',
+    class: '5xx',
+    method: 'POST',
+    uri: '/api/orders',
+    query: 'id=88213',
+    client_ip: '10.20.8.31',
+    time_taken_millis: 4_912,
+  }
+
+  it('spells out one 5xx, since the URL alone rarely says why', () => {
+    expect(requestSentence(row)).toBe('500 on POST /api/orders from 10.20.8.31, took 4.9 s')
+    // Absent is not zero: IIS writes "-" when it recorded no duration.
+    expect(requestSentence({ ...row, time_taken_millis: undefined })).toBe('500 on POST /api/orders from 10.20.8.31')
+    expect(requestSentence({ at: 'x', status: '503' })).toBe('503 on (no path recorded)')
+    expect(requestSentence({ ...row, substatus: '13' })).toMatch(/^500\.13 /)
+  })
+
+  it('shows the query string, which is usually what differs between two 500s', () => {
+    expect(requestPath(row)).toBe('/api/orders?id=88213')
+    // IIS writes "-" for a request that had none, and that is not a query.
+    expect(requestPath({ ...row, query: '-' })).toBe('/api/orders')
+    expect(requestPath({ at: 'x', status: '500' })).toBe('')
+  })
+
+  it('tells an empty window apart from a quiet site, and names the part', () => {
+    expect(iisIsEmpty(undefined)).toBe(true)
+    expect(iisIsEmpty({ ...overview, requests: 0 })).toBe(true)
+    expect(iisIsEmpty(overview)).toBe(false)
+    const hint = iisEmptyHint('IIS (web requests)')
+    expect(hint).toMatch(/just been added/)
+    expect(hint).toContain('“IIS (web requests)” part')
+    // The one part that reads files, which is where this usually goes wrong.
+    expect(hint).toMatch(/files from disk/)
+  })
+})
+
+describe('the generated sender configuration', () => {
+  it('is a numbered step of the guide, between the parts and the closing steps', () => {
+    const windows: SourceTemplate = {
+      id: 'windows-server',
+      title: 'Microsoft Windows Server',
+      description: 'Active Directory, SQL Server and IIS.',
+      parts: [
+        {
+          id: 'active-directory',
+          title: 'Active Directory',
+          description: 'Sign-ins and lockouts.',
+          default: true,
+          steps: [{ title: 'Turn on the auditing' }],
+        },
+        { id: 'iis', title: 'IIS (web requests)', description: 'Requests and response codes.' },
+      ],
+      setup: {
+        sender: 'NXLog Community Edition',
+        summary: 'NXLog reads the logs you choose.',
+        steps: [{ title: 'Install NXLog' }],
+        closing: [{ title: 'Add the source here' }],
+      },
+      in_use: false,
+    }
+    const groups = templateSteps(windows, ['active-directory', 'iis'])
+    expect(groups.map((g) => g.key)).toEqual(['setup', 'part:active-directory', 'config', 'closing'])
+    expect(groups.map((g) => g.start)).toEqual([0, 1, 2, 3])
+    // The hostname is the whole of the warning: it ships as an example, and a
+    // wrong one fails the handshake rather than anything that looks like a
+    // configuration mistake.
+    expect(GENERATED_CONFIG_STEP.body).toMatch(/Change SYSLOGC_HOST/)
+    expect(GENERATED_CONFIG_STEP.language).toBe('apache')
+    expect(configLanguageLabel(GENERATED_CONFIG_STEP.language)).toBe('configuration file')
+  })
+
+  it('is not offered for a template that carries its own configuration', () => {
+    const dns: SourceTemplate = {
+      id: 'dns-dnsdist',
+      title: 'DNS queries',
+      description: 'Client queries from a dnsdist resolver.',
+      setup: { sender: 'dnsdist', summary: 'Point it here.', steps: [{ title: 'Send its queries here' }] },
+      in_use: true,
+    }
+    expect(templateSteps(dns, []).map((g) => g.key)).toEqual(['setup'])
   })
 })

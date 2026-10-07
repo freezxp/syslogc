@@ -278,11 +278,13 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
           <TemplateChoicePanel
             templates={templateList}
             value={form.template}
+            parts={form.template_parts}
             editable={editable}
             error={errors.fields.template}
             // The template's own rules are seeded into the form, so switching
             // choices has to take the previous one's rules back out again.
             onChange={(id) => setForm((f) => applyTemplate(f, templateById(templateList, id), chosen))}
+            onPartsChange={(parts) => set('template_parts', parts)}
           />
         )}
 
@@ -362,8 +364,12 @@ function SourceEditor({ source, readOnly }: { source: ManagedSource | null; read
 
         {/* Keyed on the template so switching choices reopens the guide: the
             steps of a template you have just picked are what you need next,
-            while an existing source's are usually already done. */}
-        {chosen && <TemplateSetupPanel key={chosen.id} template={chosen} defaultOpen={!source} />}
+            while an existing source's are usually already done. Toggling a
+            part changes the steps inside the open guide rather than reopening
+            it, which is why the key is the template alone. */}
+        {chosen && (
+          <TemplateSetupPanel key={chosen.id} template={chosen} parts={form.template_parts} defaultOpen={!source} />
+        )}
 
         <Panel title="Parsing">
           <div className="grid gap-3 sm:grid-cols-2">

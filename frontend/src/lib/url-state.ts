@@ -29,10 +29,13 @@ export type ExplorerSearch = z.infer<typeof explorerSearchSchema>
  * `features/analytics/analytics-query.ts` turns it into a request.
  *
  * `view` picks between the ad-hoc explorer, the recorded service trends and the
- * directory analysis; `win`, `count`, `scope`, `svc` and `catalog` belong to the
- * trends and are decoded by `features/analytics/service-trends.ts`, while `acct`
- * and `rows` belong to the directory view and are decoded by
- * `features/analytics/directory.ts`.
+ * three template analyses; `win`, `count`, `scope`, `svc` and `catalog` belong
+ * to the trends and are decoded by `features/analytics/service-trends.ts`,
+ * while `acct`, `inst` and `uri` each narrow one analysis — to an account, a
+ * SQL Server instance or a URL — and are decoded beside the view that uses
+ * them. `rows` caps the lists on all three, and `slow` is the IIS view's
+ * threshold for what counts as a slow request — a property of the site rather
+ * than of the log, so it belongs in the URL beside the range.
  */
 export const analyticsSearchSchema = z.object({
   from: str('now-1h'),
@@ -45,13 +48,16 @@ export const analyticsSearchSchema = z.object({
   metric: z._default(z.catch(z.enum(['count', 'unique']), 'count'), 'count'),
   mfield: optStr(),
   top: optStr(),
-  view: z._default(z.catch(z.enum(['explore', 'trends', 'directory']), 'explore'), 'explore'),
+  view: z._default(z.catch(z.enum(['explore', 'trends', 'directory', 'mssql', 'iis']), 'explore'), 'explore'),
   win: optStr(),
   count: optStr(),
   scope: optStr(),
   svc: optStr(),
   catalog: optStr(),
   acct: optStr(),
+  inst: optStr(),
+  uri: optStr(),
+  slow: optStr(),
   rows: optStr(),
 })
 

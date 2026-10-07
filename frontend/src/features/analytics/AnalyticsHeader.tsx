@@ -1,7 +1,12 @@
 /**
  * The bar every analytics view shares: which view is showing, the time range it
  * covers, and how to hand that exact view to someone else. Which views there
- * are at all depends on what the sources carry; see ./analyses.ts.
+ * are at all depends on what the sources carry — and, for a template built
+ * from parts, which parts they carry; see ./analyses.ts.
+ *
+ * Five tabs is already enough to wrap at phone width, which is why the row
+ * wraps rather than scrolls: a tab half off the edge of the screen is a tab
+ * nobody finds.
  */
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { Link2, Share2, ZoomOut } from 'lucide-react'
@@ -25,6 +30,8 @@ import type { AnalyticsSearch } from '@/lib/url-state'
 
 import { analysisAvailability, analysisShown, ANALYSES, type AnalysisId } from './analyses'
 import { directoryRangePatch } from './directory'
+import { iisRangePatch } from './iis'
+import { mssqlRangePatch } from './mssql'
 import { trendsRangePatch } from './service-trends'
 
 export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } | null }) {
@@ -49,7 +56,9 @@ export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } |
   return (
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-surface px-3 py-1">
       <h1 className="mr-1 text-lg font-semibold">Analytics</h1>
-      <div className="flex items-center gap-1" role="group" aria-label="Analytics view">
+      {/* Wraps: five tabs do not fit a phone, and the fifth was being clipped
+          rather than scrolled, which made the IIS view unreachable there. */}
+      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Analytics view">
         <ViewTab view="explore" label="Explore" current={search.view} onSelect={() => setSearch({ view: 'explore' })} />
         {offered('dns-services') && (
           <ViewTab
@@ -69,6 +78,26 @@ export function AnalyticsHeader({ range }: { range: { start: Date; end: Date } |
             // An hour of a domain holds a sign-in spike but rarely the lockout
             // that followed it.
             onSelect={() => setSearch({ view: 'directory', ...directoryRangePatch(search) })}
+          />
+        )}
+        {offered('mssql') && (
+          <ViewTab
+            view="mssql"
+            label={ANALYSES.mssql.label}
+            current={search.view}
+            // An hour rarely holds the overnight backup or the error that
+            // preceded this morning's incident.
+            onSelect={() => setSearch({ view: 'mssql', ...mssqlRangePatch(search) })}
+          />
+        )}
+        {offered('iis') && (
+          <ViewTab
+            view="iis"
+            label={ANALYSES.iis.label}
+            current={search.view}
+            // An hour of a web server is plenty of requests but often misses
+            // the burst of 500s somebody was told about.
+            onSelect={() => setSearch({ view: 'iis', ...iisRangePatch(search) })}
           />
         )}
       </div>

@@ -8,13 +8,19 @@
  * `value` everywhere, because the server knows that 0xC000006D means a wrong
  * user name or password and the browser should not have to.
  */
-import type { DirectoryActivity, DirectoryCount, DirectoryLockout, DirectoryOverview, FilterExpr } from '@/api/types'
+import type { DirectoryActivity, DirectoryLockout, DirectoryOverview, FilterExpr } from '@/api/types'
 import { CHART_COLORS } from '@/lib/chart-colors'
 import { quote } from '@/lib/filter-text'
 import { formatExact } from '@/lib/format'
 import type { AnalyticsSearch, ExplorerSearch } from '@/lib/url-state'
 
-import type { ChartRow } from './analytics-query'
+import {
+  countLabel as sharedCountLabel,
+  lineChartData,
+  stepLabel,
+  type LineChartData,
+  type LineSeries,
+} from './analytics-query'
 
 /** The field the template records the account in; narrowing to one uses it. */
 export const AD_USER_FIELD = 'ad.user'
@@ -91,10 +97,8 @@ export function directoryExplorerSearch(
   }
 }
 
-/** A counted value in the words the server gave it, falling back to the raw value. */
-export function countLabel(count: Pick<DirectoryCount, 'value' | 'label'>): string {
-  return count.label?.trim() || count.value || '(none)'
-}
+/** A counted value in the words the server gave it; the same on every analysis page. */
+export const countLabel = sharedCountLabel
 
 /**
  * One headline number. `tone` is only ever a second signal: every tile that
@@ -167,19 +171,8 @@ export function directoryTiles(overview: DirectoryOverview | undefined): Directo
   ]
 }
 
-export interface ActivitySeries {
-  /** Index-based so a line name is never read as a Recharts path. */
-  key: string
-  name: string
-  label: string
-  total: number
-  color: string
-}
-
-export interface ActivityChartData {
-  rows: ChartRow[]
-  series: ActivitySeries[]
-}
+export type ActivitySeries = LineSeries
+export type ActivityChartData = LineChartData
 
 /**
  * The colour a line keeps wherever it appears. These lines mean different
@@ -200,17 +193,8 @@ export function activityLineColor(name: string): string {
   }
 }
 
-/**
- * The bucket width as somebody would say it. The server chooses it from the
- * range, so it is reported rather than controlled: "5m buckets" is what makes
- * a point on the chart mean something.
- */
-export function activityStepLabel(seconds: number): string {
-  if (seconds < 60) return `${Math.max(1, Math.round(seconds))}s`
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
-  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
-  return `${Math.round(seconds / 3600)}h`
-}
+/** The bucket width as somebody would say it; the same on every analysis page. */
+export const activityStepLabel = stepLabel
 
 /**
  * The two kinds of change counted apart, because they answer different
@@ -225,29 +209,9 @@ export function changesSummary(overview: DirectoryOverview | undefined): string 
   return `${part(accounts, 'account change')} · ${part(groups, 'group change')}`
 }
 
-/**
- * Turns the activity response into Recharts rows. Points align index-for-index
- * with `timestamps`; a line short of points is padded with zeroes rather than
- * shifting the rest of the series.
- */
+/** Turns the activity response into Recharts rows, each line keeping its own colour. */
 export function activityChartData(activity: DirectoryActivity | undefined): ActivityChartData {
-  if (!activity) return { rows: [], series: [] }
-  const lines = activity.lines ?? []
-  const series = lines.map((l, i) => ({
-    key: `s${i}`,
-    name: l.name,
-    label: l.label,
-    total: l.total,
-    color: activityLineColor(l.name),
-  }))
-  const rows = (activity.timestamps ?? []).map((t, i) => {
-    const row: ChartRow = { t: new Date(t).getTime() }
-    lines.forEach((l, j) => {
-      row[`s${j}`] = l.points[i] ?? 0
-    })
-    return row
-  })
-  return { rows, series }
+  return lineChartData(activity, activityLineColor)
 }
 
 /**

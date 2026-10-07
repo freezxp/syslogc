@@ -24,6 +24,8 @@ import { buildSelection, decodeQuery, encodeFilter, withoutPipes, type Analytics
 import { AnalyticsHeader } from './AnalyticsHeader'
 import { analysisAvailability, analysisGateMessage, ANALYSES, type AnalysisId } from './analyses'
 import { DirectoryView } from './DirectoryView'
+import { IISView } from './IISView'
+import { MSSQLView } from './MSSQLView'
 import { ServiceTrendsView } from './ServiceTrendsView'
 import {
   coverageLabel,
@@ -49,9 +51,10 @@ import { FieldPicker } from './FieldPicker'
 export function AnalyticsPage() {
   const { view } = useSearch({ from: '/app/analytics' })
   // Views over the same time range: ad-hoc aggregation over the logs, the
-  // service trends recorded window by window, and the directory analysis. The
-  // last two read fields only a template produces, so they are gated on one
-  // being in use rather than shown empty forever.
+  // service trends recorded window by window, and the three analyses a
+  // template feeds. All but the first read fields only a particular template —
+  // or a particular part of one — produces, so they are gated on that being in
+  // use rather than shown empty forever.
   if (view === 'trends') {
     return (
       <AnalysisGate id="dns-services">
@@ -66,13 +69,27 @@ export function AnalyticsPage() {
       </AnalysisGate>
     )
   }
+  if (view === 'mssql') {
+    return (
+      <AnalysisGate id="mssql">
+        <MSSQLView />
+      </AnalysisGate>
+    )
+  }
+  if (view === 'iis') {
+    return (
+      <AnalysisGate id="iis">
+        <IISView />
+      </AnalysisGate>
+    )
+  }
   return <ExploreView />
 }
 
 /**
  * An analysis nothing feeds, explained rather than hidden: somebody who was
- * handed the link, or who turned the source off, needs to know which template
- * unlocks the page — not an empty one, and not a redirect somewhere else.
+ * handed the link, or who turned the source (or the part) off, needs to know
+ * what unlocks the page — not an empty one, and not a redirect somewhere else.
  */
 function AnalysisGate({ id, children }: { id: AnalysisId; children: ReactNode }) {
   const templates = useTemplates()
