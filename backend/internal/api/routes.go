@@ -112,6 +112,7 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/analytics/mssql", permitted, auth.PermLogsSearch, s.handleMSSQL)
 	add("POST /api/v1/analytics/iis", permitted, auth.PermLogsSearch, s.handleIIS)
 	add("GET /api/v1/templates", permitted, auth.PermSourcesRead, s.handleTemplates)
+	add("GET /api/v1/templates/{id}/config", permitted, auth.PermSourcesRead, s.handleTemplateConfig)
 	add("GET /api/v1/sources/extract-presets", permitted, auth.PermSourcesRead, s.handleExtractPresets)
 	add("GET /api/v1/sources/{id}", permitted, auth.PermSourcesRead, s.handleGetSource)
 	add("PUT /api/v1/sources/{id}", permitted, auth.PermSourcesManage, s.handleUpdateSource)

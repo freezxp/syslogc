@@ -120,3 +120,44 @@ func (s *Server) templatesInUse(r *http.Request, p *auth.Principal) (map[string]
 	}
 	return out, uses
 }
+
+// handleTemplateConfig returns the sender configuration for a template and a
+// chosen set of parts.
+//
+// It is generated rather than shown as a fixed snippet because the parts
+// decide what is in it: a server sending only IIS needs none of the event-log
+// inputs, and a file somebody has to edit down by hand is a file they will
+// get wrong. The parts come as a repeated query parameter so the page can ask
+// for exactly what is ticked.
+func (s *Server) handleTemplateConfig(w http.ResponseWriter, r *http.Request, _ *auth.Principal) error {
+	id := r.PathValue("id")
+	t, ok := sourcetemplate.ByID(id)
+	if !ok {
+		return errStatus(http.StatusNotFound, "not_found",
+			"unknown template %q; known templates are %s", id, strings.Join(sourcetemplate.IDs(), ", "))
+	}
+	parts := r.URL.Query()["part"]
+	if len(parts) == 0 {
+		parts = sourcetemplate.DefaultParts(id)
+	}
+	if err := t.ValidParts(parts); err != nil {
+		return badRequest("validation_failed", "/part", "%v", err)
+	}
+	config := t.NXLogConfig(parts)
+	if config == "" {
+		return errStatus(http.StatusNotFound, "not_configured",
+			"template %s does not generate a sender configuration", t.ID)
+	}
+	chosen := make([]string, 0, len(t.Parts))
+	for _, p := range t.SelectedParts(parts) {
+		chosen = append(chosen, p.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"template": t.ID,
+		"parts":    chosen,
+		"filename": "nxlog.conf",
+		"language": "apache",
+		"config":   config,
+	})
+	return nil
+}
