@@ -1,1 +1,0 @@
-To analysis Windows Server logs which include MSSQL IIS logs.. similar to the AD, maybe can combined into 1 as Microsoft Windows Server logs. in the guide can pick options which part to be monitor. The analyics can have a new tab.

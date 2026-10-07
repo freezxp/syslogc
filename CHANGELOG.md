@@ -8,6 +8,49 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.2.0 — 2026-10-07
+
+### Added
+
+- **Microsoft Windows Server** replaces the Active Directory template, and
+  carries three parts you choose per source: Active Directory, SQL Server and
+  IIS. One NXLog instance on one server sends all of them over one
+  connection, so they arrive at one source — which is why they are parts of a
+  template rather than three templates. Each NXLog input stamps a marker on
+  its own records so the three become different fields; matching the message
+  text would have broken on a server installed in another language, and IIS
+  records are not events at all.
+- **SQL Server analysis**: failed sign-ins with the account and address they
+  were for, deadlocks, the I/O and corruption errors, a full transaction log,
+  scheduler stalls and backups.
+- **IIS analysis**: requests over time by status class, server and client
+  errors by URL, the URLs with the most slow requests, top clients, and
+  authentication failures broken down by IIS's own sub-status — which is the
+  difference between a wrong password and a folder permission.
+- The sender configuration is generated from the parts a source carries and
+  offered to copy, so there is no editing a file down by hand.
+
+### Changed
+
+- Analyses are now gated on parts rather than on the template, so a source
+  carrying only IIS is not offered an Active Directory page it can never
+  fill.
+
+### Upgrading
+
+Nothing to do. Sources already using the `active-directory` template keep
+working exactly as they are: the id resolves to the new template and naming
+no parts means the one part it used to be.
+
+### Known limits
+
+SQL Server records no successful sign-in until auditing is set to both, so
+that figure reads "not recorded" rather than zero until the step in its guide
+is run. A zero deadlock count is not proof there were none. There is no
+average or worst response time for IIS anywhere: the stored logs cannot be
+summed or given a percentile, so "slowest URLs" counts requests over a stated
+threshold and is labelled as that.
+
 ## 1.1.1 — 2026-10-05
 
 ### Fixed
