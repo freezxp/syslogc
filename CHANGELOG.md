@@ -8,6 +8,24 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.2.1 — 2026-10-07
+
+### Fixed
+
+- `./deploy.sh --upgrade` failed on a checkout pinned to a release tag. It
+  fast-forwards the current branch, and a tag checkout has no branch to
+  fast-forward, so the documented way to deploy a specific version did not
+  work. There is now `--ref`:
+
+  ```sh
+  ./deploy.sh --upgrade --ref v1.2.1
+  ```
+
+  which pins the checkout to that release — what a deployment usually wants,
+  since it says exactly what is running and does not move when somebody
+  pushes. A pinned checkout with no `--ref` now stops and names the newest
+  release rather than guessing that it is the one you meant.
+
 ## 1.2.0 — 2026-10-07
 
 ### Added

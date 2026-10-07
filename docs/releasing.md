@@ -52,9 +52,20 @@ instead.
 ## Upgrading a deployment
 
 ```sh
-./deploy.sh --upgrade
+./deploy.sh --upgrade            # follow the branch
+./deploy.sh --upgrade --ref v1.2.0   # or pin to a release
 ```
 
 Read the changelog's sections between the running version (System page) and
 the new one first. A major bump means there is something in there to do
 before restarting.
+
+`--ref` leaves the checkout pinned to that tag, which is what a deployment
+usually wants: it says exactly what is running and does not move when
+somebody pushes. A pinned checkout has nothing to follow, so the next upgrade
+needs `--ref` again — `./deploy.sh --upgrade` on its own stops and says so
+rather than guessing that the newest tag is the one you meant.
+
+Do not `git checkout` a tag by hand and then run `--upgrade`: that detaches
+HEAD with no record of what you intended, which is the case the script now
+refuses. Use `--ref`.

@@ -31,6 +31,7 @@ ACTION="deploy"
 ASSUME_YES=false
 OPEN_FIREWALL=true
 BACKUP=true
+REF=""
 
 usage() {
   sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -57,6 +58,9 @@ Options:
   --yes                Do not ask for confirmation.
   --upgrade            Fetch new commits, back up metadata, rebuild and
                        restart. Refuses to run with uncommitted changes.
+  --ref TAG            With --upgrade, deploy this release instead of
+                       following the branch, e.g. --ref v1.2.0. The checkout
+                       is pinned to it, so it cannot drift.
   --no-backup          Skip the metadata backup an upgrade takes first.
   --status             Show what is running and exit.
   --stop               Stop the stack (data is kept) and exit.
@@ -79,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --no-firewall) OPEN_FIREWALL=false; shift ;;
     --yes|-y) ASSUME_YES=true; shift ;;
     --upgrade) ACTION="upgrade"; shift ;;
+    --ref) REF="${2:?--ref needs a tag or branch}"; shift 2 ;;
     --no-backup) BACKUP=false; shift ;;
     --status) ACTION="status"; shift ;;
     --stop) ACTION="stop"; shift ;;
@@ -153,8 +158,26 @@ case "$ACTION" in
       die "there are uncommitted changes; commit or stash them, then upgrade"
     fi
     before="$(git rev-parse --short HEAD)"
-    git fetch --quiet || die "could not reach the git remote"
-    git merge --ff-only --quiet "@{u}" || die "the local branch has diverged from its remote; resolve that first"
+    git fetch --quiet --tags || die "could not reach the git remote"
+    if [[ -n "$REF" ]]; then
+      # Pinned to a release. Checking out a tag detaches HEAD, which is the
+      # right state for a deployment: it says exactly what is running and
+      # cannot drift when somebody pushes.
+      git rev-parse --verify --quiet "${REF}^{commit}" >/dev/null ||
+        die "no such tag or branch: ${REF}  (releases are listed by: git tag -l 'v*')"
+      git checkout --quiet --detach "${REF}" || die "could not check out ${REF}"
+    elif git symbolic-ref --quiet HEAD >/dev/null; then
+      git merge --ff-only --quiet "@{u}" || die "the local branch has diverged from its remote; resolve that first"
+    else
+      # Already detached, with no --ref to say where to go. Guessing would be
+      # worse than stopping: the newest tag is not always what this host
+      # should run.
+      current="$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD)"
+      latest="$(git tag -l 'v*' | sort -V | tail -1)"
+      die "this checkout is pinned to ${current}, so there is nothing to follow.
+       Name what to upgrade to:   ./deploy.sh --upgrade --ref ${latest:-v1.0.0}
+       Or go back to the branch:  git checkout main && ./deploy.sh --upgrade"
+    fi
     after="$(git rev-parse --short HEAD)"
     if [[ "$before" == "$after" ]]; then
       # The checkout can already be current — someone pulled by hand — while
