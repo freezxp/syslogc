@@ -1,12 +1,26 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { ChevronDown, ChevronUp, Columns3, Download, Link2, RotateCcw, Save, Share2, Star, ZoomOut } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  ChevronUp,
+  Columns3,
+  Download,
+  Link2,
+  RotateCcw,
+  Save,
+  Share2,
+  Star,
+  ZoomOut,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
-import { MAX_LOADED_ROWS, useHistogram, useLogSearch, useSavedSearch } from '@/api/hooks'
-import type { FilterExpr, LogRow, SavedSearch } from '@/api/types'
+import { MAX_LOADED_ROWS, useAssistantStatus, useHistogram, useLogSearch, useSavedSearch } from '@/api/hooks'
+import type { FilterExpr, LogRow, SavedSearch, TimeRange } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { EmptyState, ErrorPanel, Skeleton } from '@/components/data/common'
+import { AskPanel } from '@/features/assistant/AskPanel'
+import { assistantUsable } from '@/features/assistant/assistant'
 import { copyText } from '@/lib/clipboard'
 import { Button } from '@/components/ui/button'
 import {
@@ -80,7 +94,13 @@ export function ExplorerPage() {
   const [exportOpen, setExportOpen] = useState(false)
   const [saveOpen, setSaveOpen] = useState(false)
   const [timeOpen, setTimeOpen] = useState(false)
+  const [askOpen, setAskOpen] = useState(false)
   const queryInputRef = useRef<HTMLInputElement>(null)
+
+  // The assistant is offered only when the local model actually answers; a
+  // button that waits three seconds and then says 404 is worse than no button.
+  const assistant = useAssistantStatus()
+  const canAsk = assistantUsable(assistant.data)
 
   const setSearch = useCallback(
     (patch: Partial<ExplorerSearch>, replace = false) => {
@@ -108,6 +128,12 @@ export function ExplorerPage() {
     () => (range.value && !parseError ? buildSelection(range.value, filter, native, search.tz) : null),
     [range.value, filter, native, parseError, search.tz],
   )
+
+  // Sent with a question so the model is offered the fields these logs actually
+  // carry in this window, rather than every field the deployment has ever seen.
+  const askRange: TimeRange | null = range.value
+    ? { from: range.value.start.toISOString(), to: range.value.end.toISOString(), tz: search.tz }
+    : null
 
   // Histogram, facets and fields accept filters only; pipes apply to the results table.
   const panelSelection = useMemo(() => withoutPipes(selection), [selection])
@@ -265,6 +291,13 @@ export function ExplorerPage() {
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="flex-1" />
+        {canAsk && (
+          <Tooltip content="Ask a question in English; the model proposes a filter for you to run">
+            <Button size="sm" aria-pressed={askOpen} onClick={() => setAskOpen((o) => !o)}>
+              <Bot /> Ask in English
+            </Button>
+          </Tooltip>
+        )}
         {can('searches:write') && (
           <Button size="sm" onClick={() => setSaveOpen(true)}>
             <Save /> Save
@@ -327,6 +360,22 @@ export function ExplorerPage() {
         onRun={run}
         inputRef={queryInputRef}
       />
+
+      {canAsk && askOpen && (
+        <AskPanel
+          // The window only decides which fields the model is offered; the one
+          // it proposes is its own and is shown with the proposal.
+          timeRange={askRange}
+          filter={filter}
+          native={search.native ?? ''}
+          tz={tz}
+          onRun={(patch) => {
+            setSearch(patch)
+            run()
+          }}
+          onClose={() => setAskOpen(false)}
+        />
+      )}
 
       <div className="shrink-0 border-b border-border bg-surface">
         <div className="flex h-7 items-center gap-2 px-3 text-sm">

@@ -829,6 +829,86 @@ export interface DirectoryResponse {
   failure_sources: DirectoryCount[]
 }
 
+// ---- the log assistant -----------------------------------------------------
+//
+// A local model that helps read logs. It is never the source of a number: it
+// either proposes a query for Syslogc to run — the results then come from the
+// store like any other search — or it describes figures Syslogc has already
+// computed. Both shapes below keep the model's own words (`reasoning`, `text`)
+// separate from anything measured, so the interface can attribute them.
+
+/**
+ * Whether the assistant can be used, and what to do when it cannot.
+ *
+ * `enabled` is whether it is configured at all and `ready` whether the model
+ * answered; they differ when the model is configured but unreachable. When
+ * `ready` is false the server also sends `problem`, which says how to turn it
+ * on — the one thing somebody looking at a missing feature needs.
+ */
+export interface AssistantStatus {
+  enabled: boolean
+  ready: boolean
+  /** The model that would answer, e.g. "qwen3.5:9b". */
+  model?: string
+  /** Where it is being asked, for an administrator checking the address. */
+  url?: string
+  /** Everything the host offers, which may include models that are not this one. */
+  available_models?: string[] | null
+  /** What to do about it; sent only when `ready` is false. */
+  problem?: string
+}
+
+export interface AssistantQueryInput {
+  question: string
+  /**
+   * Bounds which fields are offered to the model — not the window of the query
+   * it proposes, which it chooses itself and reports back.
+   */
+  time_range?: S['TimeRange']
+}
+
+/** A query the model proposes. Nothing has been run: the user presses run. */
+export interface AssistantProposal {
+  answerable: true
+  /** The filter to run, in the same shape the query bar and URL already use. */
+  filter: S['FilterExpr']
+  /** The window the model chose, which may be nothing like the one asked about. */
+  time_range: S['TimeRange']
+  /** The model's one line about why; its words, not a measurement. */
+  reasoning: string
+  /** The fields it used, so a wrong guess about the schema is visible. */
+  fields: string[]
+  model: string
+  took_ms: number
+}
+
+/**
+ * The model saying these logs cannot answer the question. A normal answer with
+ * HTTP 200, not a failure: "no firewall fields exist here" is worth knowing,
+ * and `fields_seen` says how much schema it had to decide on.
+ */
+export interface AssistantDecline {
+  answerable: false
+  reason: string
+  fields_seen: number
+}
+
+export type AssistantAnswer = AssistantProposal | AssistantDecline
+
+export interface AssistantExplainInput {
+  /** What the figures are of, e.g. "IIS, last 30 minutes". */
+  subject: string
+  /** Whatever the page already computed; sent as-is. */
+  figures: object
+}
+
+/** The model's description of figures it was given. Prose, never a number. */
+export interface AssistantExplanation {
+  text: string
+  model: string
+  took_ms: number
+}
+
 // ---- path definitions ------------------------------------------------------
 //
 // The shape openapi-fetch expects: `parameters`, `requestBody` and `responses`
@@ -892,6 +972,16 @@ export interface OperationsPaths {
   '/api/v1/analytics/services': {
     get: Read<ServiceCatalog>
     put: Write<ServiceCatalog, ServiceCatalogInput>
+  }
+  '/api/v1/assistant/status': {
+    get: Read<AssistantStatus>
+  }
+  '/api/v1/assistant/query': {
+    // A decline is an answer, not an error, so both shapes arrive as 200.
+    post: Write<AssistantAnswer, AssistantQueryInput>
+  }
+  '/api/v1/assistant/explain': {
+    post: Write<AssistantExplanation, AssistantExplainInput>
   }
   '/api/v1/forward-targets': {
     get: Read<{ targets: ManagedForwardTarget[] }>

@@ -456,6 +456,55 @@ The metrics that matter most:
 | `syslogc_ingest_e2e_latency_seconds` | p99 above tens of seconds means a backlog |
 | `syslogc_ingest_parse_errors_total` | a rising share suggests a misconfigured source format or timezone |
 | `syslogc_ingest_udp_kernel_drops_total` | raise `net.core.rmem_max` and `udp.read_buffer_bytes` |
+| `syslogc_host_memory_used_bytes` / `_limit_bytes` | sustained above 90%; see the note on limits below |
+| `syslogc_host_disk_used_bytes` / `_available_bytes` | above 85% on any `path` |
+| `syslogc_host_cpu_usage_ratio` | pinned near 1 means messages queue rather than parse |
+
+### Host utilisation
+
+The `process_*` and `go_*` metrics describe the Syslogc process. The
+`syslogc_host_*` ones describe what it is running inside, and they are read
+from the cgroup rather than from `/proc` wherever the cgroup sets a real
+limit.
+
+That difference matters in a container. Inside one, `/proc/meminfo` and
+`/proc/stat` still report the host: a container capped at 2 GiB on a 64 GiB
+machine reads `/proc/meminfo` as a few percent used right up to the moment it
+is OOM-killed. So `syslogc_host_memory_limit_bytes` is the cgroup's
+`memory.max` where there is one and the machine's `MemTotal` otherwise, and
+`syslogc_host_cpu_usage_ratio` is measured against the CPU quota where there
+is one and against every core otherwise.
+
+`syslogc_host_limit_source` says which was used:
+
+```
+syslogc_host_limit_source{resource="memory",source="cgroup"} 1
+syslogc_host_limit_source{resource="memory",source="host"}   0
+```
+
+A `cgroup` source means the figure is this container's own ceiling. A `host`
+source means no cgroup limit applied — either the process is not containerised
+or the limit is `max` — so the figure describes the whole machine, which is
+then what actually runs out. The System page shows the same thing in words,
+as "container limit" or "host limit" under each figure.
+
+Two consequences worth knowing:
+
+- `syslogc_host_cpu_usage_ratio` is **not** comparable to the `CPU %` column
+  of `docker stats`. Both are correct; the denominators differ. This metric
+  divides by the cores the container may use, so it answers "how close am I to
+  being throttled". `docker stats` divides by every core on the machine.
+- Memory excludes reclaimable page cache, the same subtraction `docker stats`
+  makes, so `syslogc_host_memory_used_bytes` tracks its `MEM USAGE` column and
+  does not drift upwards with cache that would be evicted under pressure.
+
+Disk covers the filesystem Syslogc itself runs on, labelled by `path`. Logs
+are not on it — they go to the storage backend, whose own free space is
+reported separately on the System page's storage tab — but a full root
+filesystem stops logging and certificate writes. `syslogc_host_disk_available_bytes`
+is the space a non-root process may still write, which is smaller than total
+minus used by the reserve the filesystem keeps for root; it is the figure that
+decides whether a write succeeds, and the one the alert rules divide by.
 
 ## Backup and restore
 

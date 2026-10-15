@@ -21,12 +21,15 @@ import (
 
 	"github.com/freezxp/syslogc/backend/internal/api"
 	"github.com/freezxp/syslogc/backend/internal/api/webui"
+	"github.com/freezxp/syslogc/backend/internal/assistant"
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/forwarding"
+	"github.com/freezxp/syslogc/backend/internal/hostinfo"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
+	"github.com/freezxp/syslogc/backend/internal/llm"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metadata/postgres"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
@@ -72,6 +75,11 @@ type App struct {
 	acme        *certificateAuthority
 	metricStore *metricstore.Client
 	trends      *servicetrends.Recorder
+	// assistant is the model endpoint, when one is configured.
+	assistant *llm.Client
+	// host samples CPU, memory and disk utilisation on a ticker, because
+	// utilisation is a rate and no request should wait an interval for one.
+	host *hostinfo.Sampler
 }
 
 type retentionStatus struct {
@@ -85,6 +93,7 @@ type retentionStatus struct {
 // migrations) when configured; listeners start in Run.
 func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logger) (*App, error) {
 	a := &App{cfg: cfg, log: log, metrics: metrics.New(info.Version, info.Commit)}
+	a.host = hostinfo.NewSampler(hostinfo.NewReader("/", hostDiskPaths))
 
 	vl := cfg.Storage.VictoriaLogs
 	backend, err := victorialogs.New(victorialogs.Config{
@@ -151,6 +160,7 @@ func New(ctx context.Context, cfg *config.Config, info BuildInfo, log *slog.Logg
 		opts.TrustedProxies = append(opts.TrustedProxies, prefix)
 	}
 
+	a.wireAssistant()
 	if err := a.wireAnalytics(ctx); err != nil {
 		return nil, err
 	}
@@ -294,12 +304,17 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 		ServiceTrends: a.serviceTrendReader(),
 		TrendWindows:  a.trendWindows,
 		Certificates:  a.certificateStatuses,
+		Host:          a.host.Snapshot,
 		Retention:     func() any { return a.retention.Load() },
 		FileSources:   cfg.Ingestion.Sources,
 		Config:        *cfg,
 		CookieSecure:  cfg.Auth.CookieSecure,
 		AuditAll:      cfg.Query.AuditAll,
 		WebUI:         webui.FS(),
+	}
+	if a.assistant != nil {
+		deps.Assistant = assistant.New(a.assistant)
+		deps.AssistantModels = a.assistant.Models
 	}
 	if a.forwarders != nil {
 		deps.Forwarders = a.forwarders.Statuses
@@ -394,6 +409,7 @@ func (a *App) Run(ctx context.Context, ready func()) error {
 	defer stopBackground()
 	go a.watchRetention(bgCtx)
 	go a.watchStorage(bgCtx)
+	go a.watchHost(bgCtx)
 	if a.pipeline != nil {
 		go a.watchSaturation(bgCtx)
 		if a.store != nil {
@@ -647,6 +663,78 @@ func (a *App) watchStorage(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+	}
+}
+
+// hostSampleInterval is how often CPU, memory and disk are read.
+//
+// CPU utilisation is the difference between two readings, so this is also the
+// window it averages over. Ten seconds is short enough to catch a sustained
+// pin and long enough that a scrape never sees a figure dominated by jiffy
+// rounding, and it matches the dashboard's own poll so the page is never
+// showing a number more than one interval old.
+const hostSampleInterval = 10 * time.Second
+
+// hostDiskPaths are the filesystems reported as host disk usage.
+//
+// Syslogc itself keeps no local data directory - logs go to VictoriaLogs and
+// metadata to PostgreSQL, both over the network - so the filesystem that can
+// actually fill up underneath this process is the one it runs on. In a
+// container that is the writable layer; a full one breaks logging and
+// certificate writes long before anything else notices. Disk belonging to the
+// log store is a separate figure, already reported from the backend's own
+// metrics under the storage tab.
+var hostDiskPaths = []string{"/"}
+
+// watchHost samples host utilisation and mirrors it into the metrics
+// registry, so /metrics and the API always agree on one reading.
+func (a *App) watchHost(ctx context.Context) {
+	t := time.NewTicker(hostSampleInterval)
+	defer t.Stop()
+	a.sampleHost()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.sampleHost()
+		}
+	}
+}
+
+func (a *App) sampleHost() {
+	a.host.Sample()
+	snap, ok := a.host.Snapshot()
+	if !ok {
+		return
+	}
+	if snap.CPU.Measured {
+		a.metrics.HostCPUUsage.Set(snap.CPU.Fraction)
+	} else {
+		// Before the second sample there is no utilisation to report. NaN
+		// says so; leaving the previous value would publish a stale one.
+		a.metrics.HostCPUUsage.Set(math.NaN())
+	}
+	a.metrics.HostMemoryUsed.Set(float64(snap.Memory.UsedBytes))
+	a.metrics.HostMemoryLimit.Set(float64(snap.Memory.LimitBytes))
+	a.setLimitSource("cpu", snap.CPU.Source)
+	a.setLimitSource("memory", snap.Memory.Source)
+	for _, d := range snap.Disks {
+		a.metrics.HostDiskUsed.WithLabelValues(d.Path).Set(float64(d.UsedBytes))
+		a.metrics.HostDiskTotal.WithLabelValues(d.Path).Set(float64(d.TotalBytes))
+		a.metrics.HostDiskAvailable.WithLabelValues(d.Path).Set(float64(d.AvailBytes))
+	}
+}
+
+// setLimitSource publishes 1 for the source in force and 0 for the other, so
+// a query for either label always finds a series rather than nothing.
+func (a *App) setLimitSource(resource string, src hostinfo.Source) {
+	for _, s := range []hostinfo.Source{hostinfo.SourceCgroup, hostinfo.SourceHost} {
+		v := 0.0
+		if s == src {
+			v = 1
+		}
+		a.metrics.HostLimitSource.WithLabelValues(resource, string(s)).Set(v)
 	}
 }
 
@@ -927,4 +1015,23 @@ func (a *App) trendWindows() []servicetrends.WindowStatus {
 		return nil
 	}
 	return a.trends.Status()
+}
+
+// wireAssistant connects the local model, when one is configured.
+//
+// A misconfigured assistant is a warning, not a failure to start: it is an
+// aid to reading logs, and refusing to run a log server because a model
+// endpoint has a typo in it would be the wrong trade.
+func (a *App) wireAssistant() {
+	cfg := a.cfg.Assistant
+	if !cfg.Enabled {
+		return
+	}
+	client, err := llm.New(llm.Options{URL: cfg.URL, Model: cfg.Model, Timeout: cfg.Timeout.D()})
+	if err != nil {
+		a.log.Warn("the assistant is off: its configuration is incomplete", "error", err)
+		return
+	}
+	a.assistant = client
+	a.log.Info("assistant ready", "endpoint", client.Endpoint(), "model", client.Model())
 }

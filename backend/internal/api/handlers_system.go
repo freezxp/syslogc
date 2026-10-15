@@ -20,6 +20,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/forwarding"
+	"github.com/freezxp/syslogc/backend/internal/hostinfo"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
@@ -249,8 +250,54 @@ func (s *Server) handleSystemHealth(w http.ResponseWriter, r *http.Request, _ *a
 			body["certificates"] = certs
 		}
 	}
+	if s.opts.API.Host != nil {
+		if snap, ok := s.opts.API.Host(); ok {
+			body["host"] = hostJSON(snap)
+		}
+	}
 	writeJSON(w, http.StatusOK, body)
 	return nil
+}
+
+// hostJSON shapes a host reading for the API.
+//
+// Each of cpu and memory carries a source saying what was measured:
+// "cgroup" means the figure is this container's own limit, "host" means no
+// cgroup limit applied and the number describes the whole machine. Without it
+// a reader cannot tell 40% of a 2 GiB container from 40% of a 64 GiB host,
+// and those mean very different things.
+func hostJSON(snap hostinfo.Snapshot) map[string]any {
+	disks := make([]map[string]any, 0, len(snap.Disks))
+	for _, d := range snap.Disks {
+		disks = append(disks, map[string]any{
+			"path": d.Path, "used_bytes": d.UsedBytes, "total_bytes": d.TotalBytes,
+			// available_bytes is what a non-root writer may still use, which
+			// is what used_fraction is measured against; it is smaller than
+			// total minus used by the reserve kept for root.
+			"available_bytes": d.AvailBytes, "used_fraction": d.UsedFraction(),
+		})
+	}
+	return map[string]any{
+		"cpu": map[string]any{
+			// usage_fraction is null until two samples have been taken,
+			// because utilisation is a rate.
+			"usage_fraction": cpuFractionJSON(snap.CPU),
+			"cores":          snap.CPU.Cores,
+			"source":         snap.CPU.Source,
+		},
+		"memory": map[string]any{
+			"used_bytes": snap.Memory.UsedBytes, "limit_bytes": snap.Memory.LimitBytes,
+			"source": snap.Memory.Source,
+		},
+		"disks": disks,
+	}
+}
+
+func cpuFractionJSON(c hostinfo.CPU) *float64 {
+	if !c.Measured {
+		return nil
+	}
+	return finite(c.Fraction)
 }
 
 func (s *Server) handleSystemIngestion(w http.ResponseWriter, _ *http.Request, _ *auth.Principal) error {

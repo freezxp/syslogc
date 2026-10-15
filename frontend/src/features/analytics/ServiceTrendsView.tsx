@@ -25,9 +25,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/overlay'
+import { explainSubject } from '@/features/assistant/assistant'
+import { ExplainFigures } from '@/features/assistant/ExplainFigures'
 import { seriesColor } from '@/lib/chart-colors'
 import { cn } from '@/lib/cn'
-import { formatExact } from '@/lib/format'
+import { formatExact, formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 import { resolveRange, TimeRangeError } from '@/lib/time-range'
 import type { AnalyticsSearch } from '@/lib/url-state'
@@ -322,6 +324,20 @@ export function ServiceTrendsView() {
                 </div>
               )}
             </Panel>
+
+            {/* Under the chart rather than over it: the model describes the
+                recorded counts, so the chart stays on the screen beside them. */}
+            {chartSeries.length > 0 && (
+              <ExplainFigures
+                subject={explainSubject(
+                  `DNS service trends — ${trendMetricLabel(query.metric)} per ${windowLabel(query.window)} window`,
+                  search,
+                  (d) => formatTimestamp(d, tz, 'MMM d, HH:mm'),
+                  query.services.length ? query.services.join(', ') : undefined,
+                )}
+                figures={trends.data}
+              />
+            )}
 
             {catalogOpen &&
               (catalog.isError ? (

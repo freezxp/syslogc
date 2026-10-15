@@ -68,6 +68,18 @@ type Metrics struct {
 
 	HTTPRequests *prometheus.CounterVec
 	HTTPDuration *prometheus.HistogramVec
+
+	// Host utilisation. These describe the container's limits where it has
+	// them and the machine otherwise, which is what HostLimitSource records;
+	// the process_* and go_* metrics below describe only this process and
+	// cannot say how close the container is to being killed.
+	HostCPUUsage      prometheus.Gauge
+	HostMemoryUsed    prometheus.Gauge
+	HostMemoryLimit   prometheus.Gauge
+	HostLimitSource   *prometheus.GaugeVec
+	HostDiskUsed      *prometheus.GaugeVec
+	HostDiskTotal     *prometheus.GaugeVec
+	HostDiskAvailable *prometheus.GaugeVec
 }
 
 // New creates and registers all metrics on a fresh registry.
@@ -135,6 +147,25 @@ func New(version, commit string) *Metrics {
 			"HTTP requests by route pattern, method and status code.", "route", "method", "code"),
 		HTTPDuration: f.histogramVec("http_request_duration_seconds",
 			"HTTP request duration by route pattern and method.", prometheus.DefBuckets, "route", "method"),
+
+		HostCPUUsage: f.gauge("host_cpu_usage_ratio",
+			"CPU used over the last sampling interval, 0..1 of the cores available. "+
+				"NaN until two samples have been taken."),
+		HostMemoryUsed: f.gauge("host_memory_used_bytes",
+			"Memory in use, excluding reclaimable page cache."),
+		HostMemoryLimit: f.gauge("host_memory_limit_bytes",
+			"Memory ceiling: the cgroup limit where there is one, otherwise the machine's total."),
+		HostLimitSource: f.gaugeVec("host_limit_source",
+			"1 for the source each host figure was measured from: \"cgroup\" is this container's own limit, "+
+				"\"host\" is the whole machine.", "resource", "source"),
+		HostDiskUsed: f.gaugeVec("host_disk_used_bytes",
+			"Space occupied on the filesystem holding path, counting the reserve kept for root.", "path"),
+		HostDiskTotal: f.gaugeVec("host_disk_total_bytes",
+			"Size of the filesystem holding path.", "path"),
+		HostDiskAvailable: f.gaugeVec("host_disk_available_bytes",
+			"Space a non-root process may still write to the filesystem holding path. Less than "+
+				"total minus used by the reserve kept for root, and the figure that decides whether a write succeeds.",
+			"path"),
 	}
 
 	reg.MustRegister(
@@ -220,6 +251,12 @@ type factory struct{ reg *prometheus.Registry }
 
 func (f factory) counterVec(name, help string, labels ...string) *prometheus.CounterVec {
 	v := prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: name, Help: help}, labels)
+	f.reg.MustRegister(v)
+	return v
+}
+
+func (f factory) gauge(name, help string) prometheus.Gauge {
+	v := prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: name, Help: help})
 	f.reg.MustRegister(v)
 	return v
 }

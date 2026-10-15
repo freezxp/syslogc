@@ -55,6 +55,8 @@ func (c *Config) Validate() error {
 		add("log.format: must be json or text")
 	}
 
+	validateAssistant(c, add)
+
 	if a := c.Analytics; a.Metrics.URL != "" {
 		if err := validateURL(a.Metrics.URL); err != nil {
 			add("analytics.metrics.url: %v", err)
@@ -461,4 +463,24 @@ func validateForwardTarget(prefix string, t ForwardTarget) []error {
 func PrepareForwardTarget(t *ForwardTarget) error {
 	applyForwardDefaults(t)
 	return errors.Join(validateForwardTarget("target", *t)...)
+}
+
+// validateAssistant checks the model endpoint, but only when it is turned on:
+// an unconfigured assistant that nobody wants must not stop the server.
+func validateAssistant(c *Config, add func(string, ...any)) {
+	if !c.Assistant.Enabled {
+		return
+	}
+	if strings.TrimSpace(c.Assistant.URL) == "" {
+		add("assistant.url: required when assistant.enabled is true")
+	} else if err := validateURL(c.Assistant.URL); err != nil {
+		add("assistant.url: %v", err)
+	}
+	if strings.TrimSpace(c.Assistant.Model) == "" {
+		add("assistant.model: required when assistant.enabled is true; " +
+			"the endpoint's own models are listed by: curl <url>/api/tags")
+	}
+	if c.Assistant.Timeout.D() <= 0 {
+		add("assistant.timeout: must be positive")
+	}
 }

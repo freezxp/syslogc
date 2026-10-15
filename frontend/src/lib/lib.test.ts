@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type {
   AnalysisActivity,
   AnalysisCount,
+  AssistantProposal,
+  AssistantStatus,
   DirectoryActivity,
   DirectoryOverview,
   FilterExpr,
@@ -108,6 +110,7 @@ import {
   problemTone,
   problemWhere,
   topMessagesCaveat,
+  mssqlFigures,
 } from '@/features/analytics/mssql'
 import {
   DEFAULT_IIS_RANGE,
@@ -178,7 +181,37 @@ import {
   type ForwardFormState,
 } from '@/features/forwarding/forward-form'
 import { forwardFilterLabels, secondsSince, truncateError } from '@/features/system/forwarding'
+import {
+  coresLabel,
+  cpuStatus,
+  diskStatus,
+  hostThresholds,
+  limitSourceLabel,
+  memoryStatus,
+  usedFraction,
+} from '@/features/system/host'
 import { validateCustomRange } from '@/features/time-range/time-input'
+import { ApiError } from '@/api/client'
+import {
+  assistantErrorText,
+  assistantProblem,
+  assistantRetryable,
+  assistantUsable,
+  declineSentence,
+  explainCaveat,
+  explainSubject,
+  fieldsSeenNote,
+  isProposal,
+  modelName,
+  proposalFilterText,
+  proposalPatch,
+  proposalRangeLabel,
+  proposalReplaces,
+  proposalTerms,
+  questionIsAskable,
+  reasoningCaveat,
+  tookLabel,
+} from '@/features/assistant/assistant'
 
 import { decodeBase64Url, encodeBase64Url } from './base64url'
 import { addValueFilter } from './filter-actions'
@@ -401,6 +434,50 @@ describe('forwarding', () => {
     expect(secondsSince('not a date', now)).toBeNull()
     // A stamp ahead of the browser clock reads as "just now", never as a negative age.
     expect(secondsSince('2026-09-18T03:12:09Z', now)).toBe(0)
+  })
+})
+
+describe('host utilisation', () => {
+  it('measures memory against the ceiling that actually binds', () => {
+    // A container capped at 2 GiB using 1.5 GiB is at 75%, whatever the
+    // machine around it has.
+    expect(usedFraction({ used_bytes: 1.5 * 1024 ** 3, limit_bytes: 2 * 1024 ** 3 })).toBe(0.75)
+    // No limit means no fraction to report, rather than a division by zero.
+    expect(usedFraction({ used_bytes: 1024, limit_bytes: 0 })).toBeNull()
+  })
+
+  it('warns on memory only once past the alert threshold', () => {
+    const at = (f: number) => memoryStatus({ used_bytes: f * 1000, limit_bytes: 1000 })
+    expect(at(0.5)).toBe('ok')
+    expect(at(hostThresholds.memoryWarn)).toBe('ok')
+    expect(at(0.95)).toBe('warn')
+    expect(memoryStatus({ used_bytes: 10, limit_bytes: 0 })).toBe('idle')
+  })
+
+  it('escalates disk from warning to failure', () => {
+    expect(diskStatus({ used_fraction: 0.5 })).toBe('ok')
+    expect(diskStatus({ used_fraction: hostThresholds.diskWarn })).toBe('ok')
+    expect(diskStatus({ used_fraction: 0.9 })).toBe('warn')
+    expect(diskStatus({ used_fraction: 0.97 })).toBe('fail')
+  })
+
+  it('treats an unmeasured CPU as idle rather than zero', () => {
+    // usage_fraction is null until the node has taken two samples.
+    expect(cpuStatus({ usage_fraction: null })).toBe('idle')
+    expect(cpuStatus({ usage_fraction: 0.5 })).toBe('ok')
+    expect(cpuStatus({ usage_fraction: 0.99 })).toBe('fail')
+  })
+
+  it('says whether a figure is the container or the machine', () => {
+    expect(limitSourceLabel('cgroup', 'limit')).toBe('container limit')
+    expect(limitSourceLabel('host', 'limit')).toBe('host limit')
+  })
+
+  it('labels fractional CPU quotas', () => {
+    expect(coresLabel(4)).toBe('4 cores')
+    expect(coresLabel(1)).toBe('1 core')
+    expect(coresLabel(1.5)).toBe('1.5 cores')
+    expect(coresLabel(0)).toBe('cores unknown')
   })
 })
 
@@ -2600,5 +2677,229 @@ describe('the generated sender configuration', () => {
       in_use: true,
     }
     expect(templateSteps(dns, []).map((g) => g.key)).toEqual(['setup'])
+  })
+})
+
+describe('the log assistant', () => {
+  const ready: AssistantStatus = {
+    enabled: true,
+    ready: true,
+    model: 'qwen3.5:9b',
+    url: 'http://10.0.0.9:11434',
+    available_models: ['local-coder:latest', 'qwen3.5:9b'],
+  }
+  const proposal: AssistantProposal = {
+    answerable: true,
+    filter: {
+      op: 'and',
+      args: [
+        { op: 'eq', field: 'ad.user', value: 's.tan' },
+        { op: 'eq', field: 'ad.event_id', value: '4625' },
+      ],
+    },
+    time_range: { from: 'now-1h', to: 'now' },
+    reasoning: 'Filter for user s.tan and event ID 4625 (failed logon) in Windows Security logs.',
+    fields: ['ad.event_id', 'ad.user'],
+    model: 'qwen3.5:9b',
+    took_ms: 2221,
+  }
+  const absolute = (d: Date) => d.toISOString().slice(0, 16)
+
+  it('is only usable when it is both configured and answering', () => {
+    expect(assistantUsable(ready)).toBe(true)
+    expect(assistantUsable({ enabled: false, ready: false })).toBe(false)
+    // Configured but unreachable: offering it would produce a button that waits
+    // three seconds and then fails.
+    expect(assistantUsable({ enabled: true, ready: false, problem: 'pull the model' })).toBe(false)
+    // Never asked for, or the request failed: that says nothing about the model,
+    // so it counts as off rather than as available.
+    expect(assistantUsable(undefined)).toBe(false)
+  })
+
+  it('passes the server’s problem text through, and invents none of its own', () => {
+    expect(assistantProblem(ready)).toBeNull()
+    expect(assistantProblem({ enabled: true, ready: false, problem: 'Pull qwen3.5:9b on the host.' })).toBe(
+      'Pull qwen3.5:9b on the host.',
+    )
+    // A status that never arrived is not evidence the assistant is off.
+    expect(assistantProblem(undefined)).toBeNull()
+    expect(assistantProblem({ enabled: false, ready: false })).toBeNull()
+  })
+
+  it('names the model, or says plainly that it does not know which', () => {
+    expect(modelName('qwen3.5:9b')).toBe('qwen3.5:9b')
+    expect(modelName(undefined)).toBe('the model')
+    expect(modelName('  ')).toBe('the model')
+  })
+
+  it('says how long the model took the way query times are said', () => {
+    expect(tookLabel(640)).toBe('640 ms')
+    expect(tookLabel(2221)).toBe('2.2 s')
+    expect(tookLabel(1000)).toBe('1.0 s')
+    expect(tookLabel(-1)).toBe('')
+  })
+
+  it('shows every proposed term, splitting only top-level AND', () => {
+    expect(proposalTerms(proposal.filter).map(formatFilter)).toEqual(['ad.user=s.tan', 'ad.event_id=4625'])
+    // A nested OR is one term and keeps both branches: a chip that hid half of
+    // what it matched would be a filter nobody could check before running it.
+    const nested = proposalTerms({
+      op: 'or',
+      args: [
+        { op: 'eq', field: 'iis.status', value: '500' },
+        { op: 'eq', field: 'iis.status', value: '503' },
+      ],
+    })
+    expect(nested).toHaveLength(1)
+    expect(formatFilter(nested[0]!)).toBe('iis.status=500 OR iis.status=503')
+    expect(proposalTerms(null)).toEqual([])
+    expect(proposalFilterText(proposal.filter)).toBe('ad.user=s.tan AND ad.event_id=4625')
+  })
+
+  it('runs exactly the filter it showed, nesting and all', () => {
+    // The text under the chips is what the explorer re-parses, so a proposal
+    // whose shape changed on the way through would run something else.
+    const mixed: FilterExpr = {
+      op: 'and',
+      args: [
+        {
+          op: 'or',
+          args: [
+            { op: 'eq', field: 'iis.status', value: '500' },
+            { op: 'eq', field: 'iis.status', value: '503' },
+          ],
+        },
+        { op: 'gt', field: 'iis.time_taken', value: '1000' },
+      ],
+    }
+    const text = proposalFilterText(mixed)
+    expect(text).toBe('(iis.status=500 OR iis.status=503) AND iis.time_taken>1000')
+    expect(parseFilter(text)).toEqual(mixed)
+  })
+
+  it('runs the whole proposal, window included, and nothing else', () => {
+    const patch = proposalPatch(proposal)
+    expect(patch.q).toBe('ad.user=s.tan AND ad.event_id=4625')
+    // The window is the model's own choice, not the one the page was showing.
+    expect(patch.from).toBe('now-1h')
+    expect(patch.to).toBe('now')
+    expect(patch.mode).toBe('visual')
+    // A LogsQL query left in place would silently AND with the proposal, and the
+    // results would then be of a query neither party wrote.
+    expect(patch.native).toBeUndefined()
+  })
+
+  it('says out loud what running a proposal would replace', () => {
+    expect(proposalReplaces(null, '')).toBeNull()
+    expect(proposalReplaces({ op: 'eq', field: 'hostname', value: 'fw01' }, '')).toBe(
+      'Running this replaces the filter in the query bar.',
+    )
+    expect(proposalReplaces(parseFilter('hostname=fw01 AND severity=error'), '')).toBe(
+      'Running this replaces the 2 filters in the query bar.',
+    )
+    expect(proposalReplaces(null, '_time:5m')).toBe('Running this replaces the LogsQL query in the query bar.')
+    expect(proposalReplaces({ op: 'eq', field: 'hostname', value: 'fw01' }, '_time:5m')).toBe(
+      'Running this replaces the filter and the LogsQL query in the query bar.',
+    )
+  })
+
+  it('names the proposed window in the words the time picker uses', () => {
+    expect(proposalRangeLabel({ from: 'now-1h', to: 'now' }, absolute)).toBe('Last 1 hour')
+    expect(proposalRangeLabel({ from: 'now-90m', to: 'now' }, absolute)).toBe('Last 90 minutes')
+    expect(proposalRangeLabel(undefined, absolute)).toBe('the time range on the page')
+  })
+
+  it('reads a decline as an answer about the logs, not as a failure', () => {
+    expect(declineSentence('No firewall rule fields are available in the provided log schema.')).toBe(
+      'These logs can’t answer that, because no firewall rule fields are available in the provided log schema.',
+    )
+    // An acronym keeps its case: "DNS" lowercased would read as a typo.
+    expect(declineSentence('DNS resolver fields are not present.')).toBe(
+      'These logs can’t answer that, because DNS resolver fields are not present.',
+    )
+    expect(declineSentence('  ')).toBe('These logs can’t answer that, and the model did not say why.')
+  })
+
+  it('says how much schema a decline was based on', () => {
+    expect(fieldsSeenNote(37)).toBe('37 fields from these logs were offered to the model.')
+    expect(fieldsSeenNote(1)).toBe('One field from these logs was offered to the model.')
+    expect(fieldsSeenNote(0)).toBe('No fields were available to the model.')
+  })
+
+  it('tells a proposal from a decline', () => {
+    expect(isProposal(proposal)).toBe(true)
+    expect(isProposal({ answerable: false, reason: 'no fields', fields_seen: 4 })).toBe(false)
+    expect(isProposal(undefined)).toBe(false)
+  })
+
+  it('tells the model what the figures are of, in the page’s own words', () => {
+    expect(explainSubject('IIS', { from: 'now-30m', to: 'now' }, absolute)).toBe('IIS, last 30 minutes')
+    expect(explainSubject('Active Directory', { from: 'now-24h', to: 'now' }, absolute, 's.tan')).toBe(
+      'Active Directory, last 24 hours, narrowed to s.tan',
+    )
+    expect(explainSubject('IIS', { from: 'now-30m', to: 'now' }, absolute, '   ')).toBe('IIS, last 30 minutes')
+  })
+
+  it('attributes every piece of model prose and says it is not a measurement', () => {
+    const caveat = explainCaveat('qwen3.5:9b')
+    expect(caveat).toMatch(/^qwen3\.5:9b wrote this/)
+    expect(caveat).toMatch(/did not measure anything/)
+    expect(caveat).toMatch(/what Syslogc computed/)
+    // Never "found" or "detected": it described, or it proposed.
+    expect(caveat).not.toMatch(/found|detected/i)
+    const reasoning = reasoningCaveat(undefined)
+    expect(reasoning).toBe('the model’s own words about the filter it proposed. Nothing has been run yet.')
+    expect(reasoning).not.toMatch(/found|detected/i)
+  })
+
+  it('separates a model that is off from one that broke mid-answer', () => {
+    const off = new ApiError(404, {
+      type: 'https://syslogc.dev/problems/not_configured',
+      title: 'Not configured',
+      status: 404,
+      code: 'not_configured',
+      detail: 'Set assistant.enabled in the configuration file.',
+    })
+    const broke = new ApiError(502, {
+      type: 'https://syslogc.dev/problems/assistant_failed',
+      title: 'The assistant did not answer',
+      status: 502,
+      code: 'assistant_failed',
+      detail: 'qwen3.5:9b is not loaded on the host.',
+    })
+    expect(assistantErrorText(off)).toBe('Set assistant.enabled in the configuration file.')
+    expect(assistantErrorText(broke)).toBe('qwen3.5:9b is not loaded on the host.')
+    // Retrying a model that is switched off will never work.
+    expect(assistantRetryable(off)).toBe(false)
+    expect(assistantRetryable(broke)).toBe(true)
+    expect(assistantErrorText(new Error('network down'))).toBe('network down')
+    expect(assistantErrorText('odd')).toBe('The request did not complete.')
+  })
+
+  it('does not ask on a blank or stray question', () => {
+    expect(questionIsAskable('')).toBe(false)
+    expect(questionIsAskable('  ')).toBe(false)
+    expect(questionIsAskable('a')).toBe(false)
+    expect(questionIsAskable('who locked out?')).toBe(true)
+  })
+})
+
+describe('figures handed to the assistant', () => {
+  it('marks a figure the server could not have, rather than sending a zero', () => {
+    const data = { overview: { sign_in_failures: 6, sign_ins: 0, deadlocks: 1 } } as never
+    const out = mssqlFigures(data) as { overview: { sign_ins: unknown; sign_in_failures: number } }
+    // The model read a bare 0 as "zero successful sign-ins, which is notable",
+    // when the truth is that SQL Server is not recording them at all.
+    expect(typeof out.overview.sign_ins).toBe('string')
+    expect(String(out.overview.sign_ins)).toMatch(/not recorded/i)
+    expect(String(out.overview.sign_ins)).toMatch(/does not mean zero/i)
+    expect(out.overview.sign_in_failures).toBe(6)
+  })
+
+  it('passes the response through untouched when the figure is real', () => {
+    const data = { overview: { sign_in_failures: 6, sign_ins: 12 } } as never
+    // Same object, not a copy: the explain panel ties a description to the
+    // figures it was written from by identity.
+    expect(mssqlFigures(data)).toBe(data)
   })
 })

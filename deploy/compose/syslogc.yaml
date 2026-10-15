@@ -111,3 +111,16 @@ auth:
   cookie_secure: false          # compose default is plain HTTP; see docker-compose.yml
   bootstrap_admin:
     username: admin             # generated password is printed once in the logs
+
+# A local model that turns questions into queries and computed figures into
+# prose. Off by default and with no default endpoint: log content reaches
+# whatever this names, so it should be a model on your own network — which is
+# the reason to run one locally rather than call a hosted service.
+#
+#   assistant:
+#     enabled: true
+#     url: http://127.0.0.1:11434     # Ollama, here or on a machine with a GPU
+#     model: qwen3.5:9b               # as `ollama list` names it
+#     timeout: 90s
+assistant:
+  enabled: false

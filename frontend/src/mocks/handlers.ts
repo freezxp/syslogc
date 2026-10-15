@@ -66,6 +66,7 @@ export function resetMockData(rows?: LogRow[]): void {
   logs = rows ?? generateLogs(2500, Date.now(), 7 * 24 * 3600_000)
   loggedIn = true
   retentionDesired = null
+  setMockAssistant('ready')
   serviceCatalog = TREND_PROFILES.map((p) => ({ ...p.service }))
 }
 
@@ -98,6 +99,10 @@ const SESSION: Session = {
     'forwarding:manage',
     'system:view',
     'config:view',
+    // The real admin role carries this; nothing in the interface needed it
+    // until the assistant's "why it is not working" notice, which is addressed
+    // to whoever can actually change the configuration.
+    'config:manage',
     'retention:manage',
     'analytics:manage',
     'apikeys:own',
@@ -2174,6 +2179,167 @@ function iisUrl(filter: FilterExpr | undefined): string {
   return 'value' in filter && filter.op === 'eq' ? filter.value : ''
 }
 
+// ---- the log assistant -----------------------------------------------------
+
+const MOCK_MODEL = 'qwen3.5:9b'
+const MOCK_ASSISTANT_URL = 'http://100.127.41.188:11434'
+
+type MockAssistantMode = 'ready' | 'off' | 'broken'
+
+const MOCK_ASSISTANT_KEY = 'syslogc.mock.assistant'
+
+function storedAssistantMode(): MockAssistantMode {
+  try {
+    const v = sessionStorage.getItem(MOCK_ASSISTANT_KEY)
+    return v === 'off' || v === 'broken' ? v : 'ready'
+  } catch {
+    return 'ready'
+  }
+}
+
+/** Which of the assistant's states to answer with; see `setMockAssistant`. */
+let assistantMode: MockAssistantMode = typeof sessionStorage === 'undefined' ? 'ready' : storedAssistantMode()
+
+/**
+ * Switches the mock assistant between the three states the interface has to
+ * handle: answering, switched off in the configuration (404 `not_configured`),
+ * and configured but unable to answer (502 `assistant_failed`).
+ *
+ * Kept in session storage like the mock session is, so it survives the reload
+ * it takes to see the effect: what the off state looks like is a whole page
+ * without the feature on it, which only redraws from scratch.
+ */
+export function setMockAssistant(mode: MockAssistantMode): void {
+  assistantMode = mode
+  try {
+    if (mode === 'ready') sessionStorage.removeItem(MOCK_ASSISTANT_KEY)
+    else sessionStorage.setItem(MOCK_ASSISTANT_KEY, mode)
+  } catch {
+    // not available in tests
+  }
+}
+
+/** The error the ask and explain endpoints give when there is no usable model. */
+function assistantUnavailable(): Response | null {
+  if (assistantMode === 'off') {
+    return problem(
+      404,
+      'not_configured',
+      'The assistant is not configured',
+      'Set assistant.enabled and assistant.url in the configuration file, then restart.',
+    )
+  }
+  if (assistantMode === 'broken') {
+    return problem(
+      502,
+      'assistant_failed',
+      'The assistant did not answer',
+      `${MOCK_MODEL} is not loaded on ${MOCK_ASSISTANT_URL}. Pull it with "ollama pull ${MOCK_MODEL}".`,
+    )
+  }
+  return null
+}
+
+/**
+ * A keyword table standing in for the model. It proposes filters over fields
+ * the synthetic logs actually carry and declines everything else, which is the
+ * behaviour the interface has to render — a wrong guess about the schema has to
+ * be visible, and a decline has to be a normal answer rather than an error.
+ */
+const MOCK_PROPOSALS: { match: RegExp; filter: FilterExpr; fields: string[]; from: string; reasoning: string }[] = [
+  {
+    match: /lock(ed)?\s*-?\s*out|4740/i,
+    filter: { op: 'eq', field: 'ad.event_id', value: '4740' },
+    fields: ['ad.event_id'],
+    from: 'now-24h',
+    reasoning: 'Windows records an account lockout as event 4740 on the domain controller holding the account.',
+  },
+  {
+    match: /fail(ed|ure)?s?\s+(sign|log)|4625|bad password|wrong password/i,
+    filter: { op: 'eq', field: 'ad.event_id', value: '4625' },
+    fields: ['ad.event_id', 'ad.user'],
+    from: 'now-1h',
+    reasoning: 'Event 4625 is a failed logon in the Windows Security log.',
+  },
+  {
+    match: /slow|time.?taken|latency/i,
+    filter: { op: 'gt', field: 'iis.time_taken', value: '1000' },
+    fields: ['iis.time_taken'],
+    from: 'now-24h',
+    reasoning: 'IIS writes the time taken on each request line; over 1000 ms is the usual threshold for slow.',
+  },
+  {
+    match: /\b5xx\b|\b500\b|server error/i,
+    filter: { op: 'in', field: 'iis.status', values: ['500', '502', '503'] },
+    fields: ['iis.status'],
+    from: 'now-6h',
+    reasoning: 'A 5xx status is the server failing rather than the request being wrong.',
+  },
+  {
+    match: /deadlock|1205/i,
+    filter: { op: 'eq', field: 'mssql.error', value: '1205' },
+    fields: ['mssql.error'],
+    from: 'now-24h',
+    reasoning: 'SQL Server reports a deadlock victim as error 1205.',
+  },
+  {
+    match: /error|critical|went wrong/i,
+    filter: { op: 'in', field: 'severity', values: ['error', 'critical'] },
+    fields: ['severity'],
+    from: 'now-1h',
+    reasoning: 'Narrowing to the two severities that mean something is actually broken.',
+  },
+]
+
+/** A user name the question happens to name, which the proposal should carry. */
+const MOCK_USER_RE = /\b([a-z]\.[a-z]{2,12})\b/i
+
+function mockPropose(
+  question: string,
+): { filter: FilterExpr; time_range: TimeRange; reasoning: string; fields: string[] } | null {
+  const hit = MOCK_PROPOSALS.find((p) => p.match.test(question))
+  if (!hit) return null
+  const user = MOCK_USER_RE.exec(question)?.[1]
+  const filter: FilterExpr =
+    user && hit.fields.includes('ad.user')
+      ? { op: 'and', args: [{ op: 'eq', field: 'ad.user', value: user.toLowerCase() }, hit.filter] }
+      : hit.filter
+  return {
+    filter,
+    // Deliberately the model's own choice rather than the window on the page:
+    // the interface has to show that the two can differ.
+    time_range: { from: hit.from, to: 'now' },
+    reasoning: user ? `${hit.reasoning} Narrowed to ${user.toLowerCase()}.` : hit.reasoning,
+    fields: hit.fields,
+  }
+}
+
+/** What the question asked about that these logs have nothing for. */
+function mockMissingSubject(question: string): string {
+  const subjects: [RegExp, string][] = [
+    [/firewall|acl|deny|blocked/i, 'firewall rule'],
+    [/vpn|tunnel/i, 'VPN session'],
+    [/dns|resolve|lookup/i, 'DNS resolver'],
+    [/certificate|tls|ssl/i, 'certificate'],
+  ]
+  return subjects.find(([re]) => re.test(question))?.[1] ?? 'matching'
+}
+
+/**
+ * Prose about the figures it was handed. It names what it was given rather than
+ * computing anything: the mock must not be the source of a number either.
+ */
+function mockExplain(subject: string, figures: unknown): string {
+  const keys = figures && typeof figures === 'object' ? Object.keys(figures as Record<string, unknown>).slice(0, 4) : []
+  const named = keys.length ? keys.join(', ') : 'the values on the page'
+  return (
+    `These figures cover ${subject}. The panels supplied were ${named}. ` +
+    'The overall shape looks ordinary for a window of this length: most of the volume is routine traffic, with a ' +
+    'small number of failures that would be worth reading in full before concluding anything from them. ' +
+    'Nothing here was recomputed — this describes the numbers as given.'
+  )
+}
+
 const api = (path: string) => `*/api/v1${path}`
 
 export const handlers = [
@@ -2504,6 +2670,76 @@ export const handlers = [
       groups,
       stats: { duration_ms: Math.round(performance.now() - started) + 14 },
     })
+  }),
+
+  // ---- the log assistant ---------------------------------------------------
+  //
+  // Enough of the real endpoints to build against without a model running: a
+  // proposal, a decline (which is a 200, not an error), and the three states a
+  // missing model produces. The "model" here is a keyword table — it never
+  // answers a number, which is the one property of the real thing that matters.
+
+  http.get(api('/assistant/status'), () => {
+    const auth = requireAuth()
+    if (auth) return auth
+    if (assistantMode === 'off') {
+      return HttpResponse.json({
+        enabled: false,
+        ready: false,
+        problem:
+          'The assistant is switched off. Set assistant.enabled and assistant.url in the configuration file to the ' +
+          'address of an Ollama host, then restart.',
+      })
+    }
+    if (assistantMode === 'broken') {
+      return HttpResponse.json({
+        enabled: true,
+        ready: false,
+        model: MOCK_MODEL,
+        url: MOCK_ASSISTANT_URL,
+        available_models: ['local-coder:latest'],
+        problem: `The host at ${MOCK_ASSISTANT_URL} answered, but it does not have ${MOCK_MODEL}. Pull it with "ollama pull ${MOCK_MODEL}" or set assistant.model to a model it has.`,
+      })
+    }
+    return HttpResponse.json({
+      enabled: true,
+      ready: true,
+      model: MOCK_MODEL,
+      url: MOCK_ASSISTANT_URL,
+      available_models: ['local-coder:latest', MOCK_MODEL],
+    })
+  }),
+
+  http.post(api('/assistant/query'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const gone = assistantUnavailable()
+    if (gone) return gone
+    const body = (await request.json()) as { question?: string }
+    const question = (body.question ?? '').trim()
+    if (question.length < 3) return validationProblem('/question', 'question must not be empty')
+    await delay(900)
+    const answer = mockPropose(question)
+    return HttpResponse.json(
+      answer
+        ? { answerable: true, ...answer, model: MOCK_MODEL, took_ms: 2214 }
+        : {
+            answerable: false,
+            reason: `No ${mockMissingSubject(question)} fields are available in the provided log schema.`,
+            fields_seen: CORE_FIELDS.length + 24,
+          },
+    )
+  }),
+
+  http.post(api('/assistant/explain'), async ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    const gone = assistantUnavailable()
+    if (gone) return gone
+    const body = (await request.json()) as { subject?: string; figures?: unknown }
+    if (!body.subject?.trim()) return validationProblem('/subject', 'subject must not be empty')
+    await delay(750)
+    return HttpResponse.json({ text: mockExplain(body.subject, body.figures), model: MOCK_MODEL, took_ms: 1946 })
   }),
 
   http.get(api('/analytics/services'), () => {
@@ -3214,6 +3450,23 @@ export const handlers = [
         version: '0.2.0-mock',
         roles: ['all'],
         uptime_seconds: Math.round((Date.now() - NOW) / 1000) + 3 * 86400 + 7200,
+        // A memory-capped container, which is the interesting case: the limit
+        // is the container's 2 GiB rather than the machine's, and the disk is
+        // past the 85% warning threshold so the warning treatment is visible
+        // in mock mode.
+        host: {
+          cpu: { usage_fraction: 0.37, cores: 4, source: 'host' },
+          memory: { used_bytes: 1_476_395_008, limit_bytes: 2_147_483_648, source: 'cgroup' },
+          disks: [
+            {
+              path: '/',
+              used_bytes: 93_000_000_000,
+              total_bytes: 107_374_182_400,
+              available_bytes: 13_000_000_000,
+              used_fraction: 93_000_000_000 / (93_000_000_000 + 13_000_000_000),
+            },
+          ],
+        },
         components: [
           { name: 'storage', status: 'ok' },
           { name: 'database', status: 'ok' },

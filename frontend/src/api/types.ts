@@ -50,6 +50,10 @@ export type ApiKey = S['ApiKey']
 /** What a key may be scoped to: the spec's list, which the session's may outgrow. */
 export type ApiKeyScope = ApiKey['scopes'][number]
 export type SystemHealth = S['SystemHealth']
+export type HostHealth = S['HostHealth']
+export type HostCPU = S['HostCPU']
+export type HostMemory = S['HostMemory']
+export type HostDisk = S['HostDisk']
 /** `forwarding` is not in the generated schema yet; see the note in ./operations.ts. */
 export type SystemIngestion = S['SystemIngestion'] & { forwarding?: ForwardTarget[] | null }
 export type SystemStorage = S['SystemStorage']
@@ -81,6 +85,13 @@ export type {
   AnalysisRequest,
   AnalyticsMetric,
   AnalyticsMetricType,
+  AssistantAnswer,
+  AssistantDecline,
+  AssistantExplainInput,
+  AssistantExplanation,
+  AssistantProposal,
+  AssistantQueryInput,
+  AssistantStatus,
   AuditEvent,
   AuditQuery,
   BreakdownRequest,

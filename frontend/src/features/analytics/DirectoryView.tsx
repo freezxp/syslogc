@@ -18,6 +18,8 @@ import { EmptyState, ErrorPanel, NotRecorded, Panel, Skeleton, StatTile } from '
 import { Button, buttonVariants } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/overlay'
+import { explainSubject } from '@/features/assistant/assistant'
+import { ExplainFigures } from '@/features/assistant/ExplainFigures'
 import { seriesColor } from '@/lib/chart-colors'
 import { cn } from '@/lib/cn'
 import { formatExact, formatTimestamp } from '@/lib/format'
@@ -131,6 +133,20 @@ export function DirectoryView() {
                 <StatTile key={tile.name} tile={tile} loading={directory.isLoading} />
               ))}
             </ul>
+
+            {/* Under the figures rather than over them: the model describes
+                what is on the screen, so what is on the screen stays there. */}
+            {!empty && (
+              <ExplainFigures
+                subject={explainSubject(
+                  'Active Directory',
+                  search,
+                  (d) => formatTimestamp(d, tz, 'MMM d, HH:mm'),
+                  query.account,
+                )}
+                figures={data}
+              />
+            )}
 
             {empty ? (
               <Panel title="Nothing recorded in this window">

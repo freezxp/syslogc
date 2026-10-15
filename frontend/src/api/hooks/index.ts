@@ -12,6 +12,11 @@ import type {
   AdminUser,
   AnalyticsMetric,
   ApiKeyScope,
+  AssistantAnswer,
+  AssistantExplainInput,
+  AssistantExplanation,
+  AssistantQueryInput,
+  AssistantStatus,
   AuditEvent,
   AuditQuery,
   BreakdownResponse,
@@ -395,6 +400,58 @@ export function useServiceTrends(
     staleTime: Infinity,
     placeholderData: keepPreviousData,
     retry: false,
+  })
+}
+
+// ---- the log assistant -----------------------------------------------------
+
+export const assistantStatusKey = ['assistant', 'status'] as const
+
+/**
+ * Whether the assistant can be used at all. Asked once and shared, because
+ * every place that offers it has to know before it draws anything: a button
+ * that answers 404 is worse than no button.
+ *
+ * Reading the status needs `system:view` and using it needs `logs:search`.
+ * Every role carries both, but an API-key principal may carry neither, and
+ * asking anyway would answer 403 — which must not read as "the model is off".
+ * So it is not asked without both, and the assistant simply does not appear.
+ */
+export function useAssistantStatus() {
+  const session = useSession()
+  const perms = session.data?.permissions
+  const permitted = !!perms && perms.includes('system:view') && perms.includes('logs:search')
+  return useQuery({
+    queryKey: assistantStatusKey,
+    enabled: permitted,
+    queryFn: ({ signal }) => unwrap(client.GET('/api/v1/assistant/status', { signal })) as Promise<AssistantStatus>,
+    // Turning the model on is a configuration change, not something that
+    // happens mid-session; a minute of staleness costs nothing.
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * Asks the model to propose a query. A mutation rather than a query because
+ * asking is an act with a cost — a second or three of a local model — and must
+ * happen when somebody presses ask, never because a component rendered.
+ *
+ * Nothing is run here: the answer is a proposal, and `AssistantProposal` has
+ * to be handed to the explorer by the user before any logs are read.
+ */
+export function useAssistantQuery() {
+  return useMutation({
+    mutationFn: (body: AssistantQueryInput) =>
+      unwrap(client.POST('/api/v1/assistant/query', { body })) as Promise<AssistantAnswer>,
+  })
+}
+
+/** Asks the model to describe figures the page already holds. */
+export function useAssistantExplain() {
+  return useMutation({
+    mutationFn: (body: AssistantExplainInput) =>
+      unwrap(client.POST('/api/v1/assistant/explain', { body })) as Promise<AssistantExplanation>,
   })
 }
 

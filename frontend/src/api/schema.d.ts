@@ -3230,6 +3230,45 @@ export interface components {
             uptime_seconds: number;
             components: components["schemas"]["ComponentStatus"][];
             sources?: components["schemas"]["SourceStatus"][];
+            /** @description CPU, memory and disk utilisation; absent until the first sample has been taken. */
+            host?: components["schemas"]["HostHealth"];
+        };
+        /** @description Host utilisation. Each figure carries the source it was measured from, because inside a container /proc describes the machine rather than the container's limits and the two can differ by orders of magnitude. */
+        HostHealth: {
+            cpu: components["schemas"]["HostCPU"];
+            memory: components["schemas"]["HostMemory"];
+            disks: components["schemas"]["HostDisk"][];
+        };
+        /**
+         * @description Which ceiling the figure is measured against. "cgroup" is this container's own limit; "host" means no cgroup limit applied, so the whole machine is the limit.
+         * @enum {string}
+         */
+        HostLimitSource: "cgroup" | "host";
+        HostCPU: {
+            /** @description Share of the available cores used over the last sampling interval, 0 to 1. Null until two samples have been taken, since utilisation is a rate. */
+            usage_fraction?: number | null;
+            /** @description How many cores usage_fraction is measured against - the cgroup quota, or the machine's CPU count. */
+            cores: number;
+            source: components["schemas"]["HostLimitSource"];
+        };
+        HostMemory: {
+            /** @description Memory in use */
+            used_bytes: number;
+            /** @description The cgroup limit where there is one */
+            limit_bytes: number;
+            source: components["schemas"]["HostLimitSource"];
+        };
+        HostDisk: {
+            /** @description The path measured; it names the filesystem holding it */
+            path: string;
+            /** @description Space occupied */
+            used_bytes: number;
+            /** @description Filesystem size */
+            total_bytes: number;
+            /** @description Space a non-root process may still write. Smaller than total minus used by the reserve kept for root, and the figure that decides whether a write succeeds. */
+            available_bytes: number;
+            /** @description used_bytes over used_bytes plus available_bytes, so the root reserve does not make a healthy filesystem read as nearly full. This is what df's Use% shows. */
+            used_fraction: number;
         };
         RetentionUpdateInput: {
             /**

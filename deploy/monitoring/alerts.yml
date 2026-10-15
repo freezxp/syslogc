@@ -104,6 +104,83 @@ groups:
         annotations:
           summary: Over 5% of API requests fail on {{ $labels.instance }}
 
+  - name: syslogc-host
+    rules:
+      # syslogc_host_memory_limit_bytes is the cgroup limit where the
+      # container has one and the machine's total otherwise, so this ratio
+      # means the same thing either way: the share of what will actually run
+      # out. syslogc_host_limit_source says which was measured.
+      #
+      # 90% for 15 minutes, not a lower threshold or a shorter window: the
+      # used figure already excludes reclaimable page cache, so it does not
+      # drift up with cache the way a naive reading would, and a batch of
+      # large queries can hold 80% for a few minutes without anything being
+      # wrong. Sustained 90% is different - the remaining headroom is smaller
+      # than one ingest queue at capacity, and the next burst is what gets
+      # the process OOM-killed.
+      - alert: SyslogcHostMemoryHigh
+        expr: >-
+          syslogc_host_memory_used_bytes / clamp_min(syslogc_host_memory_limit_bytes, 1) > 0.9
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: Memory over 90% on {{ $labels.instance }}
+          description: >-
+            {{ humanizePercentage $value }} of the memory ceiling is in use and has been
+            for fifteen minutes. If syslogc_host_limit_source{resource="memory",source="cgroup"}
+            is 1 this is a container limit and the process will be OOM-killed before the
+            host notices; raise the limit or lower ingestion.queue.max_bytes.
+
+      # Measured against used+available rather than the filesystem size, so
+      # the reserve kept for root does not make a healthy disk read as 95%.
+      # This is what df's Use% column shows.
+      #
+      # 85% warns and 95% pages. The gap is deliberate: VictoriaLogs needs
+      # free space to merge parts, and a disk that crosses 85% while logs are
+      # still arriving usually reaches 95% within hours, so the warning is
+      # the one with time to act on. At 95% writes are close to failing and
+      # the retention period is the only fast lever left.
+      - alert: SyslogcHostDiskFilling
+        expr: >-
+          syslogc_host_disk_used_bytes
+          / clamp_min(syslogc_host_disk_used_bytes + syslogc_host_disk_available_bytes, 1) > 0.85
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: Disk {{ $labels.path }} over 85% full on {{ $labels.instance }}
+          description: >-
+            {{ humanizePercentage $value }} full. Logs go to the storage backend, so this
+            is the filesystem Syslogc itself runs on; a full one stops logging and
+            certificate writes.
+
+      - alert: SyslogcHostDiskNearlyFull
+        expr: >-
+          syslogc_host_disk_used_bytes
+          / clamp_min(syslogc_host_disk_used_bytes + syslogc_host_disk_available_bytes, 1) > 0.95
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: Disk {{ $labels.path }} over 95% full on {{ $labels.instance }}
+          description: >-
+            {{ humanizePercentage $value }} full, so little more than the reserve kept for
+            root is left. Shorten the retention period or add space now; see
+            syslogc_host_disk_available_bytes for what a non-root writer actually has.
+
+      # CPU pinned at its quota means messages queue rather than parse, so
+      # this is an early warning for the ingest-queue alerts rather than a
+      # problem in itself. 95% for 30 minutes: a node sized for its load does
+      # not sit there, and anything shorter fires on legitimate backfill.
+      - alert: SyslogcHostCPUSaturated
+        expr: syslogc_host_cpu_usage_ratio > 0.95
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: CPU saturated on {{ $labels.instance }}
+          description: >-
+            Using {{ humanizePercentage $value }} of the available cores for half an hour.
+            Where syslogc_host_limit_source{resource="cpu",source="cgroup"} is 1 the
+            figure is against the container's CPU quota, not the machine.
+
   - name: syslogc-analytics
     rules:
       # Trends are counted from logs, so a rollup that stops for longer than

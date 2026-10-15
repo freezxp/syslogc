@@ -2004,6 +2004,69 @@ components:
         uptime_seconds: {type: integer}
         components: {type: array, items: {$ref: "#/components/schemas/ComponentStatus"}}
         sources: {type: array, items: {$ref: "#/components/schemas/SourceStatus"}}
+        host:
+          allOf: [{$ref: "#/components/schemas/HostHealth"}]
+          description: CPU, memory and disk utilisation; absent until the first sample has been taken.
+
+    HostHealth:
+      type: object
+      description: >-
+        Host utilisation. Each figure carries the source it was measured from, because
+        inside a container /proc describes the machine rather than the container's limits
+        and the two can differ by orders of magnitude.
+      required: [cpu, memory, disks]
+      properties:
+        cpu: {$ref: "#/components/schemas/HostCPU"}
+        memory: {$ref: "#/components/schemas/HostMemory"}
+        disks: {type: array, items: {$ref: "#/components/schemas/HostDisk"}}
+
+    HostLimitSource:
+      type: string
+      description: >-
+        Which ceiling the figure is measured against. "cgroup" is this container's own
+        limit; "host" means no cgroup limit applied, so the whole machine is the limit.
+      enum: [cgroup, host]
+
+    HostCPU:
+      type: object
+      required: [cores, source]
+      properties:
+        usage_fraction:
+          type: number
+          nullable: true
+          description: >-
+            Share of the available cores used over the last sampling interval, 0 to 1.
+            Null until two samples have been taken, since utilisation is a rate.
+        cores:
+          type: number
+          description: How many cores usage_fraction is measured against - the cgroup quota, or the machine's CPU count.
+        source: {$ref: "#/components/schemas/HostLimitSource"}
+
+    HostMemory:
+      type: object
+      required: [used_bytes, limit_bytes, source]
+      properties:
+        used_bytes: {type: integer, description: Memory in use, excluding reclaimable page cache}
+        limit_bytes: {type: integer, description: The cgroup limit where there is one, otherwise the machine's total}
+        source: {$ref: "#/components/schemas/HostLimitSource"}
+
+    HostDisk:
+      type: object
+      required: [path, used_bytes, total_bytes, available_bytes, used_fraction]
+      properties:
+        path: {type: string, description: The path measured; it names the filesystem holding it}
+        used_bytes: {type: integer, description: Space occupied, counting the reserve kept for root}
+        total_bytes: {type: integer, description: Filesystem size}
+        available_bytes:
+          type: integer
+          description: >-
+            Space a non-root process may still write. Smaller than total minus used by the
+            reserve kept for root, and the figure that decides whether a write succeeds.
+        used_fraction:
+          type: number
+          description: >-
+            used_bytes over used_bytes plus available_bytes, so the root reserve does not
+            make a healthy filesystem read as nearly full. This is what df's Use% shows.
 
     RetentionUpdateInput:
       type: object

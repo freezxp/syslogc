@@ -19,9 +19,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/freezxp/syslogc/backend/internal/acme"
+	"github.com/freezxp/syslogc/backend/internal/assistant"
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
 	"github.com/freezxp/syslogc/backend/internal/forwarding"
+	"github.com/freezxp/syslogc/backend/internal/hostinfo"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/listener"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/source"
 	"github.com/freezxp/syslogc/backend/internal/ingestion/supervisor"
@@ -56,6 +58,11 @@ type APIDeps struct {
 	ServiceTrends ServiceTrendReader
 	// Retention returns the current retention status (for /system/storage).
 	Retention func() any
+	// Assistant answers questions about logs with a local model; nil when
+	// the assistant is off, which is the default.
+	Assistant *assistant.Assistant
+	// AssistantModels lists what the model endpoint serves, for status.
+	AssistantModels func(context.Context) ([]string, error)
 	// TrendWindows reports how each service-trend window is faring; nil when
 	// the rollup is not running on this node.
 	TrendWindows func() []servicetrends.WindowStatus
@@ -71,6 +78,9 @@ type APIDeps struct {
 	// Certificates returns the state of certificates obtained from a
 	// certificate authority; nil when no source asks for one.
 	Certificates func() []acme.Status
+	// Host returns the last CPU, memory and disk reading, and false before
+	// the first one has been taken.
+	Host func() (hostinfo.Snapshot, bool)
 	// Forwarders returns forward target statuses; nil when none are configured.
 	Forwarders   func() []forwarding.Status
 	CookieSecure bool

@@ -24,6 +24,24 @@ type Config struct {
 	Auth       AuthConfig       `koanf:"auth"`
 	Query      QueryConfig      `koanf:"query"`
 	Analytics  AnalyticsConfig  `koanf:"analytics"`
+	Assistant  AssistantConfig  `koanf:"assistant"`
+}
+
+// AssistantConfig points at a local model that turns questions into queries
+// and computed figures into prose.
+//
+// Off by default, and deliberately not given a default endpoint: an
+// assistant that quietly starts talking to a service nobody configured is
+// not a feature. Log content reaches whatever this names, so it should be a
+// model on your own network — which is the reason to run one locally.
+type AssistantConfig struct {
+	Enabled bool `koanf:"enabled"`
+	// URL is an Ollama endpoint, e.g. http://127.0.0.1:11434.
+	URL string `koanf:"url"`
+	// Model is the name as Ollama lists it, e.g. qwen3.5:9b.
+	Model string `koanf:"model"`
+	// Timeout bounds one request to the model.
+	Timeout Duration `koanf:"timeout"`
 }
 
 // AnalyticsConfig configures measurements derived from the logs.

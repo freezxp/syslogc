@@ -203,7 +203,10 @@ func directoryPart() Part {
 			},
 		},
 		Fields: []Field{
-			{Name: "ad.event_id", Description: "Which Windows event this is", Example: "4624"},
+			{Name: "ad.event_id", Description: "Which Windows event this is: 4624 signed in, 4625 failed to sign in, " +
+				"4634 signed out, 4672 signed in with administrative rights, 4740 account locked out, " +
+				"4720 account created, 4728 added to a group, 4771 Kerberos pre-authentication failed",
+				Example: "4625"},
 			{Name: "ad.user", Description: "The account the event is about", Example: "a.hassan"},
 			{Name: "ad.domain", Description: "Its domain", Example: "CORP"},
 			{Name: "ad.actor", Description: "The account that caused the event, where different", Example: "SYSTEM"},
@@ -270,7 +273,10 @@ func mssqlPart() Part {
 			},
 		},
 		Fields: []Field{
-			{Name: "mssql.event_id", Description: "Which SQL Server event this is", Example: "18456"},
+			{Name: "mssql.event_id", Description: "Which SQL Server event this is: 18456 sign-in failed, " +
+				"18453/18454 sign-in succeeded, 1205 deadlock victim, 823/824 I/O or corruption error, " +
+				"825 read succeeded only after retrying, 9002 transaction log full, 18264 database backed up",
+				Example: "18456"},
 			{Name: "mssql.provider", Description: "The instance that recorded it", Example: "MSSQLSERVER"},
 			{Name: "mssql.severity", Description: "Error, Warning or Information", Example: "ERROR"},
 			{Name: "mssql.login_user", Description: "The account a failed sign-in was for", Example: "sa"},
@@ -317,7 +323,9 @@ func iisPart() Part {
 			},
 		},
 		Fields: []Field{
-			{Name: "iis.status", Description: "The response code", Example: "404"},
+			{Name: "iis.status", Description: "The HTTP response code: 2xx succeeded, 3xx redirected, " +
+				"4xx the caller's error (401 unauthorised, 404 not found), 5xx the server's own failure",
+				Example: "404"},
 			{Name: "iis.substatus", Description: "IIS's own further reason for it, which is what tells a 401 apart from a 401", Example: "2"},
 			{Name: "iis.uri", Description: "The path requested, without the query string", Example: "/app/login"},
 			{Name: "iis.method", Description: "The HTTP method", Example: "POST"},

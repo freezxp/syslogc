@@ -1,10 +1,12 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
-import { AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { AlertTriangle, Bot, CheckCircle2 } from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
 
-import { useSystemHealth, useSystemIngestion, useSystemStorage } from '@/api/hooks'
-import type { ForwardTarget, SourceCounters } from '@/api/types'
+import { useAssistantStatus, useSystemHealth, useSystemIngestion, useSystemStorage } from '@/api/hooks'
+import type { ForwardTarget, HostHealth, SourceCounters } from '@/api/types'
+import { useCan } from '@/auth/permissions'
 import { ErrorPanel, Panel, Skeleton, StatusDot } from '@/components/data/common'
+import { assistantProblem } from '@/features/assistant/assistant'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/overlay'
 import {
   formatBytes,
@@ -18,6 +20,15 @@ import {
 import { useTimezone } from '@/lib/preferences'
 
 import { forwardFilterLabels, secondsSince, truncateError } from './forwarding'
+import {
+  coresLabel,
+  cpuStatus,
+  diskStatus,
+  type HostStatus,
+  limitSourceLabel,
+  memoryStatus,
+  usedFraction,
+} from './host'
 
 export function SystemPage() {
   const { tab } = useSearch({ from: '/app/system' })
@@ -45,6 +56,42 @@ export function SystemPage() {
   )
 }
 
+/**
+ * Why the log assistant is not being offered, for the one person who can do
+ * something about it.
+ *
+ * Everywhere else a broken assistant simply does not appear — a button that
+ * waits three seconds and then fails is worse than no button. But something has
+ * to say so once, or an administrator who has configured a model has no way to
+ * find out it never answered; this is that one place, and the text is the
+ * server's, because it names the setting.
+ */
+function AssistantProblem() {
+  const can = useCan()
+  const status = useAssistantStatus()
+  const problem = assistantProblem(status.data)
+  // Turning it on means editing the configuration, so it is said to whoever can.
+  if (!problem || !can('config:manage')) return null
+  return (
+    <div role="status" className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3">
+      <Bot className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+      <div className="min-w-0">
+        <p className="text-base font-medium">The log assistant is not answering, so it is not offered anywhere.</p>
+        <p className="text-sm text-muted">{problem}</p>
+        {status.data?.url && (
+          <p className="mt-1 text-sm text-subtle">
+            Configured model <span className="mono text-muted">{status.data.model || 'none'}</span> at{' '}
+            <span className="mono text-muted">{status.data.url}</span>
+            {status.data.available_models?.length
+              ? ` · that host offers: ${status.data.available_models.join(', ')}`
+              : ''}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
   return (
     <div className="rounded-md border border-border bg-surface p-3">
@@ -52,6 +99,98 @@ function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: Re
       <div className="mt-1 text-xl font-semibold tabular-nums">{value}</div>
       {sub && <div className="text-sm text-muted">{sub}</div>}
     </div>
+  )
+}
+
+/**
+ * A stat with a fill bar, for figures that have a ceiling. The bar's colour
+ * comes from the status rather than straight from the fraction, so the bar,
+ * the dot and the shipped alert rules never disagree about what is wrong.
+ */
+function MeterStat({
+  label,
+  value,
+  fraction,
+  status,
+  sub,
+}: {
+  label: string
+  value: ReactNode
+  fraction: number | null
+  status: HostStatus
+  sub?: ReactNode
+}) {
+  const color = status === 'fail' ? 'var(--danger)' : status === 'warn' ? 'var(--warning)' : 'var(--success)'
+  const pct = fraction === null ? null : Math.round(Math.min(1, Math.max(0, fraction)) * 100)
+  return (
+    <div className="rounded-md border border-border bg-surface p-3">
+      <div className="text-xs font-semibold tracking-wider text-subtle uppercase">{label}</div>
+      <div className="mt-1 flex items-center gap-1.5 text-xl font-semibold tabular-nums">
+        <StatusDot status={status} />
+        {value}
+      </div>
+      {pct !== null && (
+        <div
+          className="mt-1 h-1.5 overflow-hidden rounded bg-surface-3"
+          role="meter"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={label}
+        >
+          <div className="h-full" style={{ width: `${pct}%`, background: color }} />
+        </div>
+      )}
+      {sub && <div className="mt-1 text-sm break-words text-muted">{sub}</div>}
+    </div>
+  )
+}
+
+/**
+ * Host utilisation. Every figure says what it was measured against, because
+ * inside a container /proc reports the machine rather than the container's
+ * limits: 40% of a 512 MiB container and 40% of a 64 GiB host look identical
+ * as a percentage and mean entirely different things.
+ */
+function HostPanel({ host }: { host: HostHealth }) {
+  const { cpu, memory } = host
+  const memFraction = usedFraction(memory)
+  return (
+    <Panel title="Host utilisation">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <MeterStat
+          label="CPU"
+          // Null until the node has taken two samples, so the first load of a
+          // freshly started node shows a dash rather than a made-up zero.
+          value={cpu.usage_fraction != null ? formatPercent(cpu.usage_fraction) : '—'}
+          fraction={cpu.usage_fraction ?? null}
+          status={cpuStatus(cpu)}
+          sub={`${coresLabel(cpu.cores)} · ${limitSourceLabel(cpu.source, 'limit')}`}
+        />
+        <MeterStat
+          label="Memory"
+          value={memFraction !== null ? formatPercent(memFraction) : '—'}
+          fraction={memFraction}
+          status={memoryStatus(memory)}
+          sub={`${formatBytes(memory.used_bytes)} of ${formatBytes(memory.limit_bytes)} ${limitSourceLabel(
+            memory.source,
+            'limit',
+          )}`}
+        />
+        {host.disks.map((d) => (
+          <MeterStat
+            key={d.path}
+            label={`Disk ${d.path}`}
+            value={formatPercent(d.used_fraction)}
+            fraction={d.used_fraction}
+            status={diskStatus(d)}
+            // Available, not total minus used: the reserve kept for root is
+            // not space this process can write.
+            sub={`${formatBytes(d.available_bytes)} free of ${formatBytes(d.total_bytes)}`}
+          />
+        ))}
+      </div>
+    </Panel>
   )
 }
 
@@ -64,6 +203,7 @@ function HealthTab() {
   const ok = h.status === 'ready'
   return (
     <div className="space-y-3">
+      <AssistantProblem />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat
           label="Status"
@@ -78,6 +218,7 @@ function HealthTab() {
         <Stat label="Version" value={<span className="mono text-lg">{h.version}</span>} />
         <Stat label="Uptime" value={formatDuration(h.uptime_seconds)} />
       </div>
+      {h.host && <HostPanel host={h.host} />}
       <Panel title="Components" bodyClassName="p-0 overflow-x-auto">
         <table className="w-full text-base">
           <tbody>

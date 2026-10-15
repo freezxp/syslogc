@@ -9,6 +9,7 @@ import { Popover, PopoverAnchor, PopoverContent, Tooltip } from '@/components/ui
 import { cn } from '@/lib/cn'
 import { andTerms, combineAnd, formatFilter, negate, parseFilter } from '@/lib/filter-text'
 
+import { filterChipClass } from './filter-chip'
 import { FilterBuilder } from './FilterBuilder'
 
 const AdvancedEditor = lazy(() => import('./AdvancedEditor'))
@@ -111,15 +112,7 @@ export function QueryBar({
               onOpenChange={(o) => setEditing(o ? i : null)}
             >
               <PopoverAnchor asChild>
-                <span
-                  className={cn(
-                    'group inline-flex h-6 max-w-full items-center gap-1 rounded border pl-2 text-sm',
-                    term.op === 'not' || term.op === 'ne' || term.op === 'not_in' || term.op === 'not_exists'
-                      ? 'border-danger/40 bg-danger/10'
-                      : 'border-accent/40 bg-accent-muted',
-                  )}
-                  data-testid="filter-chip"
-                >
+                <span className={cn('group h-6 pl-2', filterChipClass(term))} data-testid="filter-chip">
                   <button
                     type="button"
                     className="mono max-w-[40ch] truncate text-left"

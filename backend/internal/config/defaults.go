@@ -54,7 +54,9 @@ func Default() Config {
 				QueryTimeout: Duration(2 * time.Minute),
 			},
 		},
-		Shutdown: ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},
+		// Enabled is false and URL is empty on purpose: see AssistantConfig.
+		Assistant: AssistantConfig{Timeout: Duration(90 * time.Second)},
+		Shutdown:  ShutdownConfig{DrainDelay: Duration(5 * time.Second), Timeout: Duration(30 * time.Second)},
 	}
 }
 

@@ -111,6 +111,11 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/analytics/directory", permitted, auth.PermLogsSearch, s.handleDirectory)
 	add("POST /api/v1/analytics/mssql", permitted, auth.PermLogsSearch, s.handleMSSQL)
 	add("POST /api/v1/analytics/iis", permitted, auth.PermLogsSearch, s.handleIIS)
+	add("GET /api/v1/assistant/status", permitted, auth.PermSystemView, s.handleAssistantStatus)
+	// Proposing a query runs nothing, but it reads the field catalogue and
+	// spends model time, so it needs the same permission as searching.
+	add("POST /api/v1/assistant/query", permitted, auth.PermLogsSearch, s.handleAssistantQuery)
+	add("POST /api/v1/assistant/explain", permitted, auth.PermLogsSearch, s.handleAssistantExplain)
 	add("GET /api/v1/templates", permitted, auth.PermSourcesRead, s.handleTemplates)
 	add("GET /api/v1/templates/{id}/config", permitted, auth.PermSourcesRead, s.handleTemplateConfig)
 	add("GET /api/v1/sources/extract-presets", permitted, auth.PermSourcesRead, s.handleExtractPresets)

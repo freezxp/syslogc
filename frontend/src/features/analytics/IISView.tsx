@@ -23,6 +23,8 @@ import { EmptyState, ErrorPanel, NotRecorded, Panel, Skeleton, StatTile } from '
 import { Button, buttonVariants } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/overlay'
+import { explainSubject } from '@/features/assistant/assistant'
+import { ExplainFigures } from '@/features/assistant/ExplainFigures'
 import { cn } from '@/lib/cn'
 import { formatExact, formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
@@ -167,6 +169,15 @@ export function IISView() {
                 <StatTile key={tile.name} tile={tile} loading={iis.isLoading} />
               ))}
             </ul>
+
+            {/* Under the figures rather than over them: the model describes
+                what is on the screen, so what is on the screen stays there. */}
+            {!empty && (
+              <ExplainFigures
+                subject={explainSubject('IIS', search, (d) => formatTimestamp(d, tz, 'MMM d, HH:mm'), query.url)}
+                figures={data}
+              />
+            )}
 
             {empty ? (
               <Panel title="Nothing recorded in this window">

@@ -10,7 +10,14 @@
  * than being added to them. Each is said in the tile itself: a caveat in a
  * footnote is a caveat nobody reads.
  */
-import type { AnalysisCount, FilterExpr, MSSQLOverview, MSSQLProblem, MSSQLProblemKind } from '@/api/types'
+import type {
+  AnalysisCount,
+  FilterExpr,
+  MSSQLOverview,
+  MSSQLProblem,
+  MSSQLProblemKind,
+  MSSQLResponse,
+} from '@/api/types'
 import { CHART_COLORS } from '@/lib/chart-colors'
 import { quote } from '@/lib/filter-text'
 import { formatExact } from '@/lib/format'
@@ -337,4 +344,28 @@ export function topMessagesCaveat(): string {
     'page into the sentence, so two errors about one broken file count as two different messages while a hundred ' +
     'identical ones count as one. “What went wrong most” is the honest ranking.'
   )
+}
+
+/**
+ * The figures to hand the assistant.
+ *
+ * A number the server could not have must not reach the model as a zero. Given
+ * the raw response, qwen3.5:9b read `sign_ins: 0` and reported "zero
+ * successful sign-ins during this window, which is notable" — while the tile
+ * beside it correctly said "Not recorded", because SQL Server does not log
+ * successes until its audit level is changed. The page already knows the
+ * difference; this is how the model gets told.
+ *
+ * Returns the same object when there is nothing to mark, so the identity the
+ * explain panel keys on does not change on every render.
+ */
+export function mssqlFigures(data: MSSQLResponse): object {
+  if (data.overview?.sign_ins) return data
+  return {
+    ...data,
+    overview: {
+      ...data.overview,
+      sign_ins: 'not recorded: successful sign-ins are not being collected on this instance. This does not mean zero.',
+    },
+  }
 }

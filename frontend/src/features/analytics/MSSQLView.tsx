@@ -19,6 +19,8 @@ import { EmptyState, ErrorPanel, NotRecorded, Panel, Skeleton, StatTile } from '
 import { Button, buttonVariants } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/overlay'
+import { explainSubject } from '@/features/assistant/assistant'
+import { ExplainFigures } from '@/features/assistant/ExplainFigures'
 import { cn } from '@/lib/cn'
 import { formatExact, formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
@@ -35,6 +37,7 @@ import {
   failedSignInSentence,
   mssqlEmptyHint,
   mssqlExplorerSearch,
+  mssqlFigures,
   mssqlFilter,
   mssqlIsEmpty,
   mssqlLineColor,
@@ -87,6 +90,9 @@ export function MSSQLView() {
   const sources = data?.failure_sources ?? []
   const problems = data?.problems ?? []
   const headline = failedSignInSentence(accounts, sources, data?.overview.sign_in_failures ?? 0)
+  // Memoised: the explain panel ties a description to the figures it was
+  // written from by identity, so a new object each render would discard it.
+  const figures = useMemo(() => (data ? mssqlFigures(data) : undefined), [data])
   const empty = !!data && mssqlIsEmpty(data.overview)
   const part = analysisPartName('mssql', templates.data)
 
@@ -138,6 +144,20 @@ export function MSSQLView() {
                 <StatTile key={tile.name} tile={tile} loading={mssql.isLoading} />
               ))}
             </ul>
+
+            {/* Under the figures rather than over them: the model describes
+                what is on the screen, so what is on the screen stays there. */}
+            {!empty && (
+              <ExplainFigures
+                subject={explainSubject(
+                  'Microsoft SQL Server',
+                  search,
+                  (d) => formatTimestamp(d, tz, 'MMM d, HH:mm'),
+                  query.instance,
+                )}
+                figures={figures}
+              />
+            )}
 
             {empty ? (
               <Panel title="Nothing recorded in this window">
