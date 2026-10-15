@@ -145,7 +145,7 @@ func (c *Client) Ask(ctx context.Context, system, prompt string, schema any) (Re
 	if err != nil {
 		return Result{}, fmt.Errorf("the model at %s did not answer: %w", c.url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
@@ -200,7 +200,7 @@ func (c *Client) Models(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the model endpoint at %s did not answer: %w", c.url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 		return nil, modelError(resp.StatusCode, body, c.model, c.url)

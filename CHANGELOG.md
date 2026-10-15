@@ -40,6 +40,14 @@ is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
   which it measured against, because 40% of a container and 40% of a host look
   identical and mean different things.
 
+### Fixed
+
+- Go 1.27.2, which closes a batch of standard-library vulnerabilities
+  published since the last release — among them an HTTP/2 memory exhaustion
+  reachable through trailer headers. Nothing in Syslogc changed to cause it:
+  the vulnerability database is read live, so CI began failing on code that
+  had not been touched. `govulncheck` reports nothing on the new toolchain.
+
 ### Changed
 
 - The Windows template's event-id fields now describe what the common ids

@@ -1,6 +1,6 @@
 module github.com/freezxp/syslogc/backend
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
