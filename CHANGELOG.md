@@ -8,6 +8,44 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.3.0 — 2026-10-15
+
+### Added
+
+- **An assistant**, backed by a model you run yourself. Ask a question in
+  English and it proposes a filter, which you see before anything runs; or
+  press Explain on an analysis page and it describes the figures already on
+  screen. It is off by default and has no default endpoint, because log
+  content reaches whatever you point it at — which is the reason to run one
+  locally. See [docs/assistant.md](docs/assistant.md).
+
+  The rule it is built on: **the model is never the source of a number.** It
+  writes a query Syslogc runs, or describes figures Syslogc measured. Every
+  filter it proposes is checked against the fields this deployment actually
+  carries, so a question about something nobody collects is refused rather
+  than answered with a filter that matches nothing — which would read exactly
+  like "there were none". It can also decline, and does.
+
+  Nothing it returns is acted on. That is what protects you from the fact that
+  log content is written by whoever can reach a port: a log line reading
+  "ignore all previous instructions" is one somebody can cause to exist.
+
+- **Host utilisation** — CPU, memory and disk — on the System page, in
+  `GET /system/health`, and as Prometheus metrics, with alert rules for a
+  nearly full disk and sustained memory pressure.
+
+  Inside a container `/proc` reports the machine rather than the container, so
+  a server capped at 512 MiB would report 3% memory used while being killed.
+  Readings come from cgroup limits where they exist and every figure says
+  which it measured against, because 40% of a container and 40% of a host look
+  identical and mean different things.
+
+### Changed
+
+- The Windows template's event-id fields now describe what the common ids
+  mean rather than only that they are ids. The assistant reads these, and
+  without them it guessed that a failed sign-in was an HTTP 401.
+
 ## 1.2.1 — 2026-10-07
 
 ### Fixed
