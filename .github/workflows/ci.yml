@@ -22,7 +22,7 @@ jobs:
           go-version-file: backend/go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.13.2
+          version: v2.14.0
           working-directory: backend
 
   test:

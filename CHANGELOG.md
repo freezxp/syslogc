@@ -47,6 +47,13 @@ is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
   reachable through trailer headers. Nothing in Syslogc changed to cause it:
   the vulnerability database is read live, so CI began failing on code that
   had not been touched. `govulncheck` reports nothing on the new toolchain.
+- The linter moved with it (golangci-lint 2.14), which could read the new
+  toolchain's export data and brought rules the old pin did not have. Three
+  real findings in the new host readings are fixed: a block count multiplied
+  without checking it is a size, so a nonsense reading would have drawn a
+  negative disk bar rather than being refused. Two findings are documented as
+  what they are — the embedded web bundle is read-only and io/fs rejects a
+  traversal before it opens anything.
 
 ### Changed
 

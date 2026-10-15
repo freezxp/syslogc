@@ -529,7 +529,12 @@ func (s *Server) handleWebUI(w http.ResponseWriter, r *http.Request, _ *auth.Pri
 			} else {
 				w.Header().Set("Cache-Control", "no-cache")
 			}
-			http.ServeFileFS(w, r, ui, name)
+			// The name reaches an embedded, read-only filesystem, and io/fs
+			// rejects any path containing a parent reference before it is
+			// opened — the Open above has already succeeded on this exact
+			// name, so a traversal attempt never arrives here: it fails to
+			// open and falls through to the single-page fallback below.
+			http.ServeFileFS(w, r, ui, name) //nolint:gosec // see above
 			return nil
 		}
 	}

@@ -1,6 +1,10 @@
 package hostinfo
 
-import "syscall"
+import (
+	"fmt"
+	"math"
+	"syscall"
+)
 
 // diskUsage reads one filesystem's usage with statfs.
 //
@@ -14,18 +18,37 @@ func diskUsage(path string) (Disk, error) {
 	}
 	// f_frsize is the fragment size, the unit the block counts are in.
 	// f_bsize is the preferred I/O size and is not always the same thing.
-	unit := int64(st.Frsize)
+	unit := st.Frsize
 	if unit <= 0 {
-		unit = int64(st.Bsize)
+		unit = st.Bsize
 	}
-	total := int64(st.Blocks) * unit
-	// Bfree is free to root; Bavail is free to everybody else. Used is
-	// total-Bfree so it counts the root reserve as occupied, matching df.
-	used := (int64(st.Blocks) - int64(st.Bfree)) * unit
+	total, ok := blockBytes(st.Blocks, unit)
+	if !ok {
+		return Disk{}, fmt.Errorf("%s reports %d blocks of %d bytes, which is not a size", path, st.Blocks, unit)
+	}
+	freeToRoot, _ := blockBytes(st.Bfree, unit)
+	avail, _ := blockBytes(st.Bavail, unit)
 	return Disk{
 		Path:       path,
 		TotalBytes: total,
-		UsedBytes:  used,
-		AvailBytes: int64(st.Bavail) * unit,
+		// Bfree is free to root; Bavail is free to everybody else. Used is
+		// total minus Bfree, so it counts the root reserve as occupied, which
+		// is what df does.
+		UsedBytes:  total - freeToRoot,
+		AvailBytes: avail,
 	}, nil
+}
+
+// blockBytes multiplies a block count by the block size, reporting whether the
+// result is a size at all.
+//
+// The counts are unsigned and the sizes are reported signed. Nothing is within
+// several orders of magnitude of overflowing, but an unchecked multiplication
+// would turn a nonsense reading into a negative disk size, which is worse than
+// refusing to report one: a negative number still draws a bar.
+func blockBytes(blocks uint64, unit int64) (int64, bool) {
+	if unit <= 0 || blocks > uint64(math.MaxInt64)/uint64(unit) {
+		return 0, false
+	}
+	return int64(blocks) * unit, true //nolint:gosec // bounded on the line above
 }

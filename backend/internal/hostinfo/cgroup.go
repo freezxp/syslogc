@@ -64,7 +64,9 @@ func (r *Reader) selfCgroup(controller string) string {
 // directory that has it.
 func (r *Reader) readCgroupFile(controller, name string) (string, bool) {
 	for _, dir := range r.cgroupDirs(controller) {
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		// The directory comes from this reader's own root and the name is a
+		// fixed cgroup file name; neither is ever built from a request.
+		b, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // see above
 		if err != nil {
 			continue
 		}
