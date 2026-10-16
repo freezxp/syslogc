@@ -304,10 +304,10 @@ func newEnv(t *testing.T) *env {
 		"assets/app-1.js": {Data: []byte("console.log(1)")},
 	}
 	deps := &APIDeps{Auth: authSvc, Store: store, Query: qs, Storage: fakeBackend{}, WebUI: ui,
-		Retention:     func() any { return map[string]string{"status": "in_sync"} },
-		FileSources:   []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
-		Config:        config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}},
-		ServiceTrends: trends}
+		Retention:    func() any { return map[string]string{"status": "in_sync"} },
+		FileSources:  []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
+		Config:       config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}},
+		MetricsStore: trends}
 	server := New(Options{
 		Metrics: m, Log: log, NodeID: "n1", Version: "test", Roles: []string{"all"},
 		Checks: []ReadinessCheck{{Name: "storage", Check: func(context.Context) error { return nil }}},
@@ -1598,7 +1598,7 @@ func TestServiceTrendsWithoutAMetricsStore(t *testing.T) {
 	e := newEnv(t)
 	// A node with no metrics store reports that plainly, so the UI can
 	// explain it instead of showing an empty chart.
-	e.deps.ServiceTrends = nil
+	e.deps.MetricsStore = nil
 	viewer := e.login("viewer")
 	resp, body := viewer.do("POST", "/api/v1/analytics/service-trends", map[string]any{
 		"time_range": map[string]string{"from": "now-24h", "to": "now"}, "window": "1h"}, nil)

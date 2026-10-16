@@ -40,7 +40,7 @@ func (s *Server) handleServiceCatalog(w http.ResponseWriter, r *http.Request, _ 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"services":  catalog.Services,
 		"windows":   trendWindowNames(),
-		"recording": s.opts.API.ServiceTrends != nil,
+		"recording": s.opts.API.MetricsStore != nil,
 		"problem":   problem,
 	})
 	return nil
@@ -91,7 +91,7 @@ type serviceTrendRequest struct {
 
 // handleServiceTrends reads recorded trend series out of the metrics store.
 func (s *Server) handleServiceTrends(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
-	reader := s.opts.API.ServiceTrends
+	reader := s.opts.API.MetricsStore
 	if reader == nil {
 		return errStatus(http.StatusNotFound, "not_configured",
 			"service trends require a metrics store; set analytics.metrics.url")

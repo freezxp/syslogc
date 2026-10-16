@@ -43,8 +43,10 @@ type ReadinessCheck struct {
 }
 
 // APIDeps are the dependencies of the REST API (api role).
-// ServiceTrendReader reads recorded series out of the metrics store.
-type ServiceTrendReader interface {
+// MetricsReader reads series out of the metrics store. It serves both the
+// trend rollups Syslogc writes and the metrics VictoriaMetrics scrapes from
+// this node, which is where host utilisation gets its history.
+type MetricsReader interface {
 	QueryRange(ctx context.Context, q metricstore.RangeQuery) ([]metricstore.Series, error)
 }
 
@@ -53,9 +55,9 @@ type APIDeps struct {
 	Store   metadata.Store
 	Query   *query.Service
 	Storage storage.Backend
-	// ServiceTrends reads recorded trend series; nil when no metrics store
+	// MetricsStore reads recorded series; nil when no metrics store
 	// is configured, which makes the trend endpoints report that.
-	ServiceTrends ServiceTrendReader
+	MetricsStore MetricsReader
 	// Retention returns the current retention status (for /system/storage).
 	Retention func() any
 	// Assistant answers questions about logs with a local model; nil when

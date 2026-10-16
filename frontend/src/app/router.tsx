@@ -123,6 +123,10 @@ const systemRoute = createRoute({
   path: '/system',
   validateSearch: z.object({
     tab: z._default(z.catch(z.enum(['health', 'ingestion', 'storage']), 'health'), 'health'),
+    // The history window, so a reload or a shared link opens on the same one.
+    // Left a plain string: the windows on offer come from the server, and
+    // `features/system/host-history.ts` is what decides whether one is usable.
+    hrange: z.optional(z.catch(z.optional(z.string()), undefined)),
   }),
   component: lazyRouteComponent(() => import('@/features/system/SystemPage'), 'SystemPage'),
 })

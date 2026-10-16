@@ -301,16 +301,16 @@ func (a *App) wireAPI(ctx context.Context) (*api.APIDeps, error) {
 	})
 	deps := &api.APIDeps{
 		Auth: authSvc, Store: a.store, Query: querySvc, Storage: a.backend,
-		ServiceTrends: a.serviceTrendReader(),
-		TrendWindows:  a.trendWindows,
-		Certificates:  a.certificateStatuses,
-		Host:          a.host.Snapshot,
-		Retention:     func() any { return a.retention.Load() },
-		FileSources:   cfg.Ingestion.Sources,
-		Config:        *cfg,
-		CookieSecure:  cfg.Auth.CookieSecure,
-		AuditAll:      cfg.Query.AuditAll,
-		WebUI:         webui.FS(),
+		MetricsStore: a.serviceTrendReader(),
+		TrendWindows: a.trendWindows,
+		Certificates: a.certificateStatuses,
+		Host:         a.host.Snapshot,
+		Retention:    func() any { return a.retention.Load() },
+		FileSources:  cfg.Ingestion.Sources,
+		Config:       *cfg,
+		CookieSecure: cfg.Auth.CookieSecure,
+		AuditAll:     cfg.Query.AuditAll,
+		WebUI:        webui.FS(),
 	}
 	if a.assistant != nil {
 		deps.Assistant = assistant.New(a.assistant)
@@ -1000,7 +1000,7 @@ func (a *App) recordServiceTrends(ctx context.Context) {
 // serviceTrendReader exposes the metrics store to the API, or nil when none
 // is configured. A typed nil in the interface would look configured, so the
 // nil is returned explicitly.
-func (a *App) serviceTrendReader() api.ServiceTrendReader {
+func (a *App) serviceTrendReader() api.MetricsReader {
 	if a.metricStore == nil {
 		return nil
 	}

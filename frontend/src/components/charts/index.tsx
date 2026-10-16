@@ -6,9 +6,12 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -25,6 +28,17 @@ const AXIS = { stroke: 'var(--fg-subtle)', fontSize: 11 }
 function tickFormatterFor(stepSeconds: number, tz: string) {
   return (t: number) =>
     formatTimestamp(new Date(t), tz, stepSeconds >= 86400 ? 'MMM d' : stepSeconds >= 3600 ? 'MMM d HH:mm' : 'HH:mm')
+}
+
+/**
+ * Ticks chosen from the window rather than the bucket. The same half-hour
+ * bucket can be a day of chart or a month of it, and only the span says
+ * whether the date has to be on the label: "04:30" on a seven-day axis names
+ * seven different moments.
+ */
+function windowTickFormatter(spanSeconds: number, tz: string) {
+  const pattern = spanSeconds > 10 * 86400 ? 'MMM d' : spanSeconds > 2 * 86400 ? 'MMM d HH:mm' : 'HH:mm'
+  return (t: number) => formatTimestamp(new Date(t), tz, pattern)
 }
 
 function ChartTooltip({
@@ -296,6 +310,145 @@ export function GroupedSeriesChart({
           />
         ))}
       </AreaChart>
+    </ResponsiveContainer>
+  )
+}
+
+/** One bucket of a `GapLineChart`: `v` is null where nothing was sampled. */
+export interface GapPoint {
+  t: number
+  v: number | null
+}
+
+function GapTooltip({
+  active,
+  payload,
+  label,
+  tz,
+  name,
+  formatValue,
+  note,
+}: {
+  active?: boolean
+  payload?: { value?: number | null; color?: string }[]
+  label?: number
+  tz: string
+  name: string
+  formatValue: (v: number) => string
+  note?: string
+}) {
+  const point = payload?.[0]
+  if (!active || !point || point.value === null || point.value === undefined) return null
+  return (
+    <div className="rounded border border-border-strong bg-surface-3 px-2 py-1.5 text-sm shadow-lg">
+      <div className="mb-1 text-muted">
+        {label !== undefined ? formatTimestamp(new Date(label), tz, 'yyyy-MM-dd HH:mm') : ''}
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block size-2 rounded-sm" style={{ background: point.color }} />
+          {name}
+        </span>
+        <span className="mono">{formatValue(point.value)}</span>
+      </div>
+      {note && <div className="mt-1 text-xs text-subtle">{note}</div>}
+    </div>
+  )
+}
+
+/**
+ * A single measure over a fixed bucket grid, with a gap wherever there was no
+ * sample.
+ *
+ * `connectNulls` is off and the missing buckets arrive as null rather than
+ * zero, so an interval nothing was recorded for is a break in the line. Drawing
+ * it as zero would invent an idle period and an apparent recovery that never
+ * happened, which is worse than showing nothing.
+ *
+ * One series per chart by design: two measures of different scale belong in two
+ * charts, not on two y-axes. `max` fixes the axis to the measure's own ceiling
+ * (a memory limit, a filesystem total), so the height of the line is headroom
+ * rather than an arbitrary auto-scale that changes shape as the data does.
+ */
+export function GapLineChart({
+  rows,
+  name,
+  color,
+  stepSeconds,
+  tz,
+  max,
+  formatValue,
+  threshold,
+  note,
+  height = 150,
+}: {
+  rows: GapPoint[]
+  name: string
+  color: string
+  stepSeconds: number
+  tz: string
+  /** Axis maximum; null fits the data instead. */
+  max: number | null
+  formatValue: (v: number) => string
+  /** The level at which this measure stops being healthy, drawn as a dashed rule. */
+  threshold: number | null
+  /** One line under the value in the tooltip, e.g. what the point actually measures. */
+  note?: string
+  height?: number
+}) {
+  const span = rows.length > 1 ? (rows[rows.length - 1]!.t - rows[0]!.t) / 1000 : stepSeconds
+  // Quarters of the ceiling rather than whatever rounds nicely in bytes: a real
+  // memory limit or filesystem size is never a round number, and letting the
+  // axis pick its own steps leaves the topmost two labels on top of each other.
+  // Quarters also say the thing the chart is for — how full it is.
+  const ticks = max ? [0, max / 4, max / 2, (3 * max) / 4, max] : undefined
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={rows} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+        <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
+        <XAxis
+          dataKey="t"
+          type="number"
+          domain={['dataMin', 'dataMax']}
+          tickFormatter={windowTickFormatter(span, tz)}
+          tick={AXIS}
+          tickLine={false}
+          axisLine={false}
+          minTickGap={56}
+        />
+        <YAxis
+          domain={[0, max ?? 'dataMax']}
+          ticks={ticks}
+          tickFormatter={formatValue}
+          tick={AXIS}
+          tickLine={false}
+          axisLine={false}
+          width={58}
+        />
+        <Tooltip
+          content={<GapTooltip tz={tz} name={name} formatValue={formatValue} note={note} />}
+          isAnimationActive={false}
+          cursor={{ stroke: 'var(--border-strong)' }}
+        />
+        {/* Unlabelled on purpose: the only empty band on a chart like this is
+            the one above the threshold, and in the case worth looking at the
+            line is up there too. The caller names it in the heading instead,
+            beside a dashed swatch in the same colour. */}
+        {threshold !== null && (
+          <ReferenceLine y={threshold} stroke="var(--warning)" strokeDasharray="4 3" ifOverflow="extendDomain" />
+        )}
+        <Line
+          type="monotone"
+          dataKey="v"
+          name={name}
+          stroke={color}
+          strokeWidth={2}
+          dot={false}
+          activeDot={{ r: 3, strokeWidth: 0 }}
+          isAnimationActive={false}
+          connectNulls={false}
+        />
+      </LineChart>
     </ResponsiveContainer>
   )
 }

@@ -506,6 +506,43 @@ is the space a non-root process may still write, which is smaller than total
 minus used by the reserve the filesystem keeps for root; it is the figure that
 decides whether a write succeeds, and the one the alert rules divide by.
 
+### Keeping a history of it
+
+`/metrics` only ever says "now". VictoriaMetrics — the instance already there
+for the service-trend rollups — scrapes it every 15 seconds, so the same
+figures become a history. The configuration is `deploy/compose/scrape.yml`;
+nothing else runs, because VictoriaMetrics does its own scraping.
+
+The System page charts host utilisation over 1 hour to 30 days from it, and
+`GET /api/v1/system/host/history?range=7d` returns the same series. Retention
+is whatever the instance was started with — `SYSLOGC_METRICS_RETENTION`, 24
+months by default — so seven days is comfortably inside it.
+
+Three things worth knowing about those charts:
+
+- **The value in each bucket is the peak, not the average.** At the 30-day
+  window's two-hour step an average would smooth a CPU spike into nothing, and
+  the question being asked is whether it ever got close to the limit. A chart
+  reading 99% for a two-hour bucket means it touched 99% at some point in
+  those two hours, not that it sat there.
+- **A gap is a gap, not a zero.** When no sample was recorded — the node was
+  stopped, or a scrape failed — the line breaks rather than dropping to the
+  floor. A zero would invent an idle period, and worse, a recovery from it.
+- **A long window takes time to appear.** Points land on step boundaries, so a
+  freshly deployed node shows nothing on the 7-day chart until the first
+  30-minute boundary passes. The 1-hour view fills in straight away.
+
+The scrape covers every metric this node publishes, not only the host ones, so
+ingestion rates, queue depth, each drop counter and the rollup's freshness all
+become answerable after the fact too. That is about a thousand series here;
+`curl` the store's `/api/v1/status/tsdb` to see what a given deployment has.
+
+Syslogc's metrics carry no identity of their own — in Prometheus the scraper
+adds `job` and `instance`, which is where that belongs. A second node
+therefore needs its own entry in the scrape file, and the host-history
+endpoint refuses to answer rather than charting two nodes as though they were
+one.
+
 ## Backup and restore
 
 `deploy/backup/backup.sh` writes a timestamped directory containing the

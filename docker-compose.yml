@@ -130,8 +130,12 @@ services:
       - -storageDataPath=/vmdata
       - -httpListenAddr=:8428
       - -retentionPeriod=${SYSLOGC_METRICS_RETENTION:-24}
+      # Records Syslogc's own /metrics, so host utilisation and the ingestion
+      # counters have a history rather than only a current value.
+      - -promscrape.config=/etc/victoriametrics/scrape.yml
     volumes:
       - vmetrics-data:/vmdata
+      - ./deploy/compose/scrape.yml:/etc/victoriametrics/scrape.yml:ro
     # Internal only. For debugging, publish on localhost:
     # ports: ["127.0.0.1:8428:8428"]
 

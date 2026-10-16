@@ -8,6 +8,7 @@ import type {
   DirectoryActivity,
   DirectoryOverview,
   FilterExpr,
+  HostHistoryResponse,
   IISOverview,
   IISRequestRow,
   ManagedForwardTarget,
@@ -190,6 +191,21 @@ import {
   memoryStatus,
   usedFraction,
 } from '@/features/system/host'
+import {
+  DEFAULT_HOST_RANGE,
+  bucketNote,
+  decodeHostRange,
+  encodeHostRange,
+  historySeconds,
+  hostHistoryCharts,
+  hostHistoryCoverage,
+  hostHistoryEmptyHint,
+  hostHistoryNotes,
+  hostHistoryNotice,
+  peakLabel,
+  rangeWords,
+  thresholdRuleLabel,
+} from '@/features/system/host-history'
 import { validateCustomRange } from '@/features/time-range/time-input'
 import { ApiError } from '@/api/client'
 import {
@@ -478,6 +494,213 @@ describe('host utilisation', () => {
     expect(coresLabel(1)).toBe('1 core')
     expect(coresLabel(1.5)).toBe('1.5 cores')
     expect(coresLabel(0)).toBe('cores unknown')
+  })
+})
+
+describe('host utilisation history', () => {
+  const STEP = 300
+  const T0 = Date.UTC(2026, 0, 2, 0, 0, 0)
+
+  /** A response over `n` buckets; `points` per line are given index-for-index. */
+  function response(n: number, lines: HostHistoryResponse['lines']): HostHistoryResponse {
+    return {
+      range: '24h',
+      windows: ['1h', '6h', '24h', '7d', '30d'],
+      step_seconds: STEP,
+      node: 'node-a',
+      timestamps: Array.from({ length: n }, (_, i) => new Date(T0 + i * STEP * 1000).toISOString()),
+      lines,
+    }
+  }
+
+  const GiB = 1024 ** 3
+
+  function full(): HostHistoryResponse {
+    return response(4, [
+      { name: 'cpu', label: 'CPU', unit: 'ratio', points: [null, 0.2, 0.8, 0.35] },
+      { name: 'memory', label: 'Memory', unit: 'bytes', points: [null, GiB, 1.5 * GiB, 1.2 * GiB] },
+      { name: 'memory_limit', label: 'Memory limit', unit: 'bytes', points: [null, 2 * GiB, 2 * GiB, 2 * GiB] },
+      { name: 'disk:/', label: 'Disk /', unit: 'bytes', points: [null, 40 * GiB, 41 * GiB, 42 * GiB] },
+      { name: 'disk_total:/', label: 'Disk / total', unit: 'bytes', points: [null, 64 * GiB, 64 * GiB, 64 * GiB] },
+    ])
+  }
+
+  it('keeps a missing sample as null rather than turning it into a zero', () => {
+    // The whole point: a zero would draw a cliff to the baseline and an
+    // apparent recovery, inventing an idle period that never happened.
+    const [cpu] = hostHistoryCharts(full())
+    expect(cpu!.rows.map((r) => r.v)).toEqual([null, 0.2, 0.8, 0.35])
+    expect(cpu!.rows[0]!.v).not.toBe(0)
+  })
+
+  it('charts only the measured lines, pairing each with the ceiling line beside it', () => {
+    const charts = hostHistoryCharts(full())
+    // memory_limit and disk_total:/ are ceilings, not charts of their own.
+    expect(charts.map((c) => c.key)).toEqual(['cpu', 'memory', 'disk:/'])
+    expect(charts[0]!.ceiling).toBe(1)
+    expect(charts[1]!.ceiling).toBe(2 * GiB)
+    expect(charts[2]!.ceiling).toBe(64 * GiB)
+  })
+
+  it('takes the ceiling in force from the last bucket that reported one', () => {
+    // A container resized mid-window: the figure to measure against now is the
+    // one it has now, not the one it started with.
+    const res = response(3, [
+      { name: 'memory', label: 'Memory', unit: 'bytes', points: [GiB, GiB, GiB] },
+      { name: 'memory_limit', label: 'Memory limit', unit: 'bytes', points: [2 * GiB, 4 * GiB, null] },
+    ])
+    expect(hostHistoryCharts(res)[0]!.ceiling).toBe(4 * GiB)
+  })
+
+  it('leaves the axis to fit the data when no ceiling was reported', () => {
+    const res = response(2, [{ name: 'memory', label: 'Memory', unit: 'bytes', points: [GiB, GiB] }])
+    const chart = hostHistoryCharts(res)[0]!
+    expect(chart.ceiling).toBeNull()
+    expect(chart.threshold).toBeNull()
+  })
+
+  it('draws its threshold at the level the live meters and the alert rules use', () => {
+    const charts = hostHistoryCharts(full())
+    expect(charts[0]!.thresholdFraction).toBe(hostThresholds.cpuFail)
+    expect(charts[1]!.thresholdFraction).toBe(hostThresholds.memoryWarn)
+    expect(charts[2]!.thresholdFraction).toBe(hostThresholds.diskWarn)
+    expect(charts[1]!.threshold).toBe(hostThresholds.memoryWarn * 2 * GiB)
+    expect(thresholdRuleLabel(charts[2]!)).toBe('alerts above 85%')
+  })
+
+  it('reports the peak against the ceiling it was measured against', () => {
+    const charts = hostHistoryCharts(full())
+    expect(charts[0]!.peak).toBe(0.8)
+    expect(peakLabel(charts[0]!)).toBe('peak 80% of the limit')
+    // A byte count alone says nothing about whether it is a lot.
+    expect(peakLabel(charts[1]!)).toBe('peak 1.5 GiB of 2.0 GiB (75%)')
+    expect(peakLabel({ unit: 'bytes', peak: null, ceiling: 2 * GiB })).toBe('nothing sampled in this window')
+  })
+
+  it('gives each measure a colour of its own, and never the threshold amber', () => {
+    const charts = hostHistoryCharts(full())
+    expect(new Set(charts.map((c) => c.color)).size).toBe(3)
+    // #f5a524 is --warning, which the dashed threshold rule is drawn in: a
+    // line the same colour as the rule it crosses cannot be read.
+    expect(charts.map((c) => c.color)).not.toContain('#f5a524')
+  })
+
+  it('returns nothing to chart for a response that has not arrived', () => {
+    expect(hostHistoryCharts(undefined)).toEqual([])
+    expect(hostHistoryCoverage(undefined).samples).toBe(0)
+  })
+
+  it('separates history that does not exist yet from history that is missing', () => {
+    // Leading nulls are buckets from before scraping started; a null after the
+    // first sample is a node that stopped or a scrape that failed.
+    const res = response(6, [{ name: 'cpu', label: 'CPU', unit: 'ratio', points: [null, null, 0.1, null, 0.2, 0.3] }])
+    const c = hostHistoryCoverage(res)
+    expect(c.buckets).toBe(6)
+    expect(c.samples).toBe(3)
+    expect(c.startsBeforeHistory).toBe(true)
+    expect(c.gaps).toBe(1)
+    expect(c.firstAt).toBe(T0 + 2 * STEP * 1000)
+    expect(c.lastAt).toBe(T0 + 5 * STEP * 1000)
+  })
+
+  it('counts a window covered end to end as having nothing to explain', () => {
+    const res = response(3, [{ name: 'cpu', label: 'CPU', unit: 'ratio', points: [0.1, 0.2, 0.3] }])
+    const c = hostHistoryCoverage(res)
+    expect(c.startsBeforeHistory).toBe(false)
+    expect(c.gaps).toBe(0)
+    expect(hostHistoryNotes(c, STEP)).toEqual([])
+  })
+
+  it('measures history inclusively, so a single sample is one bucket long', () => {
+    const res = response(4, [{ name: 'cpu', label: 'CPU', unit: 'ratio', points: [null, null, null, 0.4] }])
+    expect(historySeconds(hostHistoryCoverage(res), STEP)).toBe(STEP)
+    expect(historySeconds(hostHistoryCoverage(response(2, [])), STEP)).toBe(0)
+  })
+
+  it('says how much history there is when the window reaches back past it', () => {
+    const res = response(6, [{ name: 'cpu', label: 'CPU', unit: 'ratio', points: [null, null, 0.1, null, 0.2, 0.3] }])
+    const notes = hostHistoryNotes(hostHistoryCoverage(res), STEP)
+    // A near-empty chart has to say why, or it reads as broken.
+    expect(notes[0]).toContain('VictoriaMetrics has 20m 0s of history')
+    expect(notes[1]).toContain('1 of 6 buckets carry no sample')
+    expect(notes[1]).toContain('rather than dropping to zero')
+  })
+
+  it('says nothing about coverage when there is nothing at all', () => {
+    // An empty window gets the empty state's own explanation instead.
+    const res = response(3, [{ name: 'cpu', label: 'CPU', unit: 'ratio', points: [null, null, null] }])
+    expect(hostHistoryNotes(hostHistoryCoverage(res), STEP)).toEqual([])
+    expect(hostHistoryEmptyHint('7d')).toContain('last 7 days')
+    expect(hostHistoryEmptyHint('1h')).toContain('last 1 hour')
+  })
+
+  it('spells a window out in words', () => {
+    expect(rangeWords('1h')).toBe('1 hour')
+    expect(rangeWords('6h')).toBe('6 hours')
+    expect(rangeWords('30d')).toBe('30 days')
+    expect(rangeWords('whenever')).toBe('whenever')
+  })
+
+  it('says a point is a peak, and warns when the bucket is wide enough to hide duration', () => {
+    expect(bucketNote(60, '1m')).toBe('The highest value in this 1m bucket, not an average.')
+    expect(bucketNote(7200, '2h')).toContain('hides how long it stayed there')
+  })
+
+  it('keeps a hand-edited range out of the request', () => {
+    expect(decodeHostRange('7d')).toBe('7d')
+    expect(decodeHostRange(' 6h ')).toBe('6h')
+    // Anything the server would reject falls back rather than causing a 422.
+    expect(decodeHostRange('99y')).toBe(DEFAULT_HOST_RANGE)
+    expect(decodeHostRange(undefined)).toBe(DEFAULT_HOST_RANGE)
+  })
+
+  it('leaves the default out of the URL', () => {
+    expect(encodeHostRange(DEFAULT_HOST_RANGE)).toBeUndefined()
+    expect(encodeHostRange('7d')).toBe('7d')
+  })
+
+  it('explains the two answers that asking again will not change', () => {
+    const notConfigured = hostHistoryNotice(
+      new ApiError(404, {
+        type: 'about:blank',
+        title: 'No metrics store is configured',
+        status: 404,
+        code: 'not_configured',
+        detail: 'Set metrics.store.url, then restart.',
+      }),
+    )
+    expect(notConfigured?.detail).toBe('Set metrics.store.url, then restart.')
+    // The 409 detail names the nodes, which is what tells somebody what to do.
+    const ambiguous = hostHistoryNotice(
+      new ApiError(409, {
+        type: 'about:blank',
+        title: 'More than one node is reporting',
+        status: 409,
+        code: 'ambiguous_metrics',
+        detail: 'syslogc-01 and syslogc-02 both report here.',
+      }),
+    )
+    expect(ambiguous?.detail).toBe('syslogc-01 and syslogc-02 both report here.')
+    expect(ambiguous?.title).toContain('More than one node')
+  })
+
+  it('leaves a request that merely failed to the error panel', () => {
+    // 503 is worth a Retry button; "not configured" is not.
+    expect(
+      hostHistoryNotice(
+        new ApiError(503, { type: 'about:blank', title: 'Upstream unavailable', status: 503, code: 'unavailable' }),
+      ),
+    ).toBeNull()
+    expect(hostHistoryNotice(new Error('network'))).toBeNull()
+    expect(hostHistoryNotice(undefined)).toBeNull()
+  })
+
+  it('falls back to its own wording when the server sent no detail', () => {
+    const n = hostHistoryNotice(
+      new ApiError(404, { type: 'about:blank', title: 'Not found', status: 404, code: 'not_configured' }),
+    )
+    expect(n?.detail).toContain('VictoriaMetrics')
+    expect(n?.detail).toContain('live meters above keep working')
   })
 })
 

@@ -829,6 +829,53 @@ export interface DirectoryResponse {
   failure_sources: DirectoryCount[]
 }
 
+// ---- host utilisation history ----------------------------------------------
+//
+// The same CPU, memory and disk figures the health endpoint reports live, read
+// back out of the metrics store Syslogc's own /metrics is scraped into.
+
+/** The unit a history line is measured in; `ratio` is 0..1 of the CPU limit. */
+export type HostHistoryUnit = 'ratio' | 'bytes'
+
+/**
+ * One measured line over the bucket grid. `points` aligns index-for-index with
+ * the response's `timestamps`.
+ *
+ * A null point is a bucket with no sample — the node was stopped, or a scrape
+ * failed. It is not a zero, and must not be drawn as one: a zero would invent
+ * an idle period and a recovery that never happened.
+ *
+ * `name` is stable and machine-readable (`cpu`, `memory`, `memory_limit`,
+ * `disk:<path>`, `disk_total:<path>`); `label` is the server's wording for a
+ * reader.
+ */
+export interface HostHistoryLine {
+  name: string
+  label: string
+  unit: HostHistoryUnit
+  points: (number | null)[]
+}
+
+/**
+ * Host utilisation over a window.
+ *
+ * Each point is the **peak** in its bucket (`max_over_time`), not an average:
+ * the store is queried at a coarser step than it is scraped at, and a spike
+ * that lasted one scrape is the thing worth keeping.
+ *
+ * `windows` is what this server will accept for `range`, so a picker built
+ * from it can never ask for one the server refuses.
+ */
+export interface HostHistoryResponse {
+  range: string
+  windows: string[]
+  step_seconds: number
+  /** The node these figures belong to; the request fails if more than one reports. */
+  node: string
+  timestamps: string[]
+  lines: HostHistoryLine[]
+}
+
 // ---- the log assistant -----------------------------------------------------
 //
 // A local model that helps read logs. It is never the source of a number: it
@@ -1037,5 +1084,8 @@ export interface OperationsPaths {
   }
   '/api/v1/system/config': {
     get: Read<SystemConfig>
+  }
+  '/api/v1/system/host/history': {
+    get: Read<HostHistoryResponse, Query<{ range?: string }>>
   }
 }

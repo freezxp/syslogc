@@ -7,7 +7,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query'
 
-import { client, setCsrfToken, unwrap } from '../client'
+import { ApiError, client, setCsrfToken, unwrap } from '../client'
 import type {
   AdminUser,
   AnalyticsMetric,
@@ -31,6 +31,7 @@ import type {
   FilterExpr,
   ForwardTargetInput,
   HistogramResponse,
+  HostHistoryResponse,
   IISResponse,
   IngestionRateResponse,
   ManagedForwardTarget,
@@ -721,6 +722,32 @@ export function useUpdateRetention() {
       )
       qc.invalidateQueries({ queryKey: retentionKey })
     },
+  })
+}
+
+/**
+ * The same host figures as `useSystemHealth`, read back out of the metrics
+ * store over a window.
+ *
+ * It polls far more slowly than the live meters beside it: the grid advances
+ * one bucket at a time — a minute at the shortest range, two hours at the
+ * longest — so refetching every ten seconds would redraw an identical chart.
+ * Neither "no metrics store" (404) nor "more than one node reporting" (409)
+ * improves by asking again, so neither is retried; both are explained in place.
+ */
+export function useHostHistory(range: string) {
+  return useQuery({
+    queryKey: ['system', 'host-history', range],
+    queryFn: ({ signal }) =>
+      unwrap(
+        client.GET('/api/v1/system/host/history', { params: { query: { range } }, signal }),
+      ) as Promise<HostHistoryResponse>,
+    refetchInterval: 60_000,
+    // Changing the range keeps the old chart on screen instead of flashing a
+    // skeleton over a panel that is about to look almost the same.
+    placeholderData: keepPreviousData,
+    retry: (count, error) =>
+      !(error instanceof ApiError && (error.status === 404 || error.status === 409)) && count < 2,
   })
 }
 

@@ -22,6 +22,8 @@ import type {
   ForwardTargetInput,
   ForwardTargetStatus,
   HistogramRequest,
+  HostHistoryLine,
+  HostHistoryResponse,
   IISRequest,
   LogRow,
   IISRequestRow,
@@ -67,6 +69,7 @@ export function resetMockData(rows?: LogRow[]): void {
   loggedIn = true
   retentionDesired = null
   setMockAssistant('ready')
+  setMockHostHistory('ready')
   serviceCatalog = TREND_PROFILES.map((p) => ({ ...p.service }))
 }
 
@@ -2340,6 +2343,165 @@ function mockExplain(subject: string, figures: unknown): string {
   )
 }
 
+// ---- host utilisation history ----------------------------------------------
+
+/** What the host history endpoint answers with; see `setMockHostHistory`. */
+export type MockHostHistoryMode = 'ready' | 'unconfigured' | 'ambiguous'
+
+const MOCK_HOST_HISTORY_KEY = 'syslogc.mock.host-history'
+
+function storedHostHistoryMode(): MockHostHistoryMode {
+  try {
+    const v = sessionStorage.getItem(MOCK_HOST_HISTORY_KEY)
+    return v === 'unconfigured' || v === 'ambiguous' ? v : 'ready'
+  } catch {
+    return 'ready'
+  }
+}
+
+let hostHistoryMode: MockHostHistoryMode = typeof sessionStorage === 'undefined' ? 'ready' : storedHostHistoryMode()
+
+/**
+ * Switches the host history endpoint between the three answers the panel has
+ * to render: a window of samples, no metrics store at all (404
+ * `not_configured`), and a store several nodes report into (409
+ * `ambiguous_metrics`). Neither error can be reached from the interface — they
+ * are properties of the deployment — so the mock build exposes the switch.
+ *
+ * Kept in session storage like the assistant's switch, so it survives the
+ * reload it takes to see the effect.
+ */
+export function setMockHostHistory(mode: MockHostHistoryMode): void {
+  hostHistoryMode = mode
+  try {
+    if (mode === 'ready') sessionStorage.removeItem(MOCK_HOST_HISTORY_KEY)
+    else sessionStorage.setItem(MOCK_HOST_HISTORY_KEY, mode)
+  } catch {
+    // not available in tests
+  }
+}
+
+/** The windows the endpoint offers, and the bucket each is answered at. */
+const HOST_HISTORY_STEPS: Record<string, number> = { '1h': 60, '6h': 120, '24h': 300, '7d': 1800, '30d': 7200 }
+
+/**
+ * When this mock node's metrics began. Five days, so the 24h window is full,
+ * the 7d window starts two days into a chart that has nothing before it, and
+ * 30d is mostly the empty run a freshly deployed node sees. Leading nulls are
+ * the common case on a new install and the one most likely to be drawn as a
+ * cliff down to zero, so every build has them to look at.
+ */
+const HOST_SCRAPE_START = NOW - 5 * 86400_000
+
+/**
+ * Intervals with no sample at all: the node was stopped, or scrapes failed.
+ * The short one is recent enough to break the 1h chart; the long one only
+ * shows up once the window is wide enough to contain it.
+ */
+const HOST_OUTAGES: [number, number][] = [
+  [NOW - 36 * 60_000, NOW - 21 * 60_000],
+  [NOW - 2 * 86400_000, NOW - 2 * 86400_000 + 3600_000],
+]
+
+/** Deterministic, so two loads of the same window draw the same chart. */
+function hostWave(tMs: number, period: number, phase: number): number {
+  return Math.sin((tMs / period) * 2 * Math.PI + phase)
+}
+
+const MOCK_MEMORY_LIMIT = 2_147_483_648
+const MOCK_DISK_TOTAL = 107_374_182_400
+
+function hostHistoryBody(range: string): HostHistoryResponse {
+  const step = HOST_HISTORY_STEPS[range]!
+  const stepMs = step * 1000
+  const end = Math.floor(NOW / stepMs) * stepMs
+  const start = end - rangeSeconds(range) * 1000
+  const times: number[] = []
+  for (let t = start; t <= end; t += stepMs) times.push(t)
+
+  // Nothing has been scraped from the future, so the last bucket is only as
+  // full as the clock allows — the same partial bucket a real query returns.
+  const scraped = (t: number) => t >= HOST_SCRAPE_START && t <= NOW && !HOST_OUTAGES.some(([a, b]) => t >= a && t < b)
+
+  /**
+   * `max_over_time` over the bucket, like the endpoint itself: the scrape
+   * interval is a minute whatever the bucket is, so a wide bucket reports the
+   * highest of the scrapes inside it rather than the one at its edge. It is
+   * null only when no scrape inside the bucket landed — which is why a short
+   * outage disappears from a wide window and shows up in a narrow one.
+   */
+  function bucket(t: number, f: (ms: number) => number): number | null {
+    let best: number | null = null
+    for (let ms = t; ms < t + stepMs; ms += 60_000) {
+      if (!scraped(ms)) continue
+      const v = f(ms)
+      if (best === null || v > best) best = v
+    }
+    return best
+  }
+  const line = (t: number, f: (ms: number) => number) => bucket(t, f)
+
+  const lines: HostHistoryLine[] = [
+    {
+      name: 'cpu',
+      label: 'CPU',
+      unit: 'ratio',
+      points: times.map((t) =>
+        line(t, (ms) => {
+          // A few pinned minutes three quarters of an hour ago, so the alert
+          // rule's line has something to be crossed by.
+          const spike = ms > NOW - 47 * 60_000 && ms < NOW - 42 * 60_000 ? 0.72 : 0
+          const base = 0.26 + 0.07 * hostWave(ms, 4 * 3600_000, 0.4) + 0.04 * hostWave(ms, 37 * 60_000, 2.1)
+          return Math.min(0.99, Math.round((base + spike) * 1000) / 1000)
+        }),
+      ),
+    },
+    {
+      name: 'memory',
+      label: 'Memory',
+      unit: 'bytes',
+      points: times.map((t) =>
+        line(t, (ms) => Math.round(1_380_000_000 + 95_000_000 * hostWave(ms, 6 * 3600_000, 1.1))),
+      ),
+    },
+    {
+      name: 'memory_limit',
+      label: 'Memory limit',
+      unit: 'bytes',
+      points: times.map((t) => line(t, () => MOCK_MEMORY_LIMIT)),
+    },
+    {
+      name: 'disk:/',
+      label: 'Disk /',
+      unit: 'bytes',
+      // Ends where the live meter above it stands (93 GB of 107 GB), having
+      // crossed the 85% the shipped rules warn at a couple of days back. That
+      // crossing is what the dashed threshold line exists to show.
+      points: times.map((t) => line(t, (ms) => Math.round(88_000_000_000 + (ms - HOST_SCRAPE_START) * 11.574))),
+    },
+    {
+      name: 'disk_total:/',
+      label: 'Disk / total',
+      unit: 'bytes',
+      points: times.map((t) => line(t, () => MOCK_DISK_TOTAL)),
+    },
+  ]
+
+  return {
+    range,
+    windows: Object.keys(HOST_HISTORY_STEPS),
+    step_seconds: step,
+    node: 'syslogc-01',
+    timestamps: times.map((t) => new Date(t).toISOString()),
+    lines,
+  }
+}
+
+function rangeSeconds(range: string): number {
+  const m = /^(\d+)([hd])$/.exec(range)!
+  return Number(m[1]) * (m[2] === 'd' ? 86400 : 3600)
+}
+
 const api = (path: string) => `*/api/v1${path}`
 
 export const handlers = [
@@ -3509,6 +3671,34 @@ export const handlers = [
         ],
       }),
   ),
+  http.get(api('/system/host/history'), ({ request }) => {
+    const auth = requireAuth()
+    if (auth) return auth
+    if (hostHistoryMode === 'unconfigured') {
+      return problem(
+        404,
+        'not_configured',
+        'No metrics store is configured',
+        'Set metrics.store.url to the VictoriaMetrics instance scraping this node, then restart. Nothing else on this page depends on it.',
+      )
+    }
+    if (hostHistoryMode === 'ambiguous') {
+      return problem(
+        409,
+        'ambiguous_metrics',
+        'More than one node is reporting',
+        'syslogc-01, syslogc-02 and syslogc-03 all report here. Give each node its own store, or set metrics.store.node to the one this page should read.',
+      )
+    }
+    const range = new URL(request.url).searchParams.get('range') ?? '24h'
+    if (!(range in HOST_HISTORY_STEPS)) {
+      const message = `range must be one of ${Object.keys(HOST_HISTORY_STEPS).join(', ')}`
+      return problem(422, 'validation_failed', 'Validation failed', message, {
+        errors: [{ pointer: '/range', message }],
+      })
+    }
+    return HttpResponse.json(hostHistoryBody(range))
+  }),
   http.get(api('/system/ingestion'), () => {
     const auth = requireAuth()
     if (auth) return auth

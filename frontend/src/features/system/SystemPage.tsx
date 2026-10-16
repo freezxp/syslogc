@@ -20,6 +20,7 @@ import {
 import { useTimezone } from '@/lib/preferences'
 
 import { forwardFilterLabels, secondsSince, truncateError } from './forwarding'
+import { HostHistoryPanel } from './HostHistoryPanel'
 import {
   coresLabel,
   cpuStatus,
@@ -219,6 +220,10 @@ function HealthTab() {
         <Stat label="Uptime" value={formatDuration(h.uptime_seconds)} />
       </div>
       {h.host && <HostPanel host={h.host} />}
+      {/* Directly under the live meters, because it answers the question the
+          meters raise: 94% now is a different thing if it has been 94% all
+          week than if it has been 20% until ten minutes ago. */}
+      {h.host && <HostHistoryPanel />}
       <Panel title="Components" bodyClassName="p-0 overflow-x-auto">
         <table className="w-full text-base">
           <tbody>

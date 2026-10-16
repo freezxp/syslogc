@@ -1,0 +1,31 @@
+# What VictoriaMetrics records about this deployment.
+#
+# Syslogc already publishes everything worth watching on /metrics, but that
+# endpoint only ever says "now": scrape it and the same numbers become a
+# history you can look back through. Host utilisation is the obvious one —
+# "is the disk filling?" is a question about last week, not this second — but
+# the ingestion rates, queue depth, every drop counter and the trend rollup's
+# freshness all become answerable after the fact too.
+#
+# VictoriaMetrics does this itself, so there is no second process to run. The
+# retention is whatever the instance was started with (SYSLOGC_METRICS_RETENTION,
+# 24 months by default), which the derived service-trend counts already rely on.
+
+global:
+  # Fine enough to show a spike that lasts a minute, coarse enough that a
+  # year of it is still small. Syslogc's own host sampler runs on a 10s
+  # ticker, so nothing is gained by asking faster than it measures.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: syslogc
+    # Inside the Compose network. Nothing is published to the host for this:
+    # the scrape never leaves the bridge.
+    static_configs:
+      - targets: ["syslogc:8080"]
+    metrics_path: /metrics
+    # Syslogc's metrics carry no identity of their own: the scraper adds job
+    # and instance, which is where that belongs. A second node therefore needs
+    # its own entry here, and the host-history endpoint refuses to chart two
+    # targets as though they were one rather than picking whichever came first.

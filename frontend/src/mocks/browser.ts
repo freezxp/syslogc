@@ -1,6 +1,6 @@
 import { setupWorker } from 'msw/browser'
 
-import { handlers, setMockAssistant } from './handlers'
+import { handlers, setMockAssistant, setMockHostHistory } from './handlers'
 
 export async function startMockWorker(): Promise<void> {
   const worker = setupWorker(...handlers)
@@ -11,4 +11,8 @@ export async function startMockWorker(): Promise<void> {
   // "it is off, show nothing" and "it broke" paths actually be looked at.
   // Mock builds only: `main.tsx` never imports this module otherwise.
   ;(window as unknown as { syslogcMockAssistant: typeof setMockAssistant }).syslogcMockAssistant = setMockAssistant
+  // The same for host history: whether there is a metrics store at all, and
+  // whether it holds more than one node, are properties of the deployment.
+  ;(window as unknown as { syslogcMockHostHistory: typeof setMockHostHistory }).syslogcMockHostHistory =
+    setMockHostHistory
 }
