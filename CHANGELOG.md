@@ -8,6 +8,37 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.4.0 — 2026-10-16
+
+### Added
+
+- **Host utilisation now has a history.** VictoriaMetrics — the instance
+  already there for the trend rollups — scrapes this node's `/metrics` every
+  15 seconds, so CPU, memory and disk can be looked back through rather than
+  only sampled. The System page charts 1 hour to 30 days of it under the live
+  meters, and `GET /api/v1/system/host/history?range=7d` returns the same
+  series. Retention is `SYSLOGC_METRICS_RETENTION`, 24 months by default.
+
+  The scrape covers every metric the node publishes, not only the host ones,
+  so ingestion rates, queue depth, each drop counter and the rollup's
+  freshness became answerable after the fact too — about a thousand series on
+  a single-node deployment.
+
+### Reading the charts
+
+Each point is the **peak** in its bucket, not an average: at the 30-day
+window's two-hour step an average smooths a spike into nothing, and the
+question is whether it ever got close to the limit. A break in a line is a
+bucket with **no sample at all** — the node was stopped, or a scrape failed —
+and is never drawn as a drop to zero, which would invent an idle period and a
+recovery from it. A freshly deployed node shows nothing on the longer windows
+until the first bucket boundary passes, and says so rather than looking
+broken.
+
+A second node needs its own entry in `deploy/compose/scrape.yml`; the history
+endpoint refuses to answer rather than charting two nodes as though they were
+one.
+
 ## 1.3.0 — 2026-10-15
 
 ### Added
