@@ -110,6 +110,8 @@ func parseUsage(r io.Reader) (storage.UsageInfo, error) {
 			dst = &u.FreeDiskBytes
 		case "vl_total_disk_space_bytes":
 			dst = &u.TotalDiskBytes
+		case "vl_max_disk_space_usage_bytes":
+			dst = &u.MaxDiskBytes
 		case "vl_partitions":
 			dst = &u.Partitions
 		default:

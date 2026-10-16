@@ -166,6 +166,48 @@ groups:
             root is left. Shorten the retention period or add space now; see
             syslogc_host_disk_available_bytes for what a non-root writer actually has.
 
+      # The log store's own disk, which is the one that costs data.
+      #
+      # The host alerts above watch the filesystem Syslogc's process runs on —
+      # right for certificate writes, and on many deployments not even the same
+      # disk as the logs. These watch where the logs actually are, and against
+      # the ceiling that is actually in force: VictoriaLogs is started with
+      # -retention.maxDiskUsagePercent and begins deleting the oldest data when
+      # it reaches that share, which is below the filesystem's size.
+      #
+      # Measuring against the filesystem total instead would understate this by
+      # the whole margin — on a default deployment, 58% of the disk is already
+      # 68% of the ceiling — and a warning at 85% of the disk would fire only
+      # once deletion had been running for some time.
+      - alert: SyslogcLogStoreNearingItsLimit
+        expr: >-
+          (vl_total_disk_space_bytes - vl_free_disk_space_bytes)
+          / clamp_min(vl_max_disk_space_usage_bytes, 1) > 0.85
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: Log store at {{ humanizePercentage $value }} of the disk it may use
+          description: >-
+            VictoriaLogs deletes the oldest logs when this reaches 100%, so the retention
+            period stops being the thing that decides how far back you can search. Add
+            space, or shorten retention deliberately rather than letting the disk do it.
+
+      # Not "the disk is full" — it will not fill, because the store trims
+      # itself. The loss is silent: searches simply stop reaching as far back
+      # as the configured retention says they should.
+      - alert: SyslogcLogStoreTrimmingItself
+        expr: >-
+          (vl_total_disk_space_bytes - vl_free_disk_space_bytes)
+          / clamp_min(vl_max_disk_space_usage_bytes, 1) > 0.98
+        for: 10m
+        labels: {severity: critical}
+        annotations:
+          summary: Log store is deleting logs to stay within its disk limit
+          description: >-
+            At {{ humanizePercentage $value }} of its limit the oldest logs are being
+            dropped to make room for new ones. Retention is now set by the disk, not by
+            the configured period, and the gap grows with ingestion.
+
       # CPU pinned at its quota means messages queue rather than parse, so
       # this is an early warning for the ingest-queue alerts rather than a
       # problem in itself. 95% for 30 minutes: a node sized for its load does

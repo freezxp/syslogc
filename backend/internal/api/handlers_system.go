@@ -24,6 +24,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/ingestion/pipeline"
 	"github.com/freezxp/syslogc/backend/internal/metadata"
 	"github.com/freezxp/syslogc/backend/internal/metrics"
+	"github.com/freezxp/syslogc/backend/internal/storage"
 )
 
 // ---- HTTP ingestion -------------------------------------------------------
@@ -368,7 +369,12 @@ func (s *Server) handleSystemStorage(w http.ResponseWriter, r *http.Request, _ *
 	}
 	if u, err := st.Admin().Usage(ctx); err == nil {
 		body["usage"] = map[string]int64{"compressed_bytes": u.CompressedBytes, "uncompressed_bytes": u.UncompressedBytes,
-			"free_disk_bytes": u.FreeDiskBytes, "total_disk_bytes": u.TotalDiskBytes}
+			"free_disk_bytes": u.FreeDiskBytes, "total_disk_bytes": u.TotalDiskBytes,
+			// The ceiling the store stops at, which is below the filesystem's
+			// size when it was started with a maximum disk share. Measuring
+			// against the total understates how close the logs are to being
+			// deleted — by ten points on a default deployment.
+			"max_disk_bytes": storageCeiling(u)}
 	}
 	if s.opts.API.Retention != nil {
 		body["retention"] = s.opts.API.Retention()
@@ -415,7 +421,12 @@ func (s *Server) handleSystemRetention(w http.ResponseWriter, r *http.Request, _
 	defer cancel()
 	if u, err := s.opts.API.Storage.Admin().Usage(ctx); err == nil {
 		body["usage"] = map[string]int64{"compressed_bytes": u.CompressedBytes, "uncompressed_bytes": u.UncompressedBytes,
-			"free_disk_bytes": u.FreeDiskBytes, "total_disk_bytes": u.TotalDiskBytes}
+			"free_disk_bytes": u.FreeDiskBytes, "total_disk_bytes": u.TotalDiskBytes,
+			// The ceiling the store stops at, which is below the filesystem's
+			// size when it was started with a maximum disk share. Measuring
+			// against the total understates how close the logs are to being
+			// deleted — by ten points on a default deployment.
+			"max_disk_bytes": storageCeiling(u)}
 	}
 	writeJSON(w, http.StatusOK, body)
 	return nil
@@ -560,3 +571,16 @@ const placeholderPage = `<!doctype html><html><head><meta charset="utf-8"><title
 <body style="font-family:system-ui;background:#0b0d10;color:#e6e6e6;padding:3rem">
 <h1>Syslogc</h1><p>The web UI was not built into this binary. Run <code>make web</code> and rebuild,
 or use the API under <code>/api/v1</code>.</p></body></html>`
+
+// storageCeiling is the number of bytes the log store will actually grow to
+// before it starts deleting the oldest data.
+//
+// VictoriaLogs is started with -retention.maxDiskUsagePercent, and reports
+// the resulting figure as vl_max_disk_space_usage_bytes. Where no such limit
+// is set it reports nothing, and then the filesystem itself is the ceiling.
+func storageCeiling(u storage.UsageInfo) int64 {
+	if u.MaxDiskBytes > 0 && u.MaxDiskBytes < u.TotalDiskBytes {
+		return u.MaxDiskBytes
+	}
+	return u.TotalDiskBytes
+}

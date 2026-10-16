@@ -181,6 +181,7 @@ import {
   hasForwardErrors,
   type ForwardFormState,
 } from '@/features/forwarding/forward-form'
+import { storeDisk, storeDiskNote } from '@/features/system/storage'
 import { forwardFilterLabels, secondsSince, truncateError } from '@/features/system/forwarding'
 import {
   coresLabel,
@@ -3124,5 +3125,49 @@ describe('figures handed to the assistant', () => {
     // Same object, not a copy: the explain panel ties a description to the
     // figures it was written from by identity.
     expect(mssqlFigures(data)).toBe(data)
+  })
+})
+
+describe('how full the log store is', () => {
+  const bytes = (n: number | null | undefined) => (n == null ? '—' : `${Math.round(n / 2 ** 30)} GiB`)
+
+  it('measures against the disk the store may use, not the filesystem', () => {
+    // The real figures from a default deployment: a 64.3 GiB disk that
+    // VictoriaLogs will only fill to 54.7 GiB before deleting the oldest logs.
+    const d = storeDisk({
+      total_disk_bytes: 69086240768,
+      free_disk_bytes: 29146349568,
+      max_disk_bytes: 58723304652,
+    })
+    expect(d.limited).toBe(true)
+    expect(d.ceiling).toBe(58723304652)
+    // 68%, not the 58% the filesystem would suggest. Ten points matters when
+    // the difference is whether logs are being deleted.
+    expect(d.used).toBeCloseTo(0.68, 2)
+    expect(storeDiskNote(d, bytes)).toMatch(/this store may use/)
+  })
+
+  it('falls back to the filesystem when no limit applies', () => {
+    const d = storeDisk({ total_disk_bytes: 1000, free_disk_bytes: 400 })
+    expect(d.limited).toBe(false)
+    expect(d.ceiling).toBe(1000)
+    expect(d.used).toBeCloseTo(0.6, 5)
+    expect(storeDiskNote(d, bytes)).toMatch(/free of/)
+  })
+
+  it('ignores a limit that is not one', () => {
+    // A store told it may use more than the disk holds is not limited by it.
+    for (const max of [0, 2000]) {
+      const d = storeDisk({ total_disk_bytes: 1000, free_disk_bytes: 400, max_disk_bytes: max })
+      expect(d.limited).toBe(false)
+      expect(d.ceiling).toBe(1000)
+    }
+  })
+
+  it('reports nothing rather than a zero when the store said nothing', () => {
+    const d = storeDisk(undefined)
+    expect(d.used).toBeNull()
+    expect(d.ceiling).toBeNull()
+    expect(storeDiskNote(d, bytes)).toBe('')
   })
 })

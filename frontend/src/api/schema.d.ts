@@ -3339,6 +3339,8 @@ export interface components {
             uncompressed_bytes?: number;
             free_disk_bytes?: number;
             total_disk_bytes?: number;
+            /** @description The disk the store may actually use before it starts deleting the oldest data, which is below total_disk_bytes when it was started with a maximum disk share. Measure fullness against this, not the filesystem's size. */
+            max_disk_bytes?: number;
         };
         SystemStorage: {
             backend: string;

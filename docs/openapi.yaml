@@ -2143,6 +2143,12 @@ components:
         uncompressed_bytes: {type: integer}
         free_disk_bytes: {type: integer}
         total_disk_bytes: {type: integer}
+        max_disk_bytes:
+          type: integer
+          description: >-
+            The disk the store may actually use before it starts deleting the oldest
+            data, which is below total_disk_bytes when it was started with a maximum
+            disk share. Measure fullness against this, not the filesystem's size.
 
     SystemStorage:
       type: object

@@ -506,6 +506,43 @@ is the space a non-root process may still write, which is smaller than total
 minus used by the reserve the filesystem keeps for root; it is the figure that
 decides whether a write succeeds, and the one the alert rules divide by.
 
+### Which disk matters
+
+Two different disks get watched, and confusing them is easy.
+
+`syslogc_host_disk_*` is the filesystem **Syslogc's own process** runs on. A
+full one stops certificate writes and the container's own work. It is often
+not where the logs are at all: a deployment with any volume of traffic puts
+the data on its own disk, and then the two are not the same filesystem.
+
+The one that costs data is the **log store's**. VictoriaLogs reports it
+itself, and VictoriaMetrics scrapes it (see `deploy/compose/scrape.yml`):
+
+```
+vl_total_disk_space_bytes{path="/vlogs"}     69086240768   # the filesystem
+vl_max_disk_space_usage_bytes{path="/vlogs"} 58723304652   # what it may use
+vl_free_disk_space_bytes{path="/vlogs"}      29146349568
+```
+
+**Measure against the middle one.** VictoriaLogs is started with
+`-retention.maxDiskUsagePercent` (85 in the shipped Compose file) and begins
+deleting the oldest logs when it reaches that share — well before the disk is
+full. On the figures above the store is 58% of the way through the disk and
+**69% of the way through what it may use**; the System page's storage tab now
+says the second, and labels it "of the … this store may use".
+
+That difference is not cosmetic. A warning set at 85% of the *filesystem*
+fires at 100% of the ceiling — which is to say, once deletion has already been
+running. `SyslogcLogStoreNearingItsLimit` watches the right denominator, and
+`SyslogcLogStoreTrimmingItself` fires when the store is actively dropping
+logs to make room.
+
+Running out here is not an outage, which is what makes it easy to miss: the
+store trims itself and keeps working. What changes is that the retention
+period stops deciding how far back you can search — the disk does — and
+searches quietly stop reaching as far as the configured period says they
+should.
+
 ### Keeping a history of it
 
 `/metrics` only ever says "now". VictoriaMetrics — the instance already there

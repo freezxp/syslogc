@@ -20,6 +20,7 @@ import {
 import { useTimezone } from '@/lib/preferences'
 
 import { forwardFilterLabels, secondsSince, truncateError } from './forwarding'
+import { storeDisk, storeDiskNote } from './storage'
 import { HostHistoryPanel } from './HostHistoryPanel'
 import {
   coresLabel,
@@ -502,7 +503,8 @@ function StorageTab() {
   const s = q.data
   const u = s.usage
   const ratio = u?.uncompressed_bytes && u.compressed_bytes ? u.uncompressed_bytes / u.compressed_bytes : null
-  const diskUsed = u?.total_disk_bytes ? 1 - (u.free_disk_bytes ?? 0) / u.total_disk_bytes : null
+  // Against the disk the store may use, not the filesystem: see storeDisk.
+  const disk = storeDisk(u)
   return (
     <div className="space-y-3">
       {s.retention?.status === 'drift' && (
@@ -536,9 +538,9 @@ function StorageTab() {
           sub={ratio ? `${ratio.toFixed(1)}× compression` : undefined}
         />
         <Stat
-          label="Disk used"
-          value={diskUsed !== null ? formatPercent(diskUsed) : '—'}
-          sub={u ? `${formatBytes(u.free_disk_bytes)} free of ${formatBytes(u.total_disk_bytes)}` : undefined}
+          label={disk.limited ? 'Disk used of limit' : 'Disk used'}
+          value={disk.used !== null ? formatPercent(disk.used) : '—'}
+          sub={u ? storeDiskNote(disk, formatBytes) : undefined}
         />
         <Stat
           label="Retention"

@@ -8,6 +8,30 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.5.0 — 2026-10-16
+
+### Fixed
+
+- **The disk that matters is now the one being watched.** Host disk figures
+  describe the filesystem Syslogc's own process runs on, which on any
+  deployment with real traffic is not where the logs are. VictoriaLogs and
+  VictoriaMetrics are now scraped too, so the store's own disk has figures
+  and a history.
+- **Fullness is measured against the disk the store may use, not the
+  filesystem.** VictoriaLogs is started with `-retention.maxDiskUsagePercent`
+  and deletes the oldest logs on reaching that share — on the shipped
+  settings, 58% of the disk is already **69% of the ceiling**. The storage tab
+  understated it by that margin, and the disk alert at 85% of the filesystem
+  would not have fired until deletion had already been running.
+
+  Two alerts now watch the right denominator:
+  `SyslogcLogStoreNearingItsLimit` warns at 85% of what the store may use, and
+  `SyslogcLogStoreTrimmingItself` fires when it is actively dropping logs.
+
+  This failure is quiet by design — the store trims itself and keeps working.
+  What changes is that the retention period stops deciding how far back you
+  can search, and the disk decides instead.
+
 ## 1.4.0 — 2026-10-16
 
 ### Added

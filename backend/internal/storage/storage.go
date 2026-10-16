@@ -305,7 +305,14 @@ type UsageInfo struct {
 	UncompressedBytes int64
 	FreeDiskBytes     int64
 	TotalDiskBytes    int64
-	Partitions        int64
+	// MaxDiskBytes is the ceiling the store will actually stop at, which is
+	// not the filesystem's size. VictoriaLogs is started with
+	// -retention.maxDiskUsagePercent and begins deleting the oldest data when
+	// usage reaches that share of the disk — so measuring against the
+	// filesystem total understates how close the logs are to being dropped.
+	// Zero when no such limit is set, and then the total is the ceiling.
+	MaxDiskBytes int64
+	Partitions   int64
 }
 
 // Errors shared by adapters.

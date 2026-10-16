@@ -29,3 +29,24 @@ scrape_configs:
     # and instance, which is where that belongs. A second node therefore needs
     # its own entry here, and the host-history endpoint refuses to chart two
     # targets as though they were one rather than picking whichever came first.
+
+  # The stores themselves, which is where the logs actually are. Syslogc's own
+  # host reading describes the filesystem its process runs on; that is the
+  # right thing for certificate writes and the container's overlay, and the
+  # wrong thing for "is there room for more logs". A production deployment
+  # usually puts the data volume on its own disk, and then the two are not
+  # even the same filesystem.
+  #
+  # These also report the ceiling that is actually in force:
+  # vl_max_disk_space_usage_bytes is -retention.maxDiskUsagePercent of the
+  # filesystem, and VictoriaLogs starts deleting old data when it reaches it —
+  # well before the disk is full.
+  - job_name: victorialogs
+    static_configs:
+      - targets: ["victorialogs:9428"]
+    metrics_path: /metrics
+
+  - job_name: victoriametrics
+    static_configs:
+      - targets: ["victoriametrics:8428"]
+    metrics_path: /metrics
