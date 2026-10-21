@@ -162,6 +162,21 @@ func partWhen(marker string) []extract.JSONMatch {
 	return []extract.JSONMatch{{Keys: []string{markerField}, Equals: []string{marker}}}
 }
 
+// partWhenOrUnmarked is partWhen for the one part that existed before the
+// marker did.
+//
+// Active Directory was this template's only content until SQL Server and IIS
+// joined it, and the NXLog configuration shipped then stamped nothing. Those
+// senders are still out there and are not reconfigured by upgrading Syslogc,
+// so a record with no marker at all has to go on being read as a Security
+// event. A record that does carry a marker is matched exactly, so a sender
+// following the current guide is unaffected.
+func partWhenOrUnmarked(marker string) []extract.JSONMatch {
+	return []extract.JSONMatch{{
+		Keys: []string{markerField}, Equals: []string{marker}, MatchIfAbsent: true,
+	}}
+}
+
 func directoryPart() Part {
 	return Part{
 		ID:      PartDirectory,
@@ -173,7 +188,7 @@ func directoryPart() Part {
 		NXLog:    nxlogInputDirectory,
 		JSON: &JSONExtract{
 			Prefix: "ad.",
-			When:   partWhen("ad"),
+			When:   partWhenOrUnmarked("ad"),
 			Keys: map[string]string{
 				"EventID":                   "event_id",
 				"TargetUserName":            "user",

@@ -44,6 +44,17 @@ type JSONMatch struct {
 	// Prefix matches a value that starts with it, ignoring case — for names
 	// that carry an instance, such as MSSQL$SALES.
 	Prefix string
+	// MatchIfAbsent makes the condition hold when none of the keys appear in
+	// the record at all.
+	//
+	// It exists for upgrades. A rule that tells records apart by a field the
+	// sender stamps on them cannot be applied to senders configured before
+	// that field existed: their records carry no marker, every condition
+	// fails, and a deployment that was working stops extracting anything the
+	// moment it is upgraded. Setting this on the rule that predates the
+	// marker keeps those senders working untouched, while a sender that does
+	// stamp one is still matched exactly.
+	MatchIfAbsent bool
 }
 
 // matches reports whether the record satisfies the condition. With neither
@@ -72,7 +83,8 @@ func (m JSONMatch) matches(record map[string]json.RawMessage) bool {
 		// thing cannot overrule it.
 		return false
 	}
-	return false
+	// No key present at all.
+	return m.MatchIfAbsent
 }
 
 // JSONExtractor promotes JSON keys to fields.

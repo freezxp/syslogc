@@ -207,3 +207,62 @@ func TestSQLServerLoginFailureNamesTheAccountAndTheAddress(t *testing.T) {
 		}
 	}
 }
+
+// Upgrading Syslogc does not reconfigure anybody's NXLog.
+//
+// The marker field arrived with the Windows template; the Active Directory
+// template that preceded it stamped nothing, and those senders are still
+// running. If a record without a marker stops being read, a deployment that
+// was working goes empty the moment it is upgraded — logs still arriving, the
+// analysis blank — which is exactly what happened.
+func TestASenderConfiguredBeforeTheMarkerExistedStillWorks(t *testing.T) {
+	// Exactly what the old guide's nxlog.conf produced: the Security channel
+	// as JSON, no marker of any kind.
+	const old = `{"EventTime":"2026-10-21 09:14:02","Hostname":"DC01","Channel":"Security",` +
+		`"EventID":4740,"TargetUserName":"s.tan","TargetDomainName":"CORP",` +
+		`"CallerComputerName":"PHONE-ST","IpAddress":"172.16.9.12"}`
+
+	for _, template := range []string{"active-directory", "windows-server"} {
+		t.Run(template, func(t *testing.T) {
+			var parts []string
+			if template == "windows-server" {
+				// Somebody who re-made the source on the new template, ticking
+				// every part, and did not touch their sender.
+				parts = []string{sourcetemplate.PartDirectory, sourcetemplate.PartMSSQL, sourcetemplate.PartIIS}
+			}
+			got := fieldsOf(windowsSource(t, template, parts), old)
+			if len(got) == 0 {
+				t.Fatal("an existing sender's message produced no fields at all")
+			}
+			for name, want := range map[string]string{
+				"ad.event_id": "4740", "ad.user": "s.tan", "ad.caller_computer": "PHONE-ST",
+			} {
+				if got[name] != want {
+					t.Errorf("%s = %q, want %q", name, got[name], want)
+				}
+			}
+			// An unmarked record is a Security event and nothing else. Reading
+			// it as SQL Server too would put a Windows event id into
+			// mssql.event_id and invent sign-in failures that never happened.
+			for _, name := range []string{"mssql.event_id", "mssql.message", "iis.status", "iis.uri"} {
+				if v, ok := got[name]; ok {
+					t.Errorf("an unmarked record also produced %s = %q", name, v)
+				}
+			}
+		})
+	}
+}
+
+// And a sender that does stamp a marker is still matched exactly, so the two
+// senders can run side by side during a rollout.
+func TestAMarkedRecordIsStillMatchedExactly(t *testing.T) {
+	s := windowsSource(t, "windows-server",
+		[]string{sourcetemplate.PartDirectory, sourcetemplate.PartMSSQL, sourcetemplate.PartIIS})
+	got := fieldsOf(s, `{"syslogc_part":"mssql","EventID":18456,"SourceName":"MSSQLSERVER"}`)
+	if got["mssql.event_id"] != "18456" {
+		t.Errorf("mssql.event_id = %q, want 18456", got["mssql.event_id"])
+	}
+	if v, ok := got["ad.event_id"]; ok {
+		t.Errorf("a marked SQL Server record was also read as Active Directory: ad.event_id = %q", v)
+	}
+}

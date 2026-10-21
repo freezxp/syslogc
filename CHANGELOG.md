@@ -8,6 +8,29 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.5.1 — 2026-10-21
+
+### Fixed
+
+- **Active Directory analysis went empty after upgrading to 1.2.0 or later,
+  while logs kept arriving.** The Windows template tells its parts apart by a
+  marker field the sender stamps on each record, and the Active Directory
+  template that preceded it stamped nothing. Upgrading Syslogc does not
+  reconfigure anybody's NXLog, so existing senders carried no marker, every
+  condition failed, and no `ad.*` field was extracted — a working deployment
+  went blank the moment it was upgraded.
+
+  A record with no marker at all is read as a Security event again. A record
+  that does carry one is still matched exactly, so a sender following the
+  current guide is unaffected and the two can run side by side.
+
+  Nothing needs reconfiguring. Updating `nxlog.conf` from the setup guide is
+  worth doing only if you want the SQL Server or IIS parts as well.
+
+  The test that was supposed to catch this used the **new** message format, so
+  it never exercised an older sender. It now sends exactly what the previous
+  guide produced, against both the retired template id and the new one.
+
 ## 1.5.0 — 2026-10-16
 
 ### Fixed
