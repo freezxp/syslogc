@@ -230,3 +230,66 @@ func AnalysesFor(uses []Use) []string {
 	sort.Strings(out)
 	return out
 }
+
+// AnalysesForFields reports which analyses the given field names can feed.
+//
+// Choosing a template is how somebody says what a source carries, but it is
+// only ever a proxy for the question that matters: are the fields this page
+// reads actually in the logs? A source configured before templates existed —
+// with its extraction written by hand, which is how every deployment did it —
+// answers no to the proxy and yes to the question, and gating on the proxy
+// alone hides a page whose data is right there.
+//
+// So the fields decide too. A template's own field names are specific enough
+// to be safe: they are prefixed per template, and nothing else produces
+// ad.event_id or dns.qname by accident.
+func AnalysesForFields(seen map[string]bool) []string {
+	if len(seen) == 0 {
+		return nil
+	}
+	has := func(fields []Field) bool {
+		for _, f := range fields {
+			if seen[strings.ToLower(f.Name)] {
+				return true
+			}
+		}
+		return false
+	}
+	out := map[string]bool{}
+	for _, t := range All() {
+		if has(t.Fields) {
+			for _, a := range t.Analyses {
+				out[a] = true
+			}
+		}
+		for _, p := range t.Parts {
+			if has(p.Fields) {
+				for _, a := range p.Analyses {
+					out[a] = true
+				}
+			}
+		}
+	}
+	names := make([]string, 0, len(out))
+	for a := range out {
+		names = append(names, a)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// MergeAnalyses unions two lists without duplicates.
+func MergeAnalyses(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range [][]string{a, b} {
+		for _, v := range list {
+			if !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}

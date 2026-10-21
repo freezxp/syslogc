@@ -251,6 +251,26 @@ between the two. VictoriaLogs also deletes the oldest data when the disk
 passes `-retention.maxDiskUsagePercent` (85% in the stack), so watch free
 disk as well as the configured period.
 
+### Why a page is offered at all
+
+An analysis is shown when this deployment has what it reads. Two things say
+so, and either is enough.
+
+Choosing a **source template** says what a source carries — and on a template
+with parts, which of them are on. That is the explicit answer, and it is what
+the setup guide walks you through.
+
+The **fields in recent logs** say it too. Every deployment configured before
+templates existed wrote its extraction by hand, has `dns.qname` or
+`ad.event_id` arriving right now, and no template set on anything. Gating on
+the template alone would hide a page whose data is sitting in the store — so
+the field names decide as well, read over the last fifteen minutes.
+
+Nothing needs changing either way. Setting the template on a source is still
+worth doing, because it supplies the extraction and the sender's setup guide,
+but an analysis is not withheld for the want of it.
+
+
 ## Service trends
 
 Syslogc can answer "how many different clients used TikTok, and when" by

@@ -266,3 +266,60 @@ func TestAMarkedRecordIsStillMatchedExactly(t *testing.T) {
 		t.Errorf("a marked SQL Server record was also read as Active Directory: ad.event_id = %q", v)
 	}
 }
+
+// Choosing a template says what a source carries. Having the fields proves
+// it. A deployment that wrote its extraction by hand — which is how every
+// one of them did it before templates existed — has the data and no
+// template, and must still be offered the page that reads it.
+func TestTheFieldsInTheLogsAlsoDecideWhichAnalysesAreOffered(t *testing.T) {
+	seen := func(names ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, n := range names {
+			m[n] = true
+		}
+		return m
+	}
+	for _, c := range []struct {
+		name   string
+		fields map[string]bool
+		want   []string
+	}{
+		{"a hand-configured DNS source", seen("dns.qname", "dns.client_ip"), []string{sourcetemplate.AnalysisDNSServices}},
+		{"Windows security events", seen("ad.event_id", "ad.user"), []string{sourcetemplate.AnalysisDirectory}},
+		{"web requests", seen("iis.status"), []string{sourcetemplate.AnalysisIIS}},
+		{"both DNS and Windows", seen("dns.qname", "ad.user"),
+			[]string{sourcetemplate.AnalysisDirectory, sourcetemplate.AnalysisDNSServices}},
+		{"nothing recognisable", seen("message", "hostname", "severity"), nil},
+		{"no fields at all", nil, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := sourcetemplate.AnalysesForFields(c.fields)
+			if len(got) != len(c.want) {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("got %v, want %v", got, c.want)
+				}
+			}
+		})
+	}
+}
+
+// The two ways of deciding combine without duplicating.
+func TestTemplateAndFieldGatingAreUnioned(t *testing.T) {
+	byTemplate := sourcetemplate.AnalysesFor([]sourcetemplate.Use{
+		{Template: "windows-server", Parts: []string{sourcetemplate.PartDirectory}},
+	})
+	byFields := sourcetemplate.AnalysesForFields(map[string]bool{"dns.qname": true, "ad.event_id": true})
+	got := sourcetemplate.MergeAnalyses(byTemplate, byFields)
+	want := []string{sourcetemplate.AnalysisDirectory, sourcetemplate.AnalysisDNSServices}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	}
+}

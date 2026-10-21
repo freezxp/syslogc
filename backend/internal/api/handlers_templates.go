@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/freezxp/syslogc/backend/internal/auth"
 	"github.com/freezxp/syslogc/backend/internal/config"
+	"github.com/freezxp/syslogc/backend/internal/query"
 	"github.com/freezxp/syslogc/backend/internal/sourcetemplate"
 )
 
@@ -28,6 +31,11 @@ type templateBody struct {
 // and which are actually in use.
 func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request, p *auth.Principal) error {
 	using, uses := s.templatesInUse(r, p)
+	// What the logs actually carry, which is the real test. See
+	// AnalysesForFields: a source configured before templates existed says
+	// nothing about its template, and gating on that alone hides a page whose
+	// data is sitting in the store.
+	seen := s.fieldsSeenRecently(r, p)
 	out := make([]templateBody, 0, len(sourcetemplate.All()))
 	for _, t := range sourcetemplate.All() {
 		names := using[strings.ToLower(t.ID)]
@@ -40,7 +48,8 @@ func (s *Server) handleTemplates(w http.ResponseWriter, r *http.Request, p *auth
 		"templates": out,
 		// The analyses worth offering, so the interface does not have to
 		// work it out from the templates itself.
-		"analyses": sourcetemplate.AnalysesFor(uses),
+		"analyses": sourcetemplate.MergeAnalyses(
+			sourcetemplate.AnalysesFor(uses), sourcetemplate.AnalysesForFields(seen)),
 	})
 	return nil
 }
@@ -160,4 +169,33 @@ func (s *Server) handleTemplateConfig(w http.ResponseWriter, r *http.Request, _ 
 		"config":   config,
 	})
 	return nil
+}
+
+// fieldsSeenRecently names the fields present in the last few minutes.
+//
+// The window is short on purpose. It only has to be long enough for a live
+// deployment to have sent something — a DNS resolver or a domain controller
+// is never quiet for fifteen minutes — and a field list over a day of logs on
+// a busy deployment is an expensive question to ask on every page load.
+//
+// A failure here is not an error: it falls back to deciding by template
+// alone, which is what this did before. An analysis briefly not offered is a
+// far better outcome than a page that will not load.
+func (s *Server) fieldsSeenRecently(r *http.Request, p *auth.Principal) map[string]bool {
+	if s.opts.API.Query == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	resp, err := s.opts.API.Query.Fields(ctx, p, query.Selection{
+		TimeRange: query.TimeRange{From: "now-15m", To: "now"},
+	})
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]bool, len(resp.Fields))
+	for _, f := range resp.Fields {
+		out[strings.ToLower(f.Name)] = true
+	}
+	return out
 }

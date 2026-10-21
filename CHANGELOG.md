@@ -8,6 +8,28 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.5.2 — 2026-10-21
+
+### Fixed
+
+- **DNS service trends disappeared after upgrading**, on any deployment whose
+  DNS source predates templates. An analysis was offered only when some
+  source carried the template that feeds it — but choosing a template is
+  merely a proxy for the question that matters, which is whether the fields
+  the page reads are in the logs. Every deployment configured before
+  templates existed wrote its extraction by hand and has no template set, so
+  the proxy said no while the data was sitting in the store.
+
+  The fields decide too now, read over the last fifteen minutes. A page is
+  offered when a source carries its template **or** its fields are arriving.
+  Nothing needs reconfiguring; setting a template is still worth doing,
+  because it supplies the extraction and the sender's guide, but no analysis
+  is withheld for the want of one.
+
+  This is the same mistake as 1.5.1 in a different place: a new requirement
+  that existing deployments could not have met, applied without a path for
+  them.
+
 ## 1.5.1 — 2026-10-21
 
 ### Fixed
