@@ -30,6 +30,10 @@ is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
   The test that was supposed to catch this used the **new** message format, so
   it never exercised an older sender. It now sends exactly what the previous
   guide produced, against both the retired template id and the new one.
+- Go 1.27.3, which distrusts a set of compromised intermediate certificates in
+  `crypto/x509`. It is reachable from the TLS listener's handshake. As with
+  1.27.2, nothing here changed to cause it: the vulnerability database is read
+  live, so CI went red on untouched code.
 
 ## 1.5.0 — 2026-10-16
 

@@ -14,7 +14,7 @@ RUN npm run build
 # ---- build -------------------------------------------------------------
 # Go cross-compiles, so the build stage also runs natively and targets
 # $TARGETARCH. That keeps multi-architecture builds fast (no emulation).
-FROM --platform=$BUILDPLATFORM golang:1.27.2-trixie AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie AS build
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
