@@ -106,3 +106,38 @@ func Reset(ctx context.Context, store SettingStore) error {
 
 // Ensure the writer contract matches the metrics store client.
 var _ Writer = (*metricstore.Client)(nil)
+
+// Sizes are the query sizes learned for each window: how many buckets and how
+// many services one query may cover before this deployment's storage gives up.
+type Sizes struct {
+	Buckets map[string]int `json:"buckets,omitempty"`
+	Chunks  map[string]int `json:"chunks,omitempty"`
+}
+
+// LoadSizes reads the learned query sizes.
+//
+// Unreadable or absent sizes are not an error: the rollup rediscovers them,
+// which is only slow, not wrong.
+func LoadSizes(ctx context.Context, store SettingStore) (Sizes, error) {
+	setting, err := store.Setting(ctx, metadata.SettingServiceTrendSizes)
+	if errors.Is(err, metadata.ErrNotFound) {
+		return Sizes{}, nil
+	}
+	if err != nil {
+		return Sizes{}, err
+	}
+	var out Sizes
+	if err := json.Unmarshal(setting.Value, &out); err != nil {
+		return Sizes{}, nil
+	}
+	return out, nil
+}
+
+// SaveSizes stores the learned query sizes.
+func SaveSizes(ctx context.Context, store SettingStore, s Sizes) error {
+	value, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	return store.SetSetting(ctx, &metadata.Setting{Key: metadata.SettingServiceTrendSizes, Value: value})
+}

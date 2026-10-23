@@ -88,6 +88,12 @@ type Options struct {
 	// recorded.
 	LoadState func(ctx context.Context) (State, error)
 	SaveState func(ctx context.Context, s State) error
+	// LoadSizes and SaveSizes persist the query sizes this deployment's
+	// storage turned out to be able to answer. Optional: without them the
+	// rollup rediscovers them after every restart, which costs one query
+	// timeout per step of the ladder.
+	LoadSizes func(ctx context.Context) (Sizes, error)
+	SaveSizes func(ctx context.Context, s Sizes) error
 
 	// Base is the finest resolution recorded (default 5m).
 	Base time.Duration
@@ -121,6 +127,8 @@ type Recorder struct {
 	// same way. A window cannot be scanned in less time than itself, so for
 	// the coarser resolutions this is the only lever left.
 	chunks map[string]int
+	// sizesLoaded guards the one-time read of the persisted sizes.
+	sizesLoaded bool
 
 	// mu guards what monitoring reads while a rollup writes it.
 	mu sync.Mutex
@@ -234,6 +242,9 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 	// per scope, and both scopes together would not fit in one query.
 	mainCategories := catalog.MainCategories(r.opts.DomainField)
 
+	r.loadSizesOnce(ctx)
+	sizesBefore := r.sizeFingerprint()
+
 	now := r.opts.Now().UTC()
 	written := 0
 	advanced := false
@@ -286,6 +297,13 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 	// so the next run began at the same place, covered a wider range, and
 	// took longer; eventually a run could not finish inside its budget and
 	// the rollup made no progress at all, for ever, without an error.
+	// A size that was learned the hard way is worth keeping: rediscovering it
+	// costs a query timeout per step, every restart.
+	if r.opts.SaveSizes != nil && r.sizeFingerprint() != sizesBefore {
+		if err := r.opts.SaveSizes(ctx, Sizes{Buckets: copyInts(r.buckets), Chunks: copyInts(r.chunks)}); err != nil {
+			errs = append(errs, fmt.Errorf("saving the learned query sizes: %w", err))
+		}
+	}
 	if r.opts.SaveState != nil && advanced {
 		if err := r.opts.SaveState(ctx, state); err != nil {
 			errs = append(errs, fmt.Errorf("saving the rollup state: %w", err))
@@ -383,20 +401,33 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 			// accumulator over every row in the window, and on a busy
 			// deployment the whole catalogue in one pass is what breaks.
 			switch {
-			case buckets > 1 && shrinks < maxShrinkAttempts:
-				buckets /= 2
+			case (buckets > 1 || chunk > 1) && shrinks < maxShrinkAttempts:
+				// Both levers move together, because every failed attempt
+				// costs a whole query timeout and walking one ladder and then
+				// the other spends that budget before reaching a query the
+				// storage can answer. Measured on a deployment at tens of
+				// thousands of queries a second: 24→12→6→3→1 buckets is four
+				// two-minute timeouts before the catalogue is touched at all,
+				// and the run's own budget is thirty minutes.
+				//
+				// They are also not the same cost. The span decides how many
+				// rows are read; the catalogue decides how much work each row
+				// is, and with 27 services over two scopes that is 54 distinct
+				// sets held at once. Halving the span halves the first. There
+				// is no point exhausting it alone.
+				before := fmt.Sprintf("%d buckets × %d services", buckets, chunk)
+				if buckets > 1 {
+					buckets /= 2
+					r.learnBuckets(step, buckets)
+				}
+				if chunk > 1 {
+					chunk = (chunk + 1) / 2
+					r.learnChunk(step, chunk)
+				}
 				shrinks++
-				r.learnBuckets(step, buckets)
-				r.opts.Log.Info("a service trend query failed; asking for less time at once",
-					"window", WindowName(step), "buckets_per_query", buckets,
-					"span", (step * time.Duration(buckets)).String(), "error", err.Error())
-				continue
-			case chunk > 1 && shrinks < maxShrinkAttempts:
-				chunk = (chunk + 1) / 2
-				shrinks++
-				r.learnChunk(step, chunk)
-				r.opts.Log.Info("a service trend query failed; asking for fewer services at once",
-					"window", WindowName(step), "services_per_query", chunk,
+				r.opts.Log.Info("a service trend query failed; asking for less at once",
+					"window", WindowName(step), "was", before,
+					"now", fmt.Sprintf("%d buckets × %d services", buckets, chunk),
 					"span", (step * time.Duration(buckets)).String(), "error", err.Error())
 				continue
 			}
@@ -530,4 +561,55 @@ func WindowName(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	}
+}
+
+// loadSizesOnce reads the learned query sizes, the first time it is asked.
+//
+// A failure is ignored on purpose: not knowing them makes the rollup slow to
+// settle, which is better than refusing to run.
+func (r *Recorder) loadSizesOnce(ctx context.Context) {
+	if r.sizesLoaded || r.opts.LoadSizes == nil {
+		return
+	}
+	r.sizesLoaded = true
+	sizes, err := r.opts.LoadSizes(ctx)
+	if err != nil {
+		return
+	}
+	for w, n := range sizes.Buckets {
+		if n > 0 {
+			if r.buckets == nil {
+				r.buckets = map[string]int{}
+			}
+			r.buckets[w] = n
+		}
+	}
+	for w, n := range sizes.Chunks {
+		if n > 0 {
+			if r.chunks == nil {
+				r.chunks = map[string]int{}
+			}
+			r.chunks[w] = n
+		}
+	}
+	if len(sizes.Buckets) > 0 || len(sizes.Chunks) > 0 {
+		r.opts.Log.Info("starting from the query sizes this storage answered before",
+			"buckets", sizes.Buckets, "services", sizes.Chunks)
+	}
+}
+
+// sizeFingerprint is a cheap way to notice that something was learned.
+func (r *Recorder) sizeFingerprint() string {
+	return fmt.Sprintf("%v|%v", r.buckets, r.chunks)
+}
+
+func copyInts(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

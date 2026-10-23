@@ -906,6 +906,12 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		SaveState: func(ctx context.Context, s servicetrends.State) error {
 			return servicetrends.SaveState(ctx, a.store, s)
 		},
+		LoadSizes: func(ctx context.Context) (servicetrends.Sizes, error) {
+			return servicetrends.LoadSizes(ctx, a.store)
+		},
+		SaveSizes: func(ctx context.Context, s servicetrends.Sizes) error {
+			return servicetrends.SaveSizes(ctx, a.store, s)
+		},
 		Base:         st.Interval.D(),
 		Backfill:     backfill,
 		DomainField:  st.DomainField,

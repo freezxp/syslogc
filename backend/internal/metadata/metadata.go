@@ -150,6 +150,12 @@ const (
 	// SettingServiceTrendState holds how far each resolution of the trend
 	// rollup has been recorded.
 	SettingServiceTrendState = "dns_service_trend_state"
+	// SettingServiceTrendSizes holds the query sizes the rollup learned this
+	// deployment's storage can actually answer. Kept so a restart does not
+	// rediscover them: every failed attempt costs a whole query timeout, and
+	// on a busy deployment walking the ladder again can consume a run's
+	// entire budget before anything is recorded.
+	SettingServiceTrendSizes = "dns_service_trend_sizes"
 )
 
 // ListAuditEvents filters the audit log. Times are exclusive of Before and

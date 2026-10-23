@@ -8,6 +8,34 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.6.0 — 2026-10-23
+
+### Fixed
+
+- **The rollup could spend a whole run discovering how small a query has to
+  be, and never record anything.** When a query was refused it halved the
+  time span, and only once that reached a single window did it start reducing
+  how many services one query counts. Every refusal costs a full query
+  timeout — two minutes by default — so on a deployment where both levers
+  have to move, the ladder consumed the run's entire thirty-minute budget
+  before anything was written. Observed on a deployment at tens of thousands
+  of queries a second: nothing recorded for three days.
+
+  Both levers now move together. They are not the same cost — the span
+  decides how many rows are read, the catalogue decides how much work each
+  row is — so exhausting one alone was never right. Measured on the test
+  fixture: two refusals instead of four.
+
+- **The learned query sizes now survive a restart.** They were held in memory,
+  so every upgrade threw away what the deployment had paid minutes of
+  timeouts to discover, and the ladder was walked again from the top.
+
+### Added
+
+- The rollup log now names the size it moved to, as "was 24 buckets × 27
+  services, now 12 × 14", so what it settled on is visible rather than
+  inferred.
+
 ## 1.5.4 — 2026-10-23
 
 ### Fixed

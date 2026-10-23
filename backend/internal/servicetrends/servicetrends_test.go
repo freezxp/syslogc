@@ -1091,3 +1091,124 @@ func TestProgressIsKeptEvenWhenAWindowCountsNothing(t *testing.T) {
 			"the backfill is being re-walked every run", again, firstRun)
 	}
 }
+
+// costlyQuerier refuses anything above a budget measured the way the storage
+// actually pays: rows read times the work done per row.
+type costlyQuerier struct {
+	fakeQuerier
+	affordable int // buckets × categories
+	attempts   int
+	// refusals is what actually costs: each one is a whole query timeout
+	// spent before anything is recorded.
+	refusals int
+}
+
+func (c *costlyQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	c.attempts++
+	buckets := int(q.Range.End.Sub(q.Range.Start) / q.Step)
+	if buckets < 1 {
+		buckets = 1
+	}
+	if buckets*len(q.Categories) > c.affordable {
+		c.refusals++
+		return nil, context.DeadlineExceeded
+	}
+	return c.fakeQuerier.CategoryCounts(ctx, q)
+}
+
+func manyServices(n int) []Service {
+	out := make([]Service, 0, n)
+	for i := range n {
+		out = append(out, Service{
+			Name: fmt.Sprintf("service-%02d", i), Domains: []string{fmt.Sprintf("s%d.example", i)}, Enabled: true,
+		})
+	}
+	return out
+}
+
+func recorderWithSizes(t *testing.T, q Querier, now time.Time, sizes *Sizes) *Recorder {
+	t.Helper()
+	state := State{}
+	r, err := NewRecorder(Options{
+		Querier:     q,
+		Writer:      &fakeWriter{},
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog:     func(context.Context) (Catalog, error) { return Catalog{Services: manyServices(27)}, nil },
+		LoadState:   func(context.Context) (State, error) { return state, nil },
+		SaveState:   func(_ context.Context, s State) error { state = s; return nil },
+		LoadSizes:   func(context.Context) (Sizes, error) { return *sizes, nil },
+		SaveSizes:   func(_ context.Context, s Sizes) error { *sizes = s; return nil },
+		Base:        5 * time.Minute,
+		Backfill:    2 * time.Hour,
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// Every failed attempt costs a whole query timeout, so the ladder has to
+// reach an affordable query in few steps. Walking the time lever to the
+// bottom before touching the catalogue spent a run's entire budget on
+// timeouts, which is what stopped a production rollup for three days.
+func TestTheLadderReachesAnAffordableQueryQuickly(t *testing.T) {
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	// 24 buckets × 27 services is the starting point; this storage can pay
+	// for about a tenth of it.
+	q := &costlyQuerier{affordable: 60}
+	sizes := &Sizes{}
+	if _, err := recorderWithSizes(t, q, now, sizes).Run(context.Background()); err != nil {
+		t.Fatalf("the rollup gave up: %v", err)
+	}
+	// Only a refused query costs a timeout. Moving both levers together
+	// reaches an affordable size in about four steps per scope; one lever at
+	// a time took three times that, which is what exhausted a run's budget
+	// before anything was recorded.
+	// Measured: both levers together refuses twice before finding a size it
+	// can pay for; one lever at a time refuses four times, and on the real
+	// deployment that stopped, the ladder was longer still.
+	const budget = 3
+	if q.refusals > budget {
+		t.Errorf("%d queries were refused before finding an affordable one; at a "+
+			"two-minute timeout each that is %d minutes before anything is recorded",
+			q.refusals, 2*q.refusals)
+	}
+	if sizes.Buckets["5m"] == 0 && sizes.Chunks["5m"] == 0 {
+		t.Error("nothing was learned, so the next restart pays for this again")
+	}
+}
+
+// And what it cost to learn has to survive a restart.
+func TestALearnedSizeSurvivesARestart(t *testing.T) {
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	sizes := &Sizes{}
+	first := &costlyQuerier{affordable: 60}
+	if _, err := recorderWithSizes(t, first, now, sizes).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	learning := first.attempts
+
+	// A new recorder, as a restart gives, handed the sizes that were stored.
+	later := now.Add(10 * time.Minute)
+	second := &costlyQuerier{affordable: 60}
+	if _, err := recorderWithSizes(t, second, later, sizes).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range second.queries {
+		buckets := int(q.Range.End.Sub(q.Range.Start) / q.Step)
+		if buckets < 1 {
+			buckets = 1
+		}
+		if buckets*len(q.Categories) > second.affordable {
+			t.Fatalf("after a restart it asked for %d×%d again, which this storage cannot answer",
+				buckets, len(q.Categories))
+		}
+	}
+	if second.attempts >= learning {
+		t.Errorf("a restart took %d attempts after the first took %d; the learned size was not used",
+			second.attempts, learning)
+	}
+}
