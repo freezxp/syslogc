@@ -8,6 +8,26 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.5.3 — 2026-10-23
+
+### Fixed
+
+- **An empty service-trends chart now says which of the several possible
+  reasons it is.** It only ever distinguished two — no field in the logs, or
+  a window that keeps failing — and fell through to "a new deployment fills
+  in from the oldest logs it was asked to backfill", which is wrong and
+  misleading advice on a deployment that has been running for weeks.
+
+  It now reports: no metrics store; the rollup switched off; a catalogue with
+  nothing enabled; and the one that fails in silence —
+  `analytics.service_trends.sources` naming a source the field never arrives
+  on, so every query runs, matches nothing, and records zero without erroring.
+  A source renamed, or adopted into the database under a different name, is
+  enough to cause it.
+
+  `scripts/check-dns-trends.sh` gained the same check, so it can be diagnosed
+  without upgrading first.
+
 ## 1.5.2 — 2026-10-21
 
 ### Fixed

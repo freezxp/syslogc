@@ -11,6 +11,7 @@ import (
 	"github.com/freezxp/syslogc/backend/internal/metricstore"
 	"github.com/freezxp/syslogc/backend/internal/query"
 	"github.com/freezxp/syslogc/backend/internal/servicetrends"
+	"github.com/freezxp/syslogc/backend/internal/storage/filter"
 )
 
 // serviceTrendWindows are the resolutions the rollup records. A chart may
@@ -292,6 +293,16 @@ func (s *Server) emptyTrendHint(r *http.Request, p *auth.Principal, window strin
 	if domain == "" {
 		domain = "dns.qname"
 	}
+	// Nothing can have been recorded if nothing is doing the recording, and
+	// that is a configuration answer rather than a waiting one.
+	if s.opts.API.MetricsStore == nil {
+		return "There is no metrics store, so nothing is being recorded. Set analytics.metrics.url " +
+			"to a VictoriaMetrics instance and restart."
+	}
+	if !cfg.Enabled {
+		return "The rollup is switched off, so nothing is being recorded. Set " +
+			"analytics.service_trends.enabled and restart."
+	}
 	if s.opts.API.Query == nil {
 		return ""
 	}
@@ -329,6 +340,77 @@ func (s *Server) emptyTrendHint(r *http.Request, p *auth.Principal, window strin
 				"recorded\", which carries the storage's own reason.", window, window)
 		}
 	}
+	// The field exists, the rollup is on and is not failing — so the counting
+	// is happening and finding nothing. Two settings can cause that, and both
+	// are silent: a restriction to sources the field does not arrive on, and
+	// a catalogue with nothing enabled in it.
+	if hint := s.trendScopeHint(r, p, domain, cfg.Sources); hint != "" {
+		return hint
+	}
+	if s.opts.API.Store != nil {
+		if catalog, err := servicetrends.LoadCatalog(r.Context(), s.opts.API.Store); err == nil {
+			enabled := 0
+			for _, svc := range catalog.Services {
+				if svc.Enabled {
+					enabled++
+				}
+			}
+			if enabled == 0 {
+				return "No service in the catalogue is enabled, so there is nothing to count. Turn some on " +
+					"under Analytics → Services; the rollup will fill the window in on its next run."
+			}
+		}
+	}
 	return "Nothing has been recorded for this window yet. The rollup records a window once it has fully " +
-		"elapsed, so a new deployment fills in from the oldest logs it was asked to backfill."
+		"elapsed, so a deployment that has just started, or has just been given a longer window, fills in " +
+		"from the oldest logs it was asked to backfill. If this deployment has been running for longer than " +
+		"that, look in the server log for \"service trends recorded\" — if it is not there every few " +
+		"minutes, the rollup is not running at all."
+}
+
+// trendScopeHint reports whether the rollup is restricted to sources that the
+// domain field does not actually arrive on.
+//
+// analytics.service_trends.sources exists to keep the rollup off sources that
+// cannot answer it, and it fails silently in the worst way: the queries run,
+// match nothing, and record zero without erroring. A source renamed, or
+// adopted into the database under a different name, is enough to cause it.
+func (s *Server) trendScopeHint(r *http.Request, p *auth.Principal, domain string, sources []string) string {
+	if len(sources) == 0 || s.opts.API.Query == nil {
+		return ""
+	}
+	// Which sources have actually produced the field lately.
+	res, err := s.opts.API.Query.Stats(r.Context(), p, query.StatsRequest{
+		Selection: query.Selection{
+			TimeRange: query.TimeRange{From: "now-1h", To: "now"},
+			Filter:    &filter.Expr{Op: filter.Exists, Field: domain},
+		},
+		Aggregations: []query.Aggregation{{Type: "top", Field: "source", Limit: 20}},
+	})
+	if err != nil {
+		return ""
+	}
+	carrying := map[string]bool{}
+	var names []string
+	for _, row := range res.Results {
+		for _, v := range row.Values {
+			if v.Value != "" && !carrying[v.Value] {
+				carrying[v.Value] = true
+				names = append(names, v.Value)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	for _, want := range sources {
+		if carrying[want] {
+			return ""
+		}
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("The rollup is restricted to %s, but %s is arriving on %s instead, so every count "+
+		"comes out empty. Change analytics.service_trends.sources to name the source the logs actually "+
+		"arrive on, or remove the setting to count them all.",
+		strings.Join(sources, ", "), domain, strings.Join(names, ", "))
 }

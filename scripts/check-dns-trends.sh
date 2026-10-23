@@ -83,6 +83,56 @@ if d.get("problem"):
 sys.exit(0 if on and d.get("recording") else 3)
 ' && ok "the catalog has enabled services and the rollup is running" || bad "no enabled services, or no metrics store configured (check the victoriametrics container)"
 
+# --- 3b. is the rollup looking at the sources the field arrives on? -----------
+# analytics.service_trends.sources keeps the rollup off sources that cannot
+# answer it. It fails silently in the worst way: the queries run, match
+# nothing, and record zero without erroring. A renamed source, or one adopted
+# into the database under a different name, is enough to cause it.
+step "3b. Scope"
+RESTRICTED="$(api GET /api/v1/system/config | python3 -c '
+import sys, json, re
+# The endpoint returns the effective configuration as YAML text, not as a
+# structure, and PyYAML is not something this script may assume is installed.
+try:
+    y = json.load(sys.stdin).get("yaml", "")
+except Exception:
+    print(""); raise SystemExit
+block = re.search(r"^    service_trends:\n((?:^        .*\n|^\n)*)", y, re.M)
+if not block:
+    print(""); raise SystemExit
+names = re.findall(r"^            - (.+)$", block.group(1), re.M)
+print(",".join(n.strip() for n in names))
+' 2>/dev/null)"
+if [[ -z "$RESTRICTED" ]]; then
+  ok "the rollup counts every source (analytics.service_trends.sources is unset)"
+else
+  SCOPE_QUERY='{"time_range":{"from":"now-1h","to":"now"},"filter":{"op":"exists","field":"dns.qname"},"aggregations":[{"type":"top","field":"source","limit":20}]}'
+  CARRYING="$(api POST /api/v1/logs/stats "$SCOPE_QUERY" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+names = []
+for r in d.get("results", []):
+    for v in r.get("values", []):
+        if v.get("value") and v["value"] not in names:
+            names.append(v["value"])
+print(",".join(names))
+' 2>/dev/null)"
+  printf '    restricted to: %s\n' "$RESTRICTED"
+  printf '    field arrives on: %s\n' "${CARRYING:-nothing in the last hour}"
+  if [[ -z "$CARRYING" ]]; then
+    warn "no source produced dns.qname in the last hour, so this cannot be judged"
+  elif python3 -c "
+import sys
+want=set('$RESTRICTED'.split(','))
+have=set('$CARRYING'.split(','))
+sys.exit(0 if want & have else 1)"; then
+    ok "the restriction names a source the field actually arrives on"
+  else
+    bad "the rollup is restricted to sources the field never arrives on, so every count is empty"
+    printf '      fix: set analytics.service_trends.sources to %s, or remove the setting\n' "$CARRYING"
+  fi
+fi
+
 # --- 4. has the rollup recorded anything? -------------------------------------
 step "4. Recorded counts"
 api POST /api/v1/analytics/service-trends \
