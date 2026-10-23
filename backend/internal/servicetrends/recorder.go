@@ -236,6 +236,7 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 
 	now := r.opts.Now().UTC()
 	written := 0
+	advanced := false
 	var errs []error
 	for _, step := range r.Resolutions() {
 		window := WindowName(step)
@@ -272,10 +273,20 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 		// grows with every run until nothing finishes at all.
 		if !upto.IsZero() {
 			state[window] = upto
+			advanced = true
 		}
 		r.note(window, upto, errAll != nil)
 	}
-	if r.opts.SaveState != nil && written > 0 {
+	// Saved whenever a window moved, not only when samples came out of it.
+	//
+	// A window can be counted correctly and yield nothing — an hour in which
+	// no client reached any catalogued service is a real answer, and so is
+	// every window on a deployment whose services are all quiet. Keying the
+	// save on samples meant progress through those windows was thrown away,
+	// so the next run began at the same place, covered a wider range, and
+	// took longer; eventually a run could not finish inside its budget and
+	// the rollup made no progress at all, for ever, without an error.
+	if r.opts.SaveState != nil && advanced {
 		if err := r.opts.SaveState(ctx, state); err != nil {
 			errs = append(errs, fmt.Errorf("saving the rollup state: %w", err))
 		}

@@ -973,15 +973,29 @@ func (a *App) recordServiceTrends(ctx context.Context) {
 		// A backfill can walk a lot of history, so it gets room; each query
 		// inside is bounded separately, and the rollup is idempotent, so a
 		// timeout only postpones work.
-		cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		cctx, cancel := context.WithTimeout(ctx, runBudget)
 		defer cancel()
 		start := time.Now()
 		written, err := a.trends.Run(cctx)
+		took := time.Since(start).Round(time.Millisecond)
 		switch {
-		case err != nil && cctx.Err() == nil:
-			a.log.Warn("the service trend rollup failed", "error", err)
-		case written > 0:
-			a.log.Info("service trends recorded", "samples", written, "took", time.Since(start).Round(time.Millisecond))
+		case cctx.Err() != nil && ctx.Err() == nil:
+			// The run hit its own deadline. This used to log nothing at all,
+			// which is the worst case to be silent about: the rollup goes on
+			// starting, timing out and recording nothing every interval, and
+			// the only symptom anywhere is an empty chart.
+			a.log.Warn("the service trend rollup ran out of time and was stopped; "+
+				"it will start again next interval and may never finish. Shorten "+
+				"analytics.service_trends.backfill, or widen analytics.service_trends.query_timeout",
+				"took", took, "samples", written, "budget", runBudget)
+		case err != nil:
+			a.log.Warn("the service trend rollup failed", "error", err, "took", took, "samples", written)
+		default:
+			// Logged even when nothing was written. "Is the rollup running?"
+			// has to be answerable from the log, and a line only on success
+			// makes a rollup that finds nothing indistinguishable from one
+			// that is not running.
+			a.log.Info("service trends recorded", "samples", written, "took", took)
 		}
 	}
 	run()
@@ -1035,3 +1049,8 @@ func (a *App) wireAssistant() {
 	a.assistant = client
 	a.log.Info("assistant ready", "endpoint", client.Endpoint(), "model", client.Model())
 }
+
+// runBudget bounds one rollup run. A backfill can walk a lot of history, so
+// it is generous; each query inside is bounded separately, and the rollup is
+// idempotent, so stopping one only postpones work.
+const runBudget = 30 * time.Minute

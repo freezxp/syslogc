@@ -1007,3 +1007,87 @@ func TestARollupAsksForFewerServicesWhenTimeCannotShrinkFurther(t *testing.T) {
 		t.Errorf("recorded %d services in the hourly window, want all %d", len(seen), len(services))
 	}
 }
+
+// silentQuerier counts correctly and finds nothing, which is a real answer:
+// an hour in which no client reached any catalogued service.
+type silentQuerier struct{ queries int }
+
+func (s *silentQuerier) CategoryCounts(context.Context, storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	s.queries++
+	return nil, nil
+}
+
+// Progress has to be kept even when a window produced no samples.
+//
+// Keying the save on samples written meant a deployment whose services were
+// all quiet threw away its progress on every run: the next one began at the
+// same place, covered a wider range and took longer, until eventually a run
+// could not finish inside its budget — and the rollup then made no progress
+// at all, indefinitely, without ever reporting an error.
+func TestProgressIsKeptEvenWhenAWindowCountsNothing(t *testing.T) {
+	now := time.Date(2026, 10, 23, 7, 0, 0, 0, time.UTC)
+	q := &silentQuerier{}
+
+	// The state is held the way a real deployment holds it: LoadState hands
+	// back a copy, so only what SaveState persisted survives to the next run.
+	// Sharing one map lets a recorder that never saves look as though it had,
+	// because it mutated the very map it is handed next time.
+	var persisted State
+	loads := func(context.Context) (State, error) {
+		out := State{}
+		for k, v := range persisted {
+			out[k] = v
+		}
+		return out, nil
+	}
+	saves := func(_ context.Context, s State) error {
+		persisted = State{}
+		for k, v := range s {
+			persisted[k] = v
+		}
+		return nil
+	}
+	r, err := NewRecorder(Options{
+		Querier: q,
+		Writer:  &fakeWriter{},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog: func(context.Context) (Catalog, error) {
+			return Catalog{Services: []Service{{Name: "tiktok", Domains: []string{"tiktok.com"}, Enabled: true}}}, nil
+		},
+		LoadState:   loads,
+		SaveState:   saves,
+		Base:        5 * time.Minute,
+		Backfill:    6 * time.Hour,
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	written, err := r.Run(context.Background())
+	if err != nil {
+		t.Fatalf("a run that found nothing reported an error: %v", err)
+	}
+	if written != 0 {
+		t.Fatalf("wrote %d samples from a querier that returns none", written)
+	}
+	if persisted["5m"].IsZero() {
+		t.Fatal("progress through the backfill was not persisted, so the next run redoes it")
+	}
+	firstRun := q.queries
+	if firstRun == 0 {
+		t.Fatal("the first run asked nothing")
+	}
+
+	// The same clock, so there is no new window to record. A second run must
+	// cost almost nothing rather than walking the backfill again.
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatalf("the second run failed: %v", err)
+	}
+	if again := q.queries - firstRun; again >= firstRun {
+		t.Errorf("the second run asked %d queries after the first asked %d; "+
+			"the backfill is being re-walked every run", again, firstRun)
+	}
+}

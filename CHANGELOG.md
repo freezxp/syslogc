@@ -8,6 +8,27 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.5.4 — 2026-10-23
+
+### Fixed
+
+- **The rollup could stop recording for good, in silence.** Progress through
+  the windows was persisted only when a run produced samples. A window can be
+  counted correctly and yield nothing — an hour in which no client reached a
+  catalogued service is a real answer — so on a quiet deployment the progress
+  was thrown away each time, the next run began at the same place over a
+  wider range, and eventually a run could not finish inside its budget. From
+  then on nothing was ever recorded, and no error was reported at any point.
+  Progress is now kept whenever a window moves.
+- **A rollup run that timed out logged nothing at all.** The one case that
+  most needed saying was the one case excluded, so the symptom was an empty
+  chart and an empty log. It now says so, and names the two settings that
+  change it.
+- **A run is logged even when it records nothing**, so "is the rollup
+  running?" is answerable from the log. Previously only a run that wrote
+  samples said anything, which makes a rollup finding nothing
+  indistinguishable from one that is not running.
+
 ## 1.5.3 — 2026-10-23
 
 ### Fixed
