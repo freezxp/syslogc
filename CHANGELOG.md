@@ -8,6 +8,25 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.7.0 — 2026-10-23
+
+### Added
+
+- **`./deploy.sh --reset-trends`** clears what the service-trend rollup
+  remembered — the query sizes it learned and how far each window has been
+  recorded — and restarts it. `--reset-trend-sizes` clears only the sizes.
+  The same thing is available in the container as `syslogc reset-trends`.
+
+  It prints what it is throwing away before it does, so a size learned
+  wrongly is on the record rather than merely gone.
+
+  Clearing is safe: a count recorded again replaces itself rather than adding
+  up, and the refill is bounded by the backfill, itself trimmed to the
+  retention period, so it cannot reach for logs that no longer exist.
+
+  This is for the case 1.6.2 describes — a size learned from a run that was
+  already out of time, which the rollup would otherwise keep starting from.
+
 ## 1.6.2 — 2026-10-23
 
 ### Fixed

@@ -34,6 +34,7 @@ BACKUP=true
 REF=""
 TREND_BACKFILL=""
 TREND_QUERY_TIMEOUT=""
+RESET_TRENDS=""
 
 usage() {
   sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -69,6 +70,13 @@ Options:
                        backfill is re-walked on every start, so a deployment
                        that cannot keep up should shorten it until it has
                        caught up.
+  --reset-trends       Clear what the service-trend rollup remembered — the
+                       query sizes it learned and how far each window has
+                       been recorded — and restart it. Counts that are
+                       recorded again replace themselves, so nothing is
+                       double-counted.
+  --reset-trend-sizes  Clear only the learned query sizes, keeping how far
+                       each window has been recorded.
   --trend-query-timeout DURATION
                        How long one rollup query may run, e.g. 4m. Each query
                        that overruns costs this whole duration before the
@@ -99,6 +107,8 @@ while [[ $# -gt 0 ]]; do
     --ref) REF="${2:?--ref needs a tag or branch}"; shift 2 ;;
     --trend-backfill) TREND_BACKFILL="${2:?--trend-backfill needs a duration}"; shift 2 ;;
     --trend-query-timeout) TREND_QUERY_TIMEOUT="${2:?--trend-query-timeout needs a duration}"; shift 2 ;;
+    --reset-trends) RESET_TRENDS="all"; ACTION="reset-trends"; shift ;;
+    --reset-trend-sizes) RESET_TRENDS="sizes"; ACTION="reset-trends"; shift ;;
     --no-backup) BACKUP=false; shift ;;
     --status) ACTION="status"; shift ;;
     --stop) ACTION="stop"; shift ;;
@@ -150,6 +160,21 @@ case "$ACTION" in
     else
       warn "not ready yet"
     fi
+    exit 0
+    ;;
+  reset-trends)
+    command -v docker >/dev/null || die "Docker is not installed; run ./deploy.sh first"
+    step "Clearing what the rollup remembered"
+    args=(reset-trends)
+    [[ "$RESET_TRENDS" == "sizes" ]] && args+=(--sizes)
+    # Run inside the running container so it reads the same configuration the
+    # server does, and reaches the database the same way.
+    if ! docker_compose exec -T syslogc /usr/local/bin/syslogc "${args[@]}"; then
+      die "could not clear it; is the stack running? (./deploy.sh --status)"
+    fi
+    docker_compose restart syslogc >/dev/null 2>&1 ||
+      warn "could not restart syslogc; restart it yourself for this to take effect"
+    ok "restarted; watch it settle with: docker compose logs -f syslogc | grep -i 'service trend'"
     exit 0
     ;;
   upgrade)

@@ -52,6 +52,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return healthcheck(args[1:], stderr)
 	case "reset-password":
 		return resetPassword(args[1:], stdout, stderr)
+	case "reset-trends":
+		return resetTrends(args[1:], stdout, stderr)
 	case "init-secrets":
 		return initSecrets(args[1:], stdout, stderr)
 	case "version", "--version", "-v":
@@ -75,6 +77,8 @@ Commands:
   config print          Print the effective configuration as YAML
   healthcheck           Probe a running server's /health endpoint (for container health checks)
   reset-password        Set an account's password from the host, for when the initial one is lost
+  reset-trends          Clear what the service-trend rollup remembered: the query sizes it
+                        learned, and how far each window has been recorded
   init-secrets          Create missing secrets (database password, DSN, signing key) in a directory
   version               Print version information
 

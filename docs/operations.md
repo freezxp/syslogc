@@ -356,6 +356,34 @@ first (see [above](#moving-a-configuration-file-source-into-the-ui)) — that
 copies it into the database so extract rules can be edited without touching
 YAML on every node.
 
+### Starting it over
+
+The rollup remembers two things, and either can be wrong in a way it cannot
+work out for itself: the query sizes it learned this storage can answer, and
+how far each window has been recorded.
+
+```sh
+./deploy.sh --reset-trends        # clear both, and restart
+./deploy.sh --reset-trend-sizes   # clear only the learned sizes
+```
+
+It prints what it is throwing away before it does, so a bad size is on the
+record rather than merely gone.
+
+Clearing is safe. A count that is recorded again replaces itself rather than
+adding up, and the refill is bounded by the backfill, itself trimmed to the
+retention period — so it cannot reach for logs that no longer exist.
+
+Clear the **sizes** when a size was learned from a run that was already out
+of time: every query in such a run fails instantly, which reads like a query
+that was too big, and the smallest size gets remembered as though it had been
+measured. The symptom is a log line saying it is starting from one service
+per query, which is the slowest thing it can do.
+
+Clear the **state** when a window is further behind than the logs go and you
+want it to stop trying. It skips forward on its own now, so this is rarely
+needed.
+
 ### Tuning it from the command line
 
 Two settings decide whether the rollup can keep up, and both can be applied
