@@ -304,9 +304,17 @@ func newEnv(t *testing.T) *env {
 		"assets/app-1.js": {Data: []byte("console.log(1)")},
 	}
 	deps := &APIDeps{Auth: authSvc, Store: store, Query: qs, Storage: fakeBackend{}, WebUI: ui,
-		Retention:    func() any { return map[string]string{"status": "in_sync"} },
-		FileSources:  []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
-		Config:       config.Config{Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)}},
+		Retention:   func() any { return map[string]string{"status": "in_sync"} },
+		FileSources: []config.Source{sc, {Name: "syslog-udp", Type: "syslog", Protocol: "udp", Address: ":5514"}},
+		// The rollup enabled, as the shipped defaults have it. A test
+		// environment with it switched off exercises the wrong explanation
+		// for an empty chart, and nothing else would have noticed.
+		Config: config.Config{
+			Retention: config.RetentionConfig{Period: config.Duration(30 * 24 * time.Hour)},
+			Analytics: config.AnalyticsConfig{
+				ServiceTrends: config.ServiceTrendsConfig{Enabled: true, DomainField: "dns.qname"},
+			},
+		},
 		MetricsStore: trends}
 	server := New(Options{
 		Metrics: m, Log: log, NodeID: "n1", Version: "test", Roles: []string{"all"},
