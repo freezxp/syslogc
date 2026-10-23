@@ -8,6 +8,28 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.6.2 — 2026-10-23
+
+### Fixed
+
+- **A rollup that fell further behind than the logs are kept ground through
+  windows it could never count.** The backfill was already trimmed to the
+  retention period, but catching up from stored state was not: a deployment
+  whose rollup had been failing since a fortnight ago, keeping logs for two
+  days, spent every run walking twelve days of windows whose logs had been
+  deleted. It now skips forward and says so. Counting them was also wrong in
+  itself — a window with no logs left counts zero, and a zero reads as quiet
+  traffic rather than as missing data.
+
+- **A run that had used its budget treated every remaining failure as a query
+  that was too big.** Once the run's own deadline passed, each query failed
+  instantly, the ladder walked the whole way down inside a millisecond, and
+  "one service per query" was persisted as though it had been learned — so
+  the next run began by asking for one service at a time. It now stops when
+  the budget is gone rather than drawing conclusions from it.
+
+  This was introduced by the size-learning added in 1.6.0.
+
 ## 1.6.1 — 2026-10-23
 
 ### Added

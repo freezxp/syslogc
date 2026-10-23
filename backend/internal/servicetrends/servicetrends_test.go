@@ -1105,6 +1105,11 @@ type costlyQuerier struct {
 
 func (c *costlyQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
 	c.attempts++
+	// A real backend answers a dead context with its error, which is what
+	// makes a run that is out of time look like a query that was too big.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	buckets := int(q.Range.End.Sub(q.Range.Start) / q.Step)
 	if buckets < 1 {
 		buckets = 1
@@ -1210,5 +1215,80 @@ func TestALearnedSizeSurvivesARestart(t *testing.T) {
 	if second.attempts >= learning {
 		t.Errorf("a restart took %d attempts after the first took %d; the learned size was not used",
 			second.attempts, learning)
+	}
+}
+
+// A run that has spent its budget fails every remaining query instantly, and
+// that is not the storage saying the query was too big.
+//
+// Observed on a deployment at scale: once the run's own deadline passed, the
+// ladder walked 27 → 14 → 7 → 4 → 2 → 1 services inside a single millisecond
+// and persisted "1 service per query" as a size that had been learned. The
+// next run then started by asking for one service at a time.
+func TestAnExhaustedRunDoesNotLearnFromItsOwnDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 23, 15, 0, 0, 0, time.UTC)
+	sizes := &Sizes{}
+	// Everything is affordable; the run is simply out of time.
+	q := &costlyQuerier{affordable: 1 << 20}
+	r := recorderWithSizes(t, q, now, sizes)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the run's budget is already gone
+
+	if _, err := r.Run(ctx); err == nil {
+		t.Fatal("a cancelled run reported success")
+	}
+	if q.attempts > 2 {
+		t.Errorf("made %d attempts after the budget was gone; it should stop, not walk the ladder", q.attempts)
+	}
+	if n := sizes.Chunks["5m"]; n != 0 {
+		t.Errorf("persisted a learned size of %d services from a cancelled run; "+
+			"the next run would start there", n)
+	}
+	if n := sizes.Buckets["5m"]; n != 0 {
+		t.Errorf("persisted a learned size of %d buckets from a cancelled run", n)
+	}
+}
+
+// A rollup that stopped for longer than the logs are kept cannot recover
+// those windows: the logs are deleted. Walking them wastes every run, and
+// records zeros that read as quiet traffic rather than as missing data.
+func TestItDoesNotCountWindowsWhoseLogsAreGone(t *testing.T) {
+	now := time.Date(2026, 10, 23, 15, 0, 0, 0, time.UTC)
+	q := &fakeQuerier{}
+	// State says the last hourly window recorded was a fortnight ago, which
+	// is what a rollup that has been failing since then looks like.
+	state := State{"1h": now.Add(-14 * 24 * time.Hour)}
+	r, err := NewRecorder(Options{
+		Querier: q,
+		Writer:  &fakeWriter{},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog: func(context.Context) (Catalog, error) {
+			return Catalog{Services: []Service{{Name: "tiktok", Domains: []string{"tiktok.com"}, Enabled: true}}}, nil
+		},
+		LoadState:   func(context.Context) (State, error) { return state, nil },
+		SaveState:   func(_ context.Context, s State) error { state = s; return nil },
+		Base:        5 * time.Minute,
+		Backfill:    time.Hour,
+		MaxAge:      48 * time.Hour, // logs are kept two days
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	oldest := now.Add(-48 * time.Hour)
+	for _, got := range q.queries {
+		if got.Range.Start.Before(oldest) {
+			t.Fatalf("asked for %s, which is older than the %s the logs are kept for",
+				got.Range.Start.Format(time.RFC3339), (48 * time.Hour).String())
+		}
+	}
+	if len(q.queries) == 0 {
+		t.Fatal("skipped forward so far that it asked for nothing at all")
 	}
 }

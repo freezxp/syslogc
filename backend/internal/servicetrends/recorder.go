@@ -99,6 +99,12 @@ type Options struct {
 	Base time.Duration
 	// Backfill is how far back to start when a resolution has no state.
 	Backfill time.Duration
+	// MaxAge is the oldest window worth counting: the period the logs are
+	// kept for. Beyond it the logs have been deleted, so a count would be a
+	// zero standing in for an unknown — and a rollup that has fallen further
+	// behind than this would spend every run grinding through windows that
+	// can never produce anything.
+	MaxAge time.Duration
 	// Tenant selects which tenant's logs are counted.
 	Tenant string
 	// DomainField and ClientField name the fields to read.
@@ -367,6 +373,18 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		from = now.Add(-r.opts.Backfill).Truncate(step)
 	}
 	from = from.Truncate(step)
+	// Never reach further back than the logs go. A rollup that stopped for
+	// longer than the retention period cannot recover those windows, and
+	// walking them produces zeros that look like quiet traffic rather than
+	// like missing data.
+	if r.opts.MaxAge > 0 {
+		if oldest := now.Add(-r.opts.MaxAge).Truncate(step); from.Before(oldest) {
+			r.opts.Log.Info("skipping forward: the logs for those windows are gone",
+				"window", WindowName(step), "from", from.Format(time.RFC3339),
+				"to", oldest.Format(time.RFC3339), "retention", r.opts.MaxAge.String())
+			from = oldest
+		}
+	}
 	if !from.Before(end) {
 		return 0, time.Time{}, nil
 	}
@@ -400,6 +418,15 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 			// query counts at once. Each service is its own count_uniq
 			// accumulator over every row in the window, and on a busy
 			// deployment the whole catalogue in one pass is what breaks.
+			// A run that has used its budget fails every query instantly, and
+			// that is not the storage saying the query was too big. Shrinking
+			// on it walks the whole ladder in microseconds and then persists
+			// the smallest size as though it had been learned, so the next
+			// run starts by asking for one service at a time. Stop instead.
+			if ctx.Err() != nil {
+				return written, recorded, fmt.Errorf("counting %s windows from %s: %w",
+					WindowName(step), start.Format(time.RFC3339), ctx.Err())
+			}
 			switch {
 			case (buckets > 1 || chunk > 1) && shrinks < maxShrinkAttempts:
 				// Both levers move together, because every failed attempt

@@ -912,8 +912,10 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		SaveSizes: func(ctx context.Context, s servicetrends.Sizes) error {
 			return servicetrends.SaveSizes(ctx, a.store, s)
 		},
-		Base:         st.Interval.D(),
-		Backfill:     backfill,
+		Base:     st.Interval.D(),
+		Backfill: backfill,
+		// Windows older than the retention period have no logs left to count.
+		MaxAge:       a.cfg.Retention.Period.D(),
 		DomainField:  st.DomainField,
 		ClientField:  st.ClientField,
 		Sources:      st.Sources,
