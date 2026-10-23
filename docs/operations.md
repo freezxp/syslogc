@@ -356,6 +356,36 @@ first (see [above](#moving-a-configuration-file-source-into-the-ui)) — that
 copies it into the database so extract rules can be edited without touching
 YAML on every node.
 
+### Tuning it from the command line
+
+Two settings decide whether the rollup can keep up, and both can be applied
+without editing a configuration file:
+
+```sh
+./deploy.sh --upgrade --trend-backfill 1h --trend-query-timeout 4m
+```
+
+They are written to `deploy/compose/overrides.env` as `SYSLOGC_*` variables,
+which beat the YAML file — so the setting takes effect whatever the
+configuration says. That file is untracked, so an upgrade never fights it.
+Delete a line to go back to what the YAML says; `./deploy.sh --help` lists
+both flags.
+
+**backfill** is how much history the rollup fills in for a window it has no
+record of. It is walked again from that point on every start, so a deployment
+that cannot keep up should shorten it until it has caught up — an hour is
+enough to be current — and lengthen it afterwards if the history matters.
+
+**query_timeout** is how long one rollup query may run. Every query that
+overruns costs this whole duration before a smaller one is tried, so too
+short is as expensive as too long: a query that would have finished in two
+and a half minutes, cut off at two, costs two minutes and produces nothing.
+
+Neither can be set to an empty value by accident. An empty `SYSLOGC_*`
+variable is not ignored — it reads as zero, and a zero backfill records
+nothing at all — so clearing a flag removes the line rather than writing it
+empty.
+
 ### Watching that it keeps up
 
 A rollup that stops loses data permanently once the logs behind it age out,

@@ -22,3 +22,6 @@ backend/internal/api/webui/dist/*
 
 # Backups written by ./deploy.sh --upgrade
 backups/
+
+# Settings written by deploy.sh; never tracked, so upgrades leave them alone.
+deploy/compose/overrides.env

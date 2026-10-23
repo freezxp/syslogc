@@ -8,6 +8,25 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.6.1 — 2026-10-23
+
+### Added
+
+- `./deploy.sh --trend-backfill` and `--trend-query-timeout`, so the two
+  settings that decide whether the rollup keeps up can be applied with the
+  upgrade rather than by editing a configuration file:
+
+  ```sh
+  ./deploy.sh --upgrade --ref v1.6.1 --trend-backfill 1h --trend-query-timeout 4m
+  ```
+
+  They are written to `deploy/compose/overrides.env` as `SYSLOGC_*`
+  variables, which beat the YAML file, so the setting takes effect whatever
+  the configuration says. The file is untracked, so an upgrade never fights
+  it, and clearing a flag removes the line rather than writing an empty one —
+  an empty `SYSLOGC_*` variable is read as a zero, and a zero backfill
+  records nothing at all.
+
 ## 1.6.0 — 2026-10-23
 
 ### Fixed

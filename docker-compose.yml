@@ -60,6 +60,13 @@ services:
       SYSLOGC_SERVER_HTTP_TRUSTED_PROXIES: ${SYSLOGC_TRUSTED_PROXIES:-}
       # Where rolled-up measurements are stored; empty disables the rollups.
       SYSLOGC_ANALYTICS_METRICS_URL: ${SYSLOGC_METRICS_URL-http://victoriametrics:8428}
+    env_file:
+      # Settings written by ./deploy.sh (see --trend-backfill). Untracked, so
+      # an upgrade never fights it, and absent until something writes one.
+      # SYSLOGC_* here beats the YAML file, which is what makes a setting
+      # applied from the command line actually take effect.
+      - path: ./deploy/compose/overrides.env
+        required: false
     volumes:
       # Settings of your own belong in a copy that upgrades do not touch:
       #   cp deploy/compose/syslogc.yaml deploy/compose/syslogc.local.yaml

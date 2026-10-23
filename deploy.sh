@@ -32,6 +32,8 @@ ASSUME_YES=false
 OPEN_FIREWALL=true
 BACKUP=true
 REF=""
+TREND_BACKFILL=""
+TREND_QUERY_TIMEOUT=""
 
 usage() {
   sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -61,6 +63,17 @@ Options:
   --ref TAG            With --upgrade, deploy this release instead of
                        following the branch, e.g. --ref v1.2.0. The checkout
                        is pinned to it, so it cannot drift.
+  --trend-backfill DURATION
+                       How much history the service-trend rollup fills in
+                       when it has no record of a window, e.g. 1h. A long
+                       backfill is re-walked on every start, so a deployment
+                       that cannot keep up should shorten it until it has
+                       caught up.
+  --trend-query-timeout DURATION
+                       How long one rollup query may run, e.g. 4m. Each query
+                       that overruns costs this whole duration before the
+                       rollup tries a smaller one, so too short is as
+                       expensive as too long.
   --no-backup          Skip the metadata backup an upgrade takes first.
   --status             Show what is running and exit.
   --stop               Stop the stack (data is kept) and exit.
@@ -84,6 +97,8 @@ while [[ $# -gt 0 ]]; do
     --yes|-y) ASSUME_YES=true; shift ;;
     --upgrade) ACTION="upgrade"; shift ;;
     --ref) REF="${2:?--ref needs a tag or branch}"; shift 2 ;;
+    --trend-backfill) TREND_BACKFILL="${2:?--trend-backfill needs a duration}"; shift 2 ;;
+    --trend-query-timeout) TREND_QUERY_TIMEOUT="${2:?--trend-query-timeout needs a duration}"; shift 2 ;;
     --no-backup) BACKUP=false; shift ;;
     --status) ACTION="status"; shift ;;
     --stop) ACTION="stop"; shift ;;
@@ -288,6 +303,28 @@ set_env() {
   fi
   printf '%s=%s\n' "$key" "$value" >> .env
 }
+# OVERRIDES holds settings written from the command line. They are passed to
+# the container as SYSLOGC_* environment variables, which beat the YAML file,
+# so a setting applied here takes effect whatever the config says. The file is
+# untracked, so an upgrade never fights it.
+OVERRIDES="deploy/compose/overrides.env"
+
+# set_override writes KEY=VALUE, replacing any previous value. An empty value
+# removes the key entirely rather than writing an empty one: an empty
+# SYSLOGC_* variable is not ignored, it is read as a zero, and a zero backfill
+# means the rollup fills in nothing at all.
+set_override() {
+  local key="$1" value="$2"
+  [[ -f "$OVERRIDES" ]] || {
+    printf '# Settings written by ./deploy.sh. Delete a line to go back to\n' > "$OVERRIDES"
+    printf '# whatever the YAML configuration says.\n' >> "$OVERRIDES"
+  }
+  sed -i "/^${key}=/d" "$OVERRIDES"
+  if [[ -n "$value" ]]; then
+    printf '%s=%s\n' "$key" "$value" >> "$OVERRIDES"
+  fi
+}
+
 # force_env replaces a value, for settings that must win over what is there.
 force_env() {
   sed -i "/^$1=/d" .env
@@ -357,6 +394,15 @@ else
   force_env SYSLOGC_VERSION "$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)"
   force_env SYSLOGC_COMMIT "$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 fi
+if [[ -n "$TREND_BACKFILL" ]]; then
+  set_override SYSLOGC_ANALYTICS_SERVICE_TRENDS_BACKFILL "$TREND_BACKFILL"
+  ok "service-trend backfill set to $TREND_BACKFILL"
+fi
+if [[ -n "$TREND_QUERY_TIMEOUT" ]]; then
+  set_override SYSLOGC_ANALYTICS_SERVICE_TRENDS_QUERY_TIMEOUT "$TREND_QUERY_TIMEOUT"
+  ok "service-trend query timeout set to $TREND_QUERY_TIMEOUT"
+fi
+[[ -f "$OVERRIDES" ]] && ok "$(grep -c '^SYSLOGC_' "$OVERRIDES" || true) setting(s) in $OVERRIDES"
 ok "$(grep -c '^[A-Z]' .env) settings in .env"
 
 # ---- 4b. the demo mirror, if an older version left one behind -------------------
