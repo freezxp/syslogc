@@ -8,6 +8,23 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.7.1 — 2026-10-24
+
+### Fixed
+
+- **Shortening the backfill now abandons a backlog, instead of only applying
+  to a first run.** Counting a window of history costs about as long as the
+  window itself, so a rollup a week behind covers thirty minutes of history
+  per thirty minutes of wall clock — exactly the rate new windows arrive. The
+  gap never closed, the present was never reached, and the chart stayed empty
+  while the log showed it recording thousands of samples a run.
+
+  The backfill is now the horizon for catching up as well, so
+  `--trend-backfill 1h` means "an hour of history is enough, skip the rest"
+  rather than only "fill an hour when there is nothing recorded". Each
+  resolution still gets at least two of its own windows, so a short backfill
+  does not silently stop the hourly and daily figures.
+
 ## 1.7.0 — 2026-10-23
 
 ### Added

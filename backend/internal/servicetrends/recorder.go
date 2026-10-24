@@ -373,15 +373,22 @@ func (r *Recorder) record(ctx context.Context, categories []storage.Category, sc
 		from = now.Add(-r.opts.Backfill).Truncate(step)
 	}
 	from = from.Truncate(step)
-	// Never reach further back than the logs go. A rollup that stopped for
-	// longer than the retention period cannot recover those windows, and
-	// walking them produces zeros that look like quiet traffic rather than
-	// like missing data.
-	if r.opts.MaxAge > 0 {
-		if oldest := now.Add(-r.opts.MaxAge).Truncate(step); from.Before(oldest) {
-			r.opts.Log.Info("skipping forward: the logs for those windows are gone",
+	// Never reach further back than asked for, or than the logs go.
+	//
+	// Backfill is how much history is wanted. It used to apply only on a
+	// first run, which left a rollup that had fallen behind grinding through
+	// everything since it stopped — and a window of history takes about as
+	// long to count as it took to happen, so the gap never closed and the
+	// present was never reached. Capping the catch-up too is what makes
+	// shortening the backfill actually skip a backlog.
+	//
+	// MaxAge is the retention period. Beyond it the logs are deleted, so a
+	// count would be a zero standing in for an unknown.
+	if horizon := r.catchUpHorizon(step); horizon > 0 {
+		if oldest := now.Add(-horizon).Truncate(step); from.Before(oldest) {
+			r.opts.Log.Info("skipping forward to the start of the window that is wanted",
 				"window", WindowName(step), "from", from.Format(time.RFC3339),
-				"to", oldest.Format(time.RFC3339), "retention", r.opts.MaxAge.String())
+				"to", oldest.Format(time.RFC3339), "horizon", horizon.String())
 			from = oldest
 		}
 	}
@@ -639,4 +646,21 @@ func copyInts(in map[string]int) map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+// catchUpHorizon is the oldest window this resolution will reach for: the
+// history that was asked for, bounded by the history that still exists.
+//
+// A resolution always gets at least a couple of its own windows, so asking
+// for an hour of history does not silently stop the daily figures: a daily
+// window cannot be counted from an hour of it.
+func (r *Recorder) catchUpHorizon(step time.Duration) time.Duration {
+	horizon := r.opts.Backfill
+	if min := 2 * step; horizon > 0 && horizon < min {
+		horizon = min
+	}
+	if r.opts.MaxAge > 0 && (horizon == 0 || r.opts.MaxAge < horizon) {
+		horizon = r.opts.MaxAge
+	}
+	return horizon
 }

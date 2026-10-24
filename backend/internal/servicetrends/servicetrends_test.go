@@ -1292,3 +1292,77 @@ func TestItDoesNotCountWindowsWhoseLogsAreGone(t *testing.T) {
 		t.Fatal("skipped forward so far that it asked for nothing at all")
 	}
 }
+
+// A rollup that has fallen behind must be able to skip the backlog.
+//
+// Counting a window of history takes about as long as the window itself, so
+// a rollup a week behind covers thirty minutes of history per thirty minutes
+// of wall clock — exactly the rate new windows arrive. The gap never closes
+// and the present is never reached, while the chart stays empty. Shortening
+// the backfill has to be able to abandon that history.
+func TestShorteningTheBackfillSkipsABacklog(t *testing.T) {
+	now := time.Date(2026, 10, 24, 2, 0, 0, 0, time.UTC)
+	q := &fakeQuerier{}
+	// A week behind, as a rollup that has been failing since then looks.
+	state := State{"5m": now.Add(-7 * 24 * time.Hour)}
+	r, err := NewRecorder(Options{
+		Querier: q,
+		Writer:  &fakeWriter{},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog: func(context.Context) (Catalog, error) {
+			return Catalog{Services: []Service{{Name: "tiktok", Domains: []string{"tiktok.com"}, Enabled: true}}}, nil
+		},
+		LoadState:   func(context.Context) (State, error) { return state, nil },
+		SaveState:   func(_ context.Context, s State) error { state = s; return nil },
+		Base:        5 * time.Minute,
+		Backfill:    time.Hour, // "I only want the last hour"
+		MaxAge:      30 * 24 * time.Hour,
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing older than the hour that was asked for, for the base window.
+	wanted := now.Add(-time.Hour)
+	for _, got := range q.queries {
+		if got.Step != 5*time.Minute {
+			continue
+		}
+		if got.Range.Start.Before(wanted.Add(-5 * time.Minute)) {
+			t.Fatalf("asked for 5m windows from %s despite a one-hour backfill; the backlog was not skipped",
+				got.Range.Start.Format(time.RFC3339))
+		}
+	}
+	if len(q.queries) == 0 {
+		t.Fatal("skipped so far forward that nothing was asked for")
+	}
+}
+
+// But a short backfill must not silently stop the coarser windows: a daily
+// figure cannot be counted from an hour of history.
+func TestAShortBackfillStillLeavesRoomForTheCoarserWindows(t *testing.T) {
+	r := &Recorder{opts: Options{Backfill: time.Hour, MaxAge: 30 * 24 * time.Hour}}
+	for _, c := range []struct {
+		step time.Duration
+		want time.Duration
+	}{
+		{5 * time.Minute, time.Hour},     // the hour asked for
+		{time.Hour, 2 * time.Hour},       // at least two of its own windows
+		{24 * time.Hour, 48 * time.Hour}, // likewise
+	} {
+		if got := r.catchUpHorizon(c.step); got != c.want {
+			t.Errorf("a %s window reaches back %s, want %s", c.step, got, c.want)
+		}
+	}
+	// And retention still wins when it is the shorter of the two.
+	short := &Recorder{opts: Options{Backfill: 30 * 24 * time.Hour, MaxAge: 48 * time.Hour}}
+	if got := short.catchUpHorizon(5 * time.Minute); got != 48*time.Hour {
+		t.Errorf("reached back %s past a two-day retention", got)
+	}
+}
