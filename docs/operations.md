@@ -356,6 +356,33 @@ first (see [above](#moving-a-configuration-file-source-into-the-ui)) — that
 copies it into the database so extract rules can be edited without touching
 YAML on every node.
 
+### When a resolution cannot be computed at all
+
+A count of distinct clients cannot be assembled from a finer one — the same
+client appears in many five-minute windows and is one client in the hour — so
+each resolution is counted over its own span of raw logs. That makes the
+daily figure one query over a day of logs, and a day cannot be made smaller.
+
+On a deployment taking tens of thousands of messages a second that is
+billions of rows in a single query. The rollup will shrink the catalogue
+looking for something it can finish, find nothing, and spend part of every
+run discovering it again:
+
+```
+window=1d  was "1 buckets × 14 services"  now "1 buckets × 7 services"  error=context deadline exceeded
+```
+
+Stop asking for it, and the budget goes to the resolutions that do work:
+
+```sh
+./deploy.sh --trend-windows 5m,1h
+```
+
+The chart then offers only the windows being recorded. This is a real loss —
+there is no daily figure — but it is an honest one, and it is better than a
+five-minute chart that is empty because the budget went on a daily one that
+never finished.
+
 ### Starting it over
 
 The rollup remembers two things, and either can be wrong in a way it cannot

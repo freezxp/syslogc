@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -116,6 +117,16 @@ type Options struct {
 	ClientField string
 	// Sources restricts the rollup to these source names; empty reads all.
 	Sources []string
+	// Windows restricts which resolutions are recorded, by name ("5m", "1h",
+	// "1d"). Empty records all of them.
+	//
+	// Not every resolution is computable at every scale. A daily distinct
+	// count is one query over a day of logs, and a day cannot be made
+	// smaller: on a deployment taking tens of thousands of messages a second
+	// that is billions of rows, and no shrinking helps because there is
+	// nothing left to shrink. Such a deployment is better off not asking,
+	// so the budget goes to the resolutions it can actually finish.
+	Windows []string
 	// QueryTimeout bounds one rollup query (default 2m). A window that
 	// cannot be counted within it is skipped and retried later.
 	QueryTimeout time.Duration
@@ -218,7 +229,21 @@ func NewRecorder(opts Options) (*Recorder, error) {
 
 // Resolutions are the windows this recorder stores, finest first.
 func (r *Recorder) Resolutions() []time.Duration {
-	return []time.Duration{r.opts.Base, ResolutionHour, ResolutionDay}
+	all := []time.Duration{r.opts.Base, ResolutionHour, ResolutionDay}
+	if len(r.opts.Windows) == 0 {
+		return all
+	}
+	want := make(map[string]bool, len(r.opts.Windows))
+	for _, w := range r.opts.Windows {
+		want[strings.ToLower(strings.TrimSpace(w))] = true
+	}
+	out := make([]time.Duration, 0, len(all))
+	for _, step := range all {
+		if want[WindowName(step)] {
+			out = append(out, step)
+		}
+	}
+	return out
 }
 
 // Run records every complete window that has not been recorded yet, for

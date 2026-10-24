@@ -8,6 +8,26 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.8.0 — 2026-10-24
+
+### Added
+
+- **`analytics.service_trends.windows`**, and `./deploy.sh --trend-windows
+  5m,1h`, to choose which resolutions the rollup records.
+
+  A distinct-client count cannot be assembled from a finer one — the same
+  client appears in many five-minute windows and is one client in the hour —
+  so each resolution is counted over its own span of raw logs. The daily
+  figure is therefore one query over a day of logs, and a day cannot be made
+  smaller. On a deployment taking tens of thousands of messages a second
+  that is billions of rows: the rollup shrinks the catalogue looking for
+  something it can finish, finds nothing, and spends part of every run
+  discovering it again — while the five-minute chart it could have filled
+  stays empty.
+
+  Leaving `1d` out is a real loss of a figure, and an honest one. The chart
+  offers only the windows being recorded.
+
 ## 1.7.2 — 2026-10-24
 
 ### Fixed

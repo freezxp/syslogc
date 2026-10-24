@@ -55,6 +55,14 @@ func (c *Config) Validate() error {
 		add("log.format: must be json or text")
 	}
 
+	for _, w := range c.Analytics.ServiceTrends.Windows {
+		switch strings.ToLower(strings.TrimSpace(w)) {
+		case "5m", "1h", "1d":
+		default:
+			add("analytics.service_trends.windows: %q is not a window; use 5m, 1h or 1d", w)
+		}
+	}
+
 	validateAssistant(c, add)
 
 	if a := c.Analytics; a.Metrics.URL != "" {

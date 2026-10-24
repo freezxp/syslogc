@@ -63,6 +63,14 @@ type MetricsStoreConfig struct {
 // clients queried each service category.
 type ServiceTrendsConfig struct {
 	Enabled bool `koanf:"enabled"`
+	// Windows are the resolutions to record: any of 5m, 1h, 1d. Empty
+	// records all of them.
+	//
+	// A daily count is one query over a day of logs and a day cannot be made
+	// smaller, so on a deployment taking tens of thousands of messages a
+	// second it cannot be finished at all. Leaving it out stops the rollup
+	// spending its time discovering that again every run.
+	Windows []string `koanf:"windows"`
 	// Interval is the finest resolution recorded, and how often the rollup
 	// runs. Hourly and daily points are recorded on their own boundaries.
 	Interval Duration `koanf:"interval"`

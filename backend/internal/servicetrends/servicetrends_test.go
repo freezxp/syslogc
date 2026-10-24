@@ -1445,3 +1445,77 @@ func TestProgressIsWrittenEvenWhenTheRunIsOutOfTime(t *testing.T) {
 			"reject it and the work would be done again next run", saveErr)
 	}
 }
+
+// Not every resolution is computable at every scale, and a deployment has to
+// be able to stop asking for one it can never finish.
+//
+// A daily distinct count is one query over a day of logs, and a day cannot
+// be made smaller: at tens of thousands of messages a second that is
+// billions of rows, and the shrink ladder has nothing left to shrink. A
+// deployment in that position spends its whole budget rediscovering the fact
+// instead of recording the resolutions that do work.
+func TestARollupRecordsOnlyTheWindowsItWasAskedFor(t *testing.T) {
+	now := time.Date(2026, 10, 24, 4, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		windows []string
+		want    []string
+	}{
+		{nil, []string{"5m", "1h", "1d"}},
+		{[]string{"5m", "1h"}, []string{"5m", "1h"}},
+		{[]string{"5m"}, []string{"5m"}},
+		// Order and spelling of the request do not decide the order recorded.
+		{[]string{"1h", "5M"}, []string{"5m", "1h"}},
+	} {
+		q := &fakeQuerier{}
+		r, err := NewRecorder(Options{
+			Querier: q,
+			Writer:  &fakeWriter{},
+			Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Catalog: func(context.Context) (Catalog, error) {
+				return Catalog{Services: []Service{{Name: "tiktok", Domains: []string{"tiktok.com"}, Enabled: true}}}, nil
+			},
+			LoadState:   func(context.Context) (State, error) { return State{}, nil },
+			SaveState:   func(context.Context, State) error { return nil },
+			Base:        5 * time.Minute,
+			Backfill:    48 * time.Hour,
+			Windows:     c.windows,
+			DomainField: "dns.qname",
+			ClientField: "dns.client_ip",
+			Now:         func() time.Time { return now },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, step := range r.Resolutions() {
+			got = append(got, WindowName(step))
+		}
+		if len(got) != len(c.want) {
+			t.Errorf("windows %v recorded %v, want %v", c.windows, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("windows %v recorded %v, want %v", c.windows, got, c.want)
+				break
+			}
+		}
+		// And nothing is asked of the storage for a window left out.
+		if _, err := r.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for _, asked := range q.queries {
+			name := WindowName(asked.Step)
+			found := false
+			for _, w := range c.want {
+				if w == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("windows %v still queried the %s window", c.windows, name)
+			}
+		}
+	}
+}

@@ -919,6 +919,7 @@ func (a *App) wireAnalytics(ctx context.Context) error {
 		DomainField:  st.DomainField,
 		ClientField:  st.ClientField,
 		Sources:      st.Sources,
+		Windows:      st.Windows,
 		QueryTimeout: st.QueryTimeout.D(),
 	})
 	if err != nil {

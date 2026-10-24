@@ -35,6 +35,7 @@ REF=""
 TREND_BACKFILL=""
 TREND_QUERY_TIMEOUT=""
 RESET_TRENDS=""
+TREND_WINDOWS=""
 
 usage() {
   sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -70,6 +71,10 @@ Options:
                        backfill is re-walked on every start, so a deployment
                        that cannot keep up should shorten it until it has
                        caught up.
+  --trend-windows LIST Which resolutions the rollup records, e.g. 5m,1h.
+                       A daily count is one query over a day of logs, which
+                       a busy deployment cannot finish however small the
+                       query is made; leaving 1d out stops it trying.
   --reset-trends       Clear what the service-trend rollup remembered — the
                        query sizes it learned and how far each window has
                        been recorded — and restart it. Counts that are
@@ -107,6 +112,7 @@ while [[ $# -gt 0 ]]; do
     --ref) REF="${2:?--ref needs a tag or branch}"; shift 2 ;;
     --trend-backfill) TREND_BACKFILL="${2:?--trend-backfill needs a duration}"; shift 2 ;;
     --trend-query-timeout) TREND_QUERY_TIMEOUT="${2:?--trend-query-timeout needs a duration}"; shift 2 ;;
+    --trend-windows) TREND_WINDOWS="${2:?--trend-windows needs a list, e.g. 5m,1h}"; shift 2 ;;
     --reset-trends) RESET_TRENDS="all"; ACTION="reset-trends"; shift ;;
     --reset-trend-sizes) RESET_TRENDS="sizes"; ACTION="reset-trends"; shift ;;
     --no-backup) BACKUP=false; shift ;;
@@ -422,6 +428,10 @@ fi
 if [[ -n "$TREND_BACKFILL" ]]; then
   set_override SYSLOGC_ANALYTICS_SERVICE_TRENDS_BACKFILL "$TREND_BACKFILL"
   ok "service-trend backfill set to $TREND_BACKFILL"
+fi
+if [[ -n "$TREND_WINDOWS" ]]; then
+  set_override SYSLOGC_ANALYTICS_SERVICE_TRENDS_WINDOWS "$TREND_WINDOWS"
+  ok "service-trend windows set to $TREND_WINDOWS"
 fi
 if [[ -n "$TREND_QUERY_TIMEOUT" ]]; then
   set_override SYSLOGC_ANALYTICS_SERVICE_TRENDS_QUERY_TIMEOUT "$TREND_QUERY_TIMEOUT"
