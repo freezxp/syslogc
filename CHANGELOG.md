@@ -8,6 +8,22 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.7.2 — 2026-10-24
+
+### Fixed
+
+- **A run that used its budget threw away everything it had just learned.**
+  Progress and learned query sizes were written with the run's own context,
+  which is dead precisely when a run has run out of time — and that is the
+  only kind of run that learns a size, because learning one means queries
+  were refused. The write failed, its error joined a result the caller
+  reports as "ran out of time", and nothing said so. The rollup then
+  rediscovered the same size on the next run, and the one after, paying a
+  query timeout per step each time.
+
+  Both writes now use a short context of their own. The work was already
+  done; losing the record of it was the bug.
+
 ## 1.7.1 — 2026-10-24
 
 ### Fixed

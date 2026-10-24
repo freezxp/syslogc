@@ -58,6 +58,10 @@ const (
 	// cannot finish. A window longer than this is still queried whole,
 	// because a bucket cannot be split.
 	maxQuerySpan = 2 * time.Hour
+	// saveTimeout bounds writing progress back. It is short because the work
+	// is a couple of small settings rows, and it is separate from the run's
+	// budget because the progress has already been earned.
+	saveTimeout = 15 * time.Second
 )
 
 // Querier is the part of the log store the recorder needs.
@@ -303,15 +307,26 @@ func (r *Recorder) Run(ctx context.Context) (int, error) {
 	// so the next run began at the same place, covered a wider range, and
 	// took longer; eventually a run could not finish inside its budget and
 	// the rollup made no progress at all, for ever, without an error.
+	// Written with a context of their own, detached from the run's budget.
+	//
+	// The run's context is dead exactly when a run has used its time — which
+	// is the run that most needs its progress kept, and the only kind that
+	// learns a size, because learning one means queries were refused. Saving
+	// with the expired context failed silently: the error joined a result
+	// the caller reports as "ran out of time", so the rollup rediscovered
+	// the same size on the next run, and the one after.
+	saveCtx, cancelSave := context.WithTimeout(context.WithoutCancel(ctx), saveTimeout)
+	defer cancelSave()
+
 	// A size that was learned the hard way is worth keeping: rediscovering it
 	// costs a query timeout per step, every restart.
 	if r.opts.SaveSizes != nil && r.sizeFingerprint() != sizesBefore {
-		if err := r.opts.SaveSizes(ctx, Sizes{Buckets: copyInts(r.buckets), Chunks: copyInts(r.chunks)}); err != nil {
+		if err := r.opts.SaveSizes(saveCtx, Sizes{Buckets: copyInts(r.buckets), Chunks: copyInts(r.chunks)}); err != nil {
 			errs = append(errs, fmt.Errorf("saving the learned query sizes: %w", err))
 		}
 	}
 	if r.opts.SaveState != nil && advanced {
-		if err := r.opts.SaveState(ctx, state); err != nil {
+		if err := r.opts.SaveState(saveCtx, state); err != nil {
 			errs = append(errs, fmt.Errorf("saving the rollup state: %w", err))
 		}
 	}

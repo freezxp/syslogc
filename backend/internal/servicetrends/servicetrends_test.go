@@ -1366,3 +1366,82 @@ func TestAShortBackfillStillLeavesRoomForTheCoarserWindows(t *testing.T) {
 		t.Errorf("reached back %s past a two-day retention", got)
 	}
 }
+
+// What a run earned has to be written even when the run has used its time.
+//
+// The run that times out is the one that most needs its progress kept, and
+// the only kind that learns a query size — learning one means queries were
+// refused. Saving with the run's own context failed on exactly those runs,
+// and the error joined a result the caller reports as "ran out of time", so
+// nothing said it had happened: the rollup rediscovered the same size on the
+// next run, and the one after.
+// expiringQuerier answers once and then takes the run's time away, which is
+// what the budget does part-way through a long catch-up.
+type expiringQuerier struct {
+	fakeQuerier
+	cancel func()
+	calls  int
+}
+
+func (e *expiringQuerier) CategoryCounts(ctx context.Context, q storage.CategoryQuery) ([]storage.CategoryRow, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	e.calls++
+	rows, err := e.fakeQuerier.CategoryCounts(ctx, q)
+	if e.calls == 1 && e.cancel != nil {
+		e.cancel() // the budget runs out, with one window already counted
+	}
+	return rows, err
+}
+
+// What a run earned has to be written even when the run has used its time.
+//
+// The run that times out is the one that most needs its progress kept, and
+// the only kind that learns a query size — learning one means queries were
+// refused. Saving with the run's own context failed on exactly those runs,
+// and the error joined a result the caller reports as "ran out of time", so
+// nothing said it had happened: the rollup redid the same work on the next
+// run, and the one after.
+func TestProgressIsWrittenEvenWhenTheRunIsOutOfTime(t *testing.T) {
+	now := time.Date(2026, 10, 24, 3, 0, 0, 0, time.UTC)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	q := &expiringQuerier{cancel: cancel}
+	var attempted bool
+	var saveErr error
+	r, err := NewRecorder(Options{
+		Querier: q,
+		Writer:  &fakeWriter{},
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Catalog: func(context.Context) (Catalog, error) {
+			return Catalog{Services: []Service{{Name: "tiktok", Domains: []string{"tiktok.com"}, Enabled: true}}}, nil
+		},
+		LoadState: func(context.Context) (State, error) { return State{}, nil },
+		SaveState: func(saveCtx context.Context, _ State) error {
+			attempted = true
+			// A real store fails on a dead context; this is that check.
+			saveErr = saveCtx.Err()
+			return saveErr
+		},
+		Base:        5 * time.Minute,
+		Backfill:    2 * time.Hour,
+		DomainField: "dns.qname",
+		ClientField: "dns.client_ip",
+		Now:         func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = r.Run(ctx)
+
+	if !attempted {
+		t.Fatal("a run that counted a window and then ran out of time wrote nothing back")
+	}
+	if saveErr != nil {
+		t.Errorf("progress was written with the run's expired context (%v), so the store would "+
+			"reject it and the work would be done again next run", saveErr)
+	}
+}
