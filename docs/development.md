@@ -98,6 +98,49 @@ The generated admin password is printed to stderr on first start.
 Integration tests skip (not fail) when `TEST_VICTORIALOGS_URL` is unset, so
 `go test ./...` works without Docker. CI always sets it.
 
+## Synthetic DNS traffic, healthy and broken
+
+`loggen` generates load; `scripts/dnsgen.py` generates something to look at.
+It imitates BIND 9, dnsmasq and Unbound on two resolvers, so the collector
+sees a realistic mix of formats, severities and fields rather than one shape
+repeated.
+
+```sh
+./scripts/dnsgen.py --list                    # the scenarios
+./scripts/dnsgen.py --rate 50                 # healthy traffic
+./scripts/dnsgen.py --incident upstream-down --for 10m
+./scripts/dnsgen.py --cycle clear=20m,upstream-down=5m,clear=20m,servfail-storm=8m
+```
+
+The incidents are the point. A dashboard, an alert or a saved search can be
+watched changing and then recovering, which a generator that only ever
+produces healthy traffic cannot prove anything about.
+
+| scenario | what it looks like |
+|---|---|
+| `clear` | healthy, with the background of NXDOMAIN, RPZ hits and the odd SERVFAIL a real resolver always has |
+| `upstream-down` | timeouts then SERVFAIL for anything not cached — about 44% of messages at warning or worse |
+| `servfail-storm` | a broken delegation or DNSSEC failure: a slice of names stop resolving |
+| `resolver-silent` | one resolver stops logging entirely |
+| `client-flood` | one address hammering, until rate limiting denies it |
+| `malware-beacon` | a few clients beaconing to blocked domains, so RPZ hits go from nothing to about 18% |
+
+`clear` deliberately still carries a small background of failures. An alert
+that fires on a single SERVFAIL was never going to survive production, and a
+generator that produces a spotless stream hides that.
+
+`resolver-silent` is the one worth testing against: nothing in the stream
+says anything is wrong, because the signal is what stopped arriving. It is
+the hardest outage to notice and the reason a per-source rate is worth
+watching.
+
+A fixed `--seed` repeats a run exactly, which is what makes a failure worth
+reporting.
+
+These messages are indistinguishable from real resolver logs once stored —
+that is the point of them, and the reason they belong on a development box
+and not in anything anyone reads as a record of what happened.
+
 ## Adding a log format
 
 1. Create `internal/parser/<format>/` implementing `parser.Parser`:

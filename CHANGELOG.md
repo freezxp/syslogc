@@ -8,6 +8,27 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.9.0 — 2026-10-26
+
+### Added
+
+- **`scripts/dnsgen.py`**: synthetic DNS resolver logs that can be healthy or
+  in the middle of an incident. It imitates BIND 9, dnsmasq and Unbound on
+  two resolvers, and switches between a healthy baseline and six failures —
+  an unreachable forwarder, a SERVFAIL storm, a resolver that goes silent, a
+  client flood, a beaconing client, and clear.
+
+  ```sh
+  ./scripts/dnsgen.py --incident upstream-down --for 10m
+  ./scripts/dnsgen.py --cycle clear=20m,upstream-down=5m
+  ```
+
+  An incident returns to healthy traffic afterwards, so a dashboard or an
+  alert can be watched firing **and recovering** — which a generator that only
+  ever produces healthy traffic cannot show. `clear` still carries the
+  background of NXDOMAIN and the odd SERVFAIL a real resolver always has,
+  because an alert that fires on a spotless stream has not been tested.
+
 ## 1.8.0 — 2026-10-24
 
 ### Added
