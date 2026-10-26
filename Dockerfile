@@ -4,7 +4,7 @@
 
 # ---- web UI ----------------------------------------------------------------
 # Built once on the build machine's architecture: the output is static assets.
-FROM --platform=$BUILDPLATFORM node:24.21.0-trixie-slim AS web
+FROM --platform=$BUILDPLATFORM node:24.22.1-trixie-slim AS web
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund

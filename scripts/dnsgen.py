@@ -33,7 +33,11 @@ import sys
 import time
 from datetime import datetime
 
-RESOLVERS = ["dns01", "dns02"]
+# The default pair. Override with --resolvers when something else is already
+# sending to the same collector: two generators both calling themselves dns01
+# are indistinguishable once stored, and an incident in one is then invisible
+# because the other keeps answering for the same name.
+DEFAULT_RESOLVERS = ["dns01", "dns02"]
 
 # Popular destinations, weighted so a few domains dominate like real traffic.
 POPULAR = [
@@ -94,7 +98,7 @@ SCENARIOS = {
         # The subtle one. Nothing looks wrong in what arrives; what matters is
         # what stopped arriving, which is the hardest kind of outage to see
         # and the reason a per-source rate is worth watching.
-        "silent_host": "dns02",
+        "silent_index": 1,
     },
     "client-flood": {
         "what": "one client hammering the resolver, until rate limiting starts denying it",
@@ -140,8 +144,9 @@ def parse_cycle(text: str) -> list[tuple[str, float]]:
 class World:
     """The generator's state: who is talking, and what is currently broken."""
 
-    def __init__(self, rnd: random.Random):
+    def __init__(self, rnd: random.Random, resolvers: list[str]):
         self.rnd = rnd
+        self.resolvers = resolvers
         self.scenario = "clear"
         self.dials = {}
         # Held across a scenario change so a flood or a beacon keeps coming
@@ -152,6 +157,11 @@ class World:
     def enter(self, scenario: str):
         self.scenario = scenario
         self.dials = {k: v for k, v in SCENARIOS[scenario].items() if k != "what"}
+        # The scenario names a resolver that goes quiet by position, not by
+        # name, so it still works when the resolvers have been renamed.
+        if "silent_index" in self.dials:
+            self.dials["silent_host"] = self.resolvers[
+                self.dials["silent_index"] % len(self.resolvers)]
 
     def dial(self, name, default=None):
         return self.dials.get(name, default)
@@ -353,6 +363,9 @@ def main() -> int:
                    choices=["udp", "tcp"])
     p.add_argument("--rate", type=float, default=float(os.environ.get("DNSLOG_RATE", "15")),
                    help="messages per second, averaged (default: 15)")
+    p.add_argument("--resolvers", default=",".join(DEFAULT_RESOLVERS), metavar="A,B",
+                   help="hostnames to log as; use your own when another generator is "
+                        "already sending to this collector (default: dns01,dns02)")
     p.add_argument("--seed", type=int, default=int(os.environ.get("DNSLOG_SEED", "0")),
                    help="fixed seed for a repeatable run (default: random)")
     p.add_argument("--incident", choices=sorted(SCENARIOS), metavar="NAME",
@@ -370,12 +383,16 @@ def main() -> int:
             print(f"  {name:<{width}}  {SCENARIOS[name]['what']}")
         return 0
 
+    resolvers = [h.strip() for h in args.resolvers.split(",") if h.strip()]
+    if not resolvers:
+        p.error("--resolvers needs at least one hostname")
     rnd = random.Random(args.seed or None)
-    world = World(rnd)
+    world = World(rnd, resolvers)
     sender = Sender(args.target, args.port, args.protocol)
     plan = schedule(args)
 
-    print(f"sending to {args.target}:{args.port}/{args.protocol} at ~{args.rate}/s", file=sys.stderr)
+    print(f"sending to {args.target}:{args.port}/{args.protocol} at ~{args.rate}/s "
+          f"as {', '.join(resolvers)}", file=sys.stderr)
     sent = 0
     started = time.monotonic()
     step = 0
@@ -387,7 +404,7 @@ def main() -> int:
               + (f" (for {seconds:.0f}s)" if seconds else ""), file=sys.stderr)
 
         while until is None or time.monotonic() < until:
-            host = rnd.choice(RESOLVERS)
+            host = rnd.choice(resolvers)
             # A silent resolver is an absence, not an error: it simply stops
             # saying anything, and nothing in the stream says why.
             if host == world.dial("silent_host"):
@@ -403,7 +420,7 @@ def main() -> int:
 
             if rnd.random() < world.dial("operational_rate", 0.01):
                 batch = [operational_line(world)]
-            elif host == "dns01":
+            elif host == resolvers[0]:
                 batch = named_lines(world, ip, qname, outcome, qtype)
             elif rnd.random() < 0.5:
                 batch = dnsmasq_lines(world, ip, qname, outcome, qtype)

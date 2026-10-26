@@ -7,14 +7,18 @@ SCOPE (the department's tool catalog, github.com/freezxp/scope) scanned this rep
 
 **Runtime images and toolchains**
 
-- [ ] **critical** Node2Shell / HTTP2Shell (Brotli) (CVE-2026-111497) + Node.js October 2026 TLS validation flaws (CVE-2026-105482, CVE-2026-105483, CVE-2026-106069) — Node.js 24.21.0 in `Dockerfile`: upgrade to 24.22.1 or later (build/CI stage only, lower risk).
+- [x] **critical** Node2Shell / HTTP2Shell (Brotli) (CVE-2026-111497) + Node.js October 2026 TLS validation flaws (CVE-2026-105482, CVE-2026-105483, CVE-2026-106069) — Node.js 24.21.0 in `Dockerfile`: upgrade to 24.22.1 or later (build/CI stage only, lower risk).
 
 **Critical/high in production dependencies**
 
-- [ ] **high** `zod` 4.6.5 → **4.6.6** (frontend/package-lock.json): CVE-2023-54404 Zod can exhaust memory while validating oversized constrained collections
+- [x] **high** `zod` 4.6.5 → **4.6.6** (frontend/package-lock.json): CVE-2023-54404 Zod can exhaust memory while validating oversized constrained collections
 
 **Lower priority**
 
-- 6 medium/low/unrated advisories in production dependencies: clear them with the same upgrade pass (`npm audit` / `govulncheck ./...` lists them).
-- Dev/build-only dependencies: 7 high, 10 medium, 1 low (not shipped; fix when convenient), e.g. `brace-expansion` 5.0.9, `source-map-js` 1.2.1, `undici` 8.10.2, `vite` 8.3.0.
+- [x] Production dependencies: `npm audit --omit=dev` now reports 0.
+- [x] Dev/build-only dependencies: cleared in the same pass — `brace-expansion`,
+  `source-map-js` and `undici` by transitive resolution, `vite` 8.3.0 → 8.3.5 and
+  `vitest` 5.0.0 → 5.0.5 (both patch bumps within their major, so `--force` was
+  not needed). `npm audit` reports 0 including dev.
+- [x] `govulncheck ./...` reports 0 affecting this code (Go 1.27.3).
 <!-- SCOPE:CVE END -->

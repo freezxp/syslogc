@@ -8,6 +8,25 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.9.1 — 2026-10-26
+
+### Fixed
+
+- **Dependency and toolchain advisories cleared.** Node.js 24.21.0 → 24.22.1
+  in the web build stage (CVE-2026-111497 Brotli, and CVE-2026-105482,
+  CVE-2026-105483, CVE-2026-106069 TLS validation), and `zod` 4.6.5 → 4.6.6
+  (CVE-2023-54404, memory exhaustion validating oversized collections).
+  `vite` 8.3.0 → 8.3.5 and `vitest` 5.0.0 → 5.0.5 clear the remaining
+  build-only advisories; both are patch bumps within their major.
+  `npm audit` now reports 0 including dev dependencies, and `govulncheck`
+  0 affecting this code.
+
+- `scripts/dnsgen.py` gained `--resolvers`, so it can run beside traffic
+  that is already arriving. It called its resolvers `dns01` and `dns02`
+  unconditionally, which meant an incident was invisible on a collector
+  already receiving those names from somewhere else: the other sender kept
+  answering for the same hostname.
+
 ## 1.9.0 — 2026-10-26
 
 ### Added
