@@ -29,7 +29,7 @@ import { explainSubject } from '@/features/assistant/assistant'
 import { ExplainFigures } from '@/features/assistant/ExplainFigures'
 import { seriesColor } from '@/lib/chart-colors'
 import { cn } from '@/lib/cn'
-import { formatExact, formatTimestamp } from '@/lib/format'
+import { formatTimestamp } from '@/lib/format'
 import { useTimezone } from '@/lib/preferences'
 import { resolveRange, TimeRangeError } from '@/lib/time-range'
 import type { AnalyticsSearch } from '@/lib/url-state'
@@ -42,6 +42,8 @@ import {
   encodeServiceTrends,
   mainScopeEmptyHint,
   peakSentence,
+  formatTrendValue,
+  trendApiMetric,
   rangeTooLong,
   rangeTooShort,
   scopeHelp,
@@ -91,9 +93,10 @@ export function ServiceTrendsView() {
       : null
 
   const catalog = useServiceCatalog()
-  const trends = useServiceTrends(apiRange, query.window, query.metric, query.scope, query.services)
+  // The rate is derived here, so the server is asked for the stored count.
+  const trends = useServiceTrends(apiRange, query.window, trendApiMetric(query.metric), query.scope, query.services)
 
-  const chart = useMemo(() => trendChartData(trends.data), [trends.data])
+  const chart = useMemo(() => trendChartData(trends.data, undefined, query.metric), [trends.data, query.metric])
   const chartSeries = useMemo(
     () => chart.series.map((s, i) => ({ ...s, color: seriesColor('service', s.service, i) })),
     [chart.series],
@@ -149,6 +152,7 @@ export function ServiceTrendsView() {
               active={query.metric === 'queries'}
               onSelect={() => setQuery({ metric: 'queries' })}
             />
+            <Tab label="Queries/sec" active={query.metric === 'qps'} onSelect={() => setQuery({ metric: 'qps' })} />
           </div>
         </div>
 
@@ -227,7 +231,9 @@ export function ServiceTrendsView() {
               <div role="status" className="flex items-start gap-2 rounded-md border border-accent/40 bg-accent/10 p-3">
                 <TrendingUp className="mt-0.5 size-4 shrink-0 text-accent" />
                 <div className="min-w-0">
-                  <p className="text-lg font-semibold">{peakSentence(peak, query.window, query.metric, tz)}</p>
+                  <p className="text-lg font-semibold">
+                    {peakSentence(peak, query.window, query.metric, tz, trends.data?.step_seconds ?? 0)}
+                  </p>
                   <p className="text-sm text-muted">
                     Busiest {windowLabel(query.window)} window in this range, out of {trends.data?.series.length ?? 0}{' '}
                     recorded {trends.data?.series.length === 1 ? 'service' : 'services'}.
@@ -301,6 +307,7 @@ export function ServiceTrendsView() {
                     // Unique clients cannot be summed across services either: two
                     // services may well have been reached by the same client.
                     showTotal={trendMetricIsAdditive(query.metric)}
+                    fractional={query.metric === 'qps'}
                   />
                   <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                     {chartSeries.map((s) => (
@@ -310,7 +317,7 @@ export function ServiceTrendsView() {
                           {s.label}
                         </span>
                         <span className="mono text-subtle">
-                          peak {formatExact(s.peak)} {trendMetricNoun(query.metric)}
+                          peak {formatTrendValue(query.metric, s.peak)} {trendMetricNoun(query.metric)}
                         </span>
                       </li>
                     ))}

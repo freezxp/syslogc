@@ -8,6 +8,29 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.10.0 — 2026-10-29
+
+### Added
+
+- **Queries per second on the DNS service trends.** A third metric beside
+  unique clients and DNS queries, answering "how hard is this service being
+  asked for" in a number that does not change meaning when the window does.
+  A count cannot be compared across windows — 323 queries in 5 minutes and
+  3,608 in an hour are the same load — so the rate is the figure to watch a
+  service with. Nothing new is recorded: the stored query counts are divided
+  by the window, so the view works on history already collected, including
+  deployments running `--trend-windows 5m,1h`.
+
+  The tooltip, the chart axis, the legend and the headline all keep a decimal
+  for it, and the tooltip still totals the services, which a rate allows
+  because every series is divided by the same window.
+
+### Fixed
+
+- The chart tooltip rounded every value to a whole number, which was right
+  for counts and wrong for anything below 1 — a rate of 0.4/sec read as `0`.
+  Charts that show fractions now say so.
+
 ## 1.9.1 — 2026-10-26
 
 ### Fixed

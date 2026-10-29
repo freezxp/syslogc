@@ -11,7 +11,7 @@ import type {
   TrendService,
   TrendWindow,
 } from '@/api/types'
-import { formatExact, formatTimestamp } from '@/lib/format'
+import { formatExact, formatRate, formatTimestamp } from '@/lib/format'
 import type { AnalyticsSearch } from '@/lib/url-state'
 
 import type { ChartRow } from './analytics-query'
@@ -23,7 +23,45 @@ export const TREND_WINDOWS: { value: TrendWindow; label: string; seconds: number
 ]
 
 export const DEFAULT_TREND_WINDOW: TrendWindow = '1h'
-export const DEFAULT_TREND_METRIC: TrendMetric = 'unique_clients'
+/**
+ * What the chart shows. Two of these are the stored metrics; `qps` is the
+ * query count divided by the window it was counted over.
+ *
+ * A count is only comparable to another count over the same window: the same
+ * traffic reads 323 in a five-minute bucket and 3,608 in an hour, which looks
+ * like a tenfold change and is not one. A rate reads ~1.0 either way, so
+ * switching window stops moving the chart.
+ */
+export type TrendView = TrendMetric | 'qps'
+
+export const DEFAULT_TREND_METRIC: TrendView = 'unique_clients'
+
+/**
+ * How a value of this view reads.
+ *
+ * A rate needs a decimal: at one query a second, rounding to a whole number
+ * turns 1.4 into 1 and 0.4 into 0, and a service reading zero while it is
+ * plainly being queried is worse than no figure at all. Counts stay exact,
+ * because a count of 323 is 323.
+ */
+export function formatTrendValue(view: TrendView, value: number | undefined | null): string {
+  return view === 'qps' ? formatRate(value) : formatExact(value)
+}
+
+/** The metric to ask the server for. A rate is derived here, not stored. */
+export function trendApiMetric(view: TrendView): TrendMetric {
+  return view === 'unique_clients' ? 'unique_clients' : 'queries'
+}
+
+/**
+ * What to divide a stored value by to show it as `view`.
+ *
+ * Only a rate divides. Dividing a distinct-client count by seconds would
+ * produce a number with no meaning: clients are not a flow.
+ */
+export function trendDivisor(view: TrendView, stepSeconds: number): number {
+  return view === 'qps' && stepSeconds > 0 ? stepSeconds : 1
+}
 export const DEFAULT_TREND_SCOPE: TrendScope = 'all'
 
 /** A day of hourly windows: long enough to show the daily shape, short enough to read. */
@@ -41,7 +79,7 @@ export const TREND_SERIES_SHOWN = 8
 
 export interface ServiceTrendQuery {
   window: TrendWindow
-  metric: TrendMetric
+  metric: TrendView
   scope: TrendScope
   /** Service names to show; empty means every recorded service. */
   services: string[]
@@ -62,7 +100,7 @@ export function decodeServiceTrends(
     .filter(Boolean)
   return {
     window: isWindow(win) ? win : DEFAULT_TREND_WINDOW,
-    metric: search.count === 'queries' ? 'queries' : DEFAULT_TREND_METRIC,
+    metric: search.count === 'queries' ? 'queries' : search.count === 'qps' ? 'qps' : DEFAULT_TREND_METRIC,
     scope: search.scope === 'main' ? 'main' : DEFAULT_TREND_SCOPE,
     services: Array.from(new Set(names)),
   }
@@ -72,7 +110,7 @@ export function decodeServiceTrends(
 export function encodeServiceTrends(q: ServiceTrendQuery): Pick<AnalyticsSearch, 'win' | 'count' | 'scope' | 'svc'> {
   return {
     win: q.window === DEFAULT_TREND_WINDOW ? undefined : q.window,
-    count: q.metric === 'queries' ? 'queries' : undefined,
+    count: q.metric === DEFAULT_TREND_METRIC ? undefined : q.metric,
     scope: q.scope === 'main' ? 'main' : undefined,
     svc: q.services.length ? q.services.join(',') : undefined,
   }
@@ -129,25 +167,36 @@ export function rangeTooShort(range: { start: Date; end: Date }, window: TrendWi
 }
 
 /** "unique clients" and "DNS queries" read well in a sentence and in a title. */
-export function trendMetricLabel(metric: TrendMetric): string {
+export function trendMetricLabel(metric: TrendView): string {
+  if (metric === 'qps') return 'queries per second'
   return metric === 'queries' ? 'DNS queries' : 'unique clients'
 }
 
 /** The unit after a bare number: "1,240 clients". */
-export function trendMetricNoun(metric: TrendMetric): string {
+export function trendMetricNoun(metric: TrendView): string {
+  if (metric === 'qps') return 'queries/sec'
   return metric === 'queries' ? 'queries' : 'clients'
 }
 
 /** Distinct clients do not add up across services; queries do. */
-export function trendMetricIsAdditive(metric: TrendMetric): boolean {
-  return metric === 'queries'
+export function trendMetricIsAdditive(metric: TrendView): boolean {
+  // Rates add up where they are shown together: every series is divided by the
+  // same window, so two services at 1/s really are 2/s side by side. (Adding
+  // points from *different* windows would not mean anything, but nothing does.)
+  return metric === 'queries' || metric === 'qps'
 }
 
 /**
  * The one idea the reader has to take away: each window is a separate
  * recording, so counts from different windows cannot be added together.
  */
-export function windowHelp(metric: TrendMetric): string {
+export function windowHelp(metric: TrendView): string {
+  if (metric === 'qps') {
+    return (
+      'A point is the average rate across one window, so a coarser window flattens bursts: ' +
+      '3,600 queries in a single minute read as 1/sec over an hour and 12/sec over 5 minutes.'
+    )
+  }
   return metric === 'queries'
     ? 'Every window is counted separately, so a point is the queries in one window — not a running total.'
     : 'Every window is counted separately and unique counts cannot be added up: a day’s unique clients is not the sum of its hours, because a client active all day is still one client.'
@@ -187,11 +236,21 @@ export function mainScopeEmptyHint(
  * on 22 Sep". A daily window has no meaningful time of day, so it says only
  * which day.
  */
-export function peakSentence(peak: ServiceTrendPeak, window: TrendWindow, metric: TrendMetric, tz: string): string {
+export function peakSentence(
+  peak: ServiceTrendPeak,
+  window: TrendWindow,
+  metric: TrendView,
+  tz: string,
+  stepSeconds = 0,
+): string {
   const day = formatTimestamp(peak.at, tz, 'd MMM')
   const when = window === '1d' ? `on ${day}` : `at ${formatTimestamp(peak.at, tz, 'HH:mm')} on ${day}`
   const who = peak.label || peak.service
-  return `Most ${trendMetricLabel(metric)}: ${who}, ${formatExact(peak.value)} ${trendMetricNoun(metric)} ${when}`
+  // The peak comes from the server as the stored count, so a rate has to be
+  // derived here as well — reporting the count beside a per-second label
+  // would overstate it by the length of the window.
+  const value = peak.value / trendDivisor(metric, stepSeconds)
+  return `Most ${trendMetricLabel(metric)}: ${who}, ${formatTrendValue(metric, value)} ${trendMetricNoun(metric)} ${when}`
 }
 
 export interface TrendChartSeries {
@@ -215,21 +274,29 @@ export interface TrendChartData {
  * every timestamp, and a service missing from one of them is left undefined
  * rather than drawn as a zero it was never measured to be.
  */
-export function trendChartData(res: ServiceTrendResponse | undefined, limit = TREND_SERIES_SHOWN): TrendChartData {
+export function trendChartData(
+  res: ServiceTrendResponse | undefined,
+  limit = TREND_SERIES_SHOWN,
+  view: TrendView = DEFAULT_TREND_METRIC,
+): TrendChartData {
   if (!res) return { rows: [], series: [], hidden: 0 }
+  // A rate is the stored count over the window it was counted in, so the
+  // divisor comes from the response rather than from the request: the server
+  // decides what the window actually was.
+  const per = trendDivisor(view, res.step_seconds)
   const shown = res.series.slice(0, limit)
   const series = shown.map((s, i) => ({
     key: `s${i}`,
     label: s.label || s.service,
     service: s.service,
-    peak: s.peak,
+    peak: s.peak / per,
   }))
   const rows = new Map<number, ChartRow>()
   shown.forEach((s, i) => {
     for (const point of s.points) {
       const t = new Date(point.at).getTime()
       const row = rows.get(t) ?? { t }
-      row[`s${i}`] = point.value
+      row[`s${i}`] = point.value / per
       rows.set(t, row)
     }
   })

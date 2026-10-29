@@ -19,7 +19,7 @@ import {
 } from 'recharts'
 
 import type { HistogramResponse } from '@/api/types'
-import { formatAxisCount, formatCount, formatTimestamp } from '@/lib/format'
+import { formatAxisCount, formatCount, formatRate, formatTimestamp } from '@/lib/format'
 import { seriesColor } from '@/lib/chart-colors'
 import { severityRank } from '@/lib/severity'
 
@@ -48,6 +48,7 @@ function ChartTooltip({
   tz,
   unit,
   showTotal = true,
+  formatValue = formatCount,
 }: {
   active?: boolean
   payload?: { name?: string; value?: number; color?: string }[]
@@ -55,6 +56,7 @@ function ChartTooltip({
   tz: string
   unit?: string
   showTotal?: boolean
+  formatValue?: (v: number | undefined | null) => string
 }) {
   if (!active || !payload?.length) return null
   const total = payload.reduce((n, p) => n + (p.value ?? 0), 0)
@@ -66,7 +68,7 @@ function ChartTooltip({
       {showTotal && payload.length > 1 && (
         <div className="flex justify-between gap-4 font-medium">
           <span>Total</span>
-          <span className="mono">{formatCount(total)}</span>
+          <span className="mono">{formatValue(total)}</span>
         </div>
       )}
       {[...payload].reverse().map((p) => (
@@ -76,7 +78,7 @@ function ChartTooltip({
             {p.name}
           </span>
           <span className="mono">
-            {formatCount(p.value)}
+            {formatValue(p.value)}
             {unit}
           </span>
         </div>
@@ -260,6 +262,7 @@ export function GroupedSeriesChart({
   tz,
   height = 260,
   showTotal = true,
+  fractional = false,
 }: {
   data: RatePoint[]
   series: { key: string; label: string; color: string }[]
@@ -267,6 +270,8 @@ export function GroupedSeriesChart({
   tz: string
   height?: number
   showTotal?: boolean
+  /** The values are a rate rather than a count, so fractions are real and must survive rounding. */
+  fractional?: boolean
 }) {
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -283,15 +288,15 @@ export function GroupedSeriesChart({
           minTickGap={56}
         />
         <YAxis
-          tickFormatter={(v: number) => formatAxisCount(v)}
+          tickFormatter={(v: number) => (fractional ? formatRate(v) : formatAxisCount(v))}
           tick={AXIS}
           tickLine={false}
           axisLine={false}
           width={48}
-          allowDecimals={false}
+          allowDecimals={fractional}
         />
         <Tooltip
-          content={<ChartTooltip tz={tz} showTotal={showTotal} />}
+          content={<ChartTooltip tz={tz} showTotal={showTotal} formatValue={fractional ? formatRate : formatCount} />}
           isAnimationActive={false}
           cursor={{ stroke: 'var(--border-strong)' }}
         />

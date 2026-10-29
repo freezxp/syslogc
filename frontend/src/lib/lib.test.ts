@@ -156,6 +156,9 @@ import {
   trendPointCount,
   trendsRangePatch,
   windowHelp,
+  trendApiMetric,
+  trendDivisor,
+  formatTrendValue,
 } from '@/features/analytics/service-trends'
 import {
   PERIOD_REQUIRED,
@@ -1685,6 +1688,15 @@ describe('service trends', () => {
     expect(trendMetricIsAdditive('queries')).toBe(true)
   })
 
+  it('explains a rate by its window rather than by non-additive counts', () => {
+    // The unique-client warning would be the wrong lesson here: the risk with a
+    // rate is a coarse window flattening a burst, not a count being summed.
+    expect(windowHelp('qps')).not.toMatch(/cannot be added up/)
+    expect(windowHelp('qps')).toMatch(/average rate/)
+    // Rates shown side by side share the window, so the tooltip total is real.
+    expect(trendMetricIsAdditive('qps')).toBe(true)
+  })
+
   it('merges independently recorded series onto one timeline', () => {
     const at = (h: number) => `2026-09-22T0${h}:00:00Z`
     const { rows, series, hidden } = trendChartData({
@@ -3169,5 +3181,54 @@ describe('how full the log store is', () => {
     expect(d.used).toBeNull()
     expect(d.ceiling).toBeNull()
     expect(storeDiskNote(d, bytes)).toBe('')
+  })
+})
+
+describe('queries per second', () => {
+  it('asks the server for the stored count, not for a rate', () => {
+    // Nothing stores a rate; it is the count over the window it was counted
+    // in, so the request is the same one either way.
+    expect(trendApiMetric('qps')).toBe('queries')
+    expect(trendApiMetric('queries')).toBe('queries')
+    expect(trendApiMetric('unique_clients')).toBe('unique_clients')
+  })
+
+  it('divides a count by the window, so switching window stops moving the chart', () => {
+    // The real figures from a development box: the same traffic reads 323 in
+    // a five-minute bucket and 3,608 in an hour, which looks like a tenfold
+    // change and is not one.
+    expect(323 / trendDivisor('qps', 300)).toBeCloseTo(1.08, 2)
+    expect(3608 / trendDivisor('qps', 3600)).toBeCloseTo(1.0, 1)
+  })
+
+  it('leaves a count alone', () => {
+    // Dividing distinct clients by seconds would produce a number with no
+    // meaning: clients are not a flow.
+    expect(trendDivisor('unique_clients', 300)).toBe(1)
+    expect(trendDivisor('queries', 300)).toBe(1)
+  })
+
+  it('does not divide by a window the server did not report', () => {
+    expect(trendDivisor('qps', 0)).toBe(1)
+  })
+
+  it('shows a rate with a decimal, so a busy service does not read as zero', () => {
+    // formatExact would round 1.08 to "1" and 0.4 to "0", and a service
+    // reading zero while it is plainly being queried is worse than no figure.
+    expect(formatTrendValue('qps', 1.08)).toBe('1.1')
+    expect(formatTrendValue('qps', 0.4)).toBe('0.4')
+    // Counts stay exact: 323 is 323.
+    expect(formatTrendValue('queries', 323)).toBe('323')
+    expect(formatTrendValue('unique_clients', 1194)).toBe('1,194')
+  })
+
+  it('keeps the rate out of the URL only when it is the default view', () => {
+    const base = { window: '5m', scope: 'all', services: [] } as never
+    expect(encodeServiceTrends({ ...(base as object), metric: 'qps' } as never).count).toBe('qps')
+    expect(encodeServiceTrends({ ...(base as object), metric: 'queries' } as never).count).toBe('queries')
+    expect(encodeServiceTrends({ ...(base as object), metric: 'unique_clients' } as never).count).toBeUndefined()
+    expect(decodeServiceTrends({ count: 'qps' } as never).metric).toBe('qps')
+    // Anything unrecognised falls back rather than being passed through.
+    expect(decodeServiceTrends({ count: 'nonsense' } as never).metric).toBe('unique_clients')
   })
 })
