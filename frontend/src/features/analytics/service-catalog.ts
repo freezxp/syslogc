@@ -4,6 +4,7 @@
  * the server's problem document back onto the row that caused it.
  */
 import type { Problem, TrendService } from '@/api/types'
+import { normalCountry } from '@/lib/country'
 
 /** The server's own limits; keeping them here lets the editor say no first. */
 export const MAX_SERVICES = 32
@@ -23,6 +24,8 @@ export interface ServiceForm {
   domains: string
   /** The subset of `domains` the service is reached at; empty is normal. */
   mainDomains: string
+  /** ISO 3166-1 alpha-2, or '' when nobody has said where it is from. */
+  country: string
   enabled: boolean
 }
 
@@ -36,6 +39,7 @@ export function newServiceForm(service: Partial<Omit<ServiceForm, 'key'>> = {}):
     label: '',
     domains: '',
     mainDomains: '',
+    country: '',
     enabled: true,
     ...service,
   }
@@ -48,6 +52,7 @@ export function catalogToForm(services: TrendService[]): ServiceForm[] {
       label: s.label ?? '',
       domains: (s.domains ?? []).join('\n'),
       mainDomains: (s.main_domains ?? []).join('\n'),
+      country: s.country ?? '',
       enabled: s.enabled,
     }),
   )
@@ -70,6 +75,7 @@ function normalDomain(domain: string): string {
 export function formToServices(forms: ServiceForm[]): TrendService[] {
   return forms.map((f) => {
     const main = parseDomains(f.mainDomains)
+    const country = normalCountry(f.country)
     return {
       name: f.name.trim(),
       label: f.label.trim(),
@@ -77,6 +83,9 @@ export function formToServices(forms: ServiceForm[]): TrendService[] {
       // Left out when there are none, the way the server omits it: a service
       // without main domains simply has no separate main count.
       ...(main.length ? { main_domains: main } : {}),
+      // Upper-cased here as well as on the server, so a flag appears as soon
+      // as the code is typed rather than only after a save and reload.
+      ...(country ? { country } : {}),
       enabled: f.enabled,
     }
   })

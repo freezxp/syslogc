@@ -538,6 +538,8 @@ export interface TrendService {
   domains: string[]
   /** A subset of `domains`: the ones the service is reached at. May be absent. */
   main_domains?: string[]
+  /** Where it comes from, ISO 3166-1 alpha-2 and upper-case. Shown as a flag; nothing counts by it. */
+  country?: string
   /** False keeps a service in the catalog without counting it. */
   enabled: boolean
 }

@@ -2773,6 +2773,8 @@ export interface components {
             domains: string[];
             /** @description The domains the service is reached at, as opposed to the CDNs and APIs its apps query in the background. Must be a subset of `domains`; empty means the service has no separate main count. */
             main_domains?: string[];
+            /** @description Where the service comes from, as an ISO 3166-1 alpha-2 code. Shown as a flag beside the label and nothing else: no counting or matching uses it. Stored upper-cased, and absent when nobody has said. A code this build does not recognise is stored rather than refused, because the list changes. */
+            country?: string;
             /** @description False keeps a service in the catalog without counting it. */
             enabled?: boolean;
         };

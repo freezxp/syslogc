@@ -13,7 +13,7 @@ import { useServiceCatalog, useServiceTrends } from '@/api/hooks'
 import type { TimeRange } from '@/api/types'
 import { useCan } from '@/auth/permissions'
 import { GroupedSeriesChart } from '@/components/charts'
-import { EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
+import { CountryFlag, EmptyState, ErrorPanel, Panel, Skeleton } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/input'
 import {
@@ -108,6 +108,10 @@ export function ServiceTrendsView() {
 
   const services = catalog.data?.services ?? []
   const labelOf = (name: string) => services.find((s) => s.name === name)?.label || undefined
+  // The series the chart draws carry a name and a label but no country: the
+  // country belongs to the catalog, not to the recording, so it is looked up
+  // here rather than stored in every sample.
+  const countryOf = (name: string) => services.find((s) => s.name === name)?.country
   // A service with no main domains is absent from the main scope altogether, so
   // an empty chart there is a gap in the catalog rather than a rollup that has
   // stopped recording — and the server, which only sees empty series, cannot say so.
@@ -189,6 +193,7 @@ export function ServiceTrendsView() {
                   }
                   onSelect={(e) => e.preventDefault()}
                 >
+                  <CountryFlag code={s.country} className="mr-1.5" />
                   <span className="truncate">{s.label || s.name}</span>
                   {!s.enabled && <span className="ml-auto pl-2 text-xs text-subtle">off</span>}
                 </DropdownMenuCheckboxItem>
@@ -313,6 +318,7 @@ export function ServiceTrendsView() {
                     {chartSeries.map((s) => (
                       <li key={s.key} className="flex min-w-0 items-center gap-1.5">
                         <span className="inline-block size-2 shrink-0 rounded-sm" style={{ background: s.color }} />
+                        <CountryFlag code={countryOf(s.service)} />
                         <span className="truncate" title={s.label}>
                           {s.label}
                         </span>

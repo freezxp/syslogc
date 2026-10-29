@@ -10,9 +10,10 @@ import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import { useUpdateServiceCatalog } from '@/api/hooks'
 import type { ServiceCatalog } from '@/api/types'
-import { Panel } from '@/components/data/common'
+import { CountryFlag, Panel } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
-import { Input, Label, Textarea } from '@/components/ui/input'
+import { Input, Label, NativeSelect, Textarea } from '@/components/ui/input'
+import { countryOptions } from '@/lib/country'
 
 import {
   catalogProblemErrors,
@@ -26,6 +27,9 @@ import {
   type CatalogErrors,
   type ServiceForm,
 } from './service-catalog'
+
+/** Every country, by name. Fixed for the life of the page, so built once. */
+const COUNTRIES = countryOptions()
 
 export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCatalog; editable: boolean }) {
   // Seeded once: a background refetch must not overwrite what is being typed.
@@ -133,7 +137,7 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
         <ol className="grid gap-2">
           {rows.map((row, i) => (
             <li key={row.key} className="min-w-0 rounded-md border border-border bg-surface-2 p-2.5">
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_13rem]">
                 <div className="min-w-0">
                   <Label htmlFor={`${row.key}-name`}>Name</Label>
                   <Input
@@ -159,6 +163,32 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
                     onChange={(e) => replace(i, { label: e.target.value })}
                   />
                   <p className="mt-0.5 text-xs text-subtle">Shown in the chart and the peak callout.</p>
+                </div>
+                <div className="min-w-0">
+                  <Label htmlFor={`${row.key}-country`}>Country</Label>
+                  <div className="flex items-center gap-1.5">
+                    <CountryFlag code={row.country} />
+                    <NativeSelect
+                      id={`${row.key}-country`}
+                      className="min-w-0 flex-1"
+                      value={row.country}
+                      disabled={!editable}
+                      onChange={(e) => replace(i, { country: e.target.value })}
+                    >
+                      <option value="">Not set</option>
+                      {/* A code stored through the API that this build has no
+                          flag for would otherwise vanish on the next save. */}
+                      {row.country && !COUNTRIES.some((c) => c.code === row.country) && (
+                        <option value={row.country}>{row.country}</option>
+                      )}
+                      {COUNTRIES.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </div>
+                  <p className="mt-0.5 text-xs text-subtle">A flag beside the label. Nothing is counted by it.</p>
                 </div>
               </div>
 

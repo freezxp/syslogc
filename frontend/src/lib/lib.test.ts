@@ -240,6 +240,7 @@ import vectors from './filter-text.vectors.json'
 import { safeNext } from './redirect'
 import { RingBuffer } from './ring-buffer'
 import { TimeRangeError, parseQuickInput, resolveExpr, resolveRange } from './time-range'
+import { countryName, countryOptions, flagUrl, normalCountry } from './country'
 import { formatAxisCount } from './format'
 import {
   parseColumns,
@@ -1802,6 +1803,7 @@ describe('service catalog', () => {
     label: 'TikTok',
     domains: 'tiktok.com',
     mainDomains: '',
+    country: '',
     enabled: true,
     ...patch,
   })
@@ -1824,6 +1826,21 @@ describe('service catalog', () => {
     const withMain = [{ ...stored, main_domains: ['tiktok.com'] }]
     expect(catalogToForm(withMain)[0]).toMatchObject({ mainDomains: 'tiktok.com' })
     expect(formToServices(catalogToForm(withMain))).toEqual(withMain)
+  })
+
+  it('round-trips the country, and sends none rather than an empty one', () => {
+    // Both mappers list their fields one by one, so a field added to the form
+    // but forgotten in either direction is dropped in silence: loaded and then
+    // saved, the country would be gone.
+    const stored = [{ name: 'spotify', label: 'Spotify', domains: ['spotify.com'], country: 'SE', enabled: true }]
+    expect(catalogToForm(stored)[0]).toMatchObject({ country: 'SE' })
+    expect(formToServices(catalogToForm(stored))).toEqual(stored)
+    // Not set stays unset rather than becoming an empty string.
+    expect(formToServices([service()])[0]).not.toHaveProperty('country')
+    // Typed in any case, it is stored the way a flag is looked up.
+    expect(formToServices([service({ country: 'se' })])[0]?.country).toBe('SE')
+    // Something that is not a country is dropped rather than sent on.
+    expect(formToServices([service({ country: 'Sweden' })])[0]).not.toHaveProperty('country')
   })
 
   it('refuses a main domain the service does not own', () => {
@@ -3230,5 +3247,45 @@ describe('queries per second', () => {
     expect(decodeServiceTrends({ count: 'qps' } as never).metric).toBe('qps')
     // Anything unrecognised falls back rather than being passed through.
     expect(decodeServiceTrends({ count: 'nonsense' } as never).metric).toBe('unique_clients')
+  })
+})
+
+describe('country flags', () => {
+  it('accepts a two-letter code in any case and nothing else', () => {
+    expect(normalCountry(' us ')).toBe('US')
+    expect(normalCountry('Se')).toBe('SE')
+    // A three-letter code, a name, or a subdivision is not a country here.
+    expect(normalCountry('USA')).toBe('')
+    expect(normalCountry('gb-eng')).toBe('')
+    expect(normalCountry('')).toBe('')
+    expect(normalCountry(undefined)).toBe('')
+    expect(normalCountry(null)).toBe('')
+  })
+
+  it('names a country without shipping a table of names', () => {
+    expect(countryName('US')).toBe('United States')
+    expect(countryName('se')).toBe('Sweden')
+    expect(countryName('')).toBe('')
+    // A well-formed code nobody has a name for comes back as itself, so it
+    // still reads as a country rather than as an error. (Not every odd-looking
+    // code is unassigned: ZZ is CLDR's "Unknown Region" and has a name.)
+    expect(countryName('QX')).toBe('QX')
+  })
+
+  it('has a flag for the countries the default catalog names', () => {
+    // Every country assigned in backend/internal/servicetrends/catalog.go.
+    for (const code of ['US', 'CN', 'SE', 'JP', 'SG', 'AE']) {
+      expect(flagUrl(code), code).toBeTruthy()
+    }
+    expect(flagUrl('QX')).toBeUndefined()
+    expect(flagUrl('gb-eng')).toBeUndefined()
+  })
+
+  it('offers every country it can draw, by name', () => {
+    const options = countryOptions()
+    expect(options.length).toBeGreaterThan(200)
+    expect(options.map((o) => o.code)).toContain('MY')
+    const names = options.map((o) => o.name)
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, 'en')))
   })
 })

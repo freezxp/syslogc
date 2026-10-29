@@ -1112,6 +1112,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'tiktok',
+      country: 'CN',
       label: 'TikTok',
       enabled: true,
       domains: ['tiktok.com', 'tiktokv.com', 'tiktokcdn.com', 'byteoversea.com'],
@@ -1126,6 +1127,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'youtube',
+      country: 'US',
       label: 'YouTube',
       enabled: true,
       domains: ['youtube.com', 'youtu.be', 'ytimg.com', 'googlevideo.com'],
@@ -1140,6 +1142,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'microsoft365',
+      country: 'US',
       label: 'Microsoft 365',
       enabled: true,
       domains: ['office365.com', 'office.com', 'microsoftonline.com', 'sharepoint.com'],
@@ -1154,6 +1157,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'facebook',
+      country: 'US',
       label: 'Facebook & Instagram',
       enabled: true,
       domains: ['facebook.com', 'fbcdn.net', 'instagram.com', 'cdninstagram.com', 'whatsapp.net'],
@@ -1168,6 +1172,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'google',
+      country: 'US',
       label: 'Google',
       enabled: true,
       domains: ['google.com', 'gstatic.com', 'gmail.com'],
@@ -1182,6 +1187,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'snapchat',
+      country: 'US',
       label: 'Snapchat',
       enabled: true,
       domains: ['snapchat.com', 'sc-cdn.net'],
@@ -1196,6 +1202,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'spotify',
+      country: 'SE',
       label: 'Spotify',
       enabled: true,
       domains: ['spotify.com', 'scdn.co'],
@@ -1210,6 +1217,7 @@ const TREND_PROFILES: TrendProfile[] = [
   {
     service: {
       name: 'netflix',
+      country: 'US',
       label: 'Netflix',
       enabled: true,
       domains: ['netflix.com', 'nflxvideo.net'],
@@ -1326,6 +1334,8 @@ function catalogValidationError(services: TrendService[]): Response | null {
     else if (seen.has(s.name)) messages.push(`${where}: name: already used by another service`)
     seen.add(s.name)
     if ((s.label ?? '').length > 64) messages.push(`${where}: label: longer than 64 characters`)
+    if (s.country && !/^[A-Za-z]{2}$/.test(s.country))
+      messages.push(`${where}: country: must be a two-letter ISO 3166-1 code such as SE, or empty`)
     const domains = s.domains ?? []
     if (domains.length === 0) messages.push(`${where}: needs at least one domain`)
     else if (domains.length > 32) messages.push(`${where}: at most 32 domains are allowed, it has ${domains.length}`)

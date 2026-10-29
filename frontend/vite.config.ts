@@ -42,6 +42,11 @@ export default defineConfig(({ mode }) => ({
     assetsDir: 'assets',
     sourcemap: false,
     chunkSizeWarningLimit: 700,
+    // Every flag is small enough that Vite would inline it as a data URI, and
+    // the catalog can name any country, so all of them would land in the main
+    // chunk — half a megabyte to show the eight flags a page actually uses.
+    // Kept as files, the browser fetches only those eight.
+    assetsInlineLimit: (filePath: string) => (filePath.includes('circle-flags') ? false : undefined),
   },
   test: {
     environment: 'jsdom',

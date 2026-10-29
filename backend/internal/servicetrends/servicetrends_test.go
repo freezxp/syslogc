@@ -33,6 +33,65 @@ func TestDefaultCatalogIsValid(t *testing.T) {
 	}
 }
 
+func TestDefaultCatalogNamesACountryForEveryService(t *testing.T) {
+	// The flag beside a service is the point of the field, so a shipped
+	// service without one is a gap somebody has to fill in by hand.
+	for _, s := range DefaultCatalog().Services {
+		if s.Country == "" {
+			t.Errorf("%s has no country", s.Name)
+			continue
+		}
+		if s.Country != strings.ToUpper(s.Country) {
+			t.Errorf("%s: country %q is not upper-case, so it will not match a flag", s.Name, s.Country)
+		}
+	}
+}
+
+func TestCountryIsOptionalAndTwoLetters(t *testing.T) {
+	base := Service{Name: "a", Domains: []string{"example.com"}, Enabled: true}
+	for _, tc := range []struct {
+		country string
+		ok      bool
+	}{
+		{"", true},     // nobody has said where it is from
+		{"SE", true},   //
+		{"se", true},   // accepted, and stored upper-cased
+		{"QX", true},   // unassigned today, but codes are added
+		{"S", false},   //
+		{"SWE", false}, //
+		{"S1", false},  //
+		{"🇸🇪", false},  // the flag itself is not the code
+	} {
+		s := base
+		s.Country = tc.country
+		err := Catalog{Services: []Service{s}}.Validate()
+		if tc.ok && err != nil {
+			t.Errorf("country %q: %v", tc.country, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("country %q was accepted", tc.country)
+		}
+	}
+}
+
+func TestNormalizedUpperCasesCountries(t *testing.T) {
+	c := Catalog{Services: []Service{
+		{Name: "a", Country: " se "},
+		{Name: "b", Country: "US"},
+		{Name: "c"},
+	}}
+	got := c.Normalized()
+	for i, want := range []string{"SE", "US", ""} {
+		if got.Services[i].Country != want {
+			t.Errorf("service %d: country %q, want %q", i, got.Services[i].Country, want)
+		}
+	}
+	// The original is left alone: callers may still be reading it.
+	if c.Services[0].Country != " se " {
+		t.Errorf("Normalized changed the catalog it was called on")
+	}
+}
+
 func TestServiceFilterMatchesDomainsAndSubdomains(t *testing.T) {
 	s := Service{Name: "tiktok", Domains: []string{"tiktok.com", " TikTokcdn.com. "}}
 	e := s.Filter("dns.qname")

@@ -302,6 +302,17 @@ a service therefore also changes what past windows would count, and history
 can be backfilled from logs stored long before the service was in the
 catalog — by default the last 7 days are filled in on first start.
 
+### Where a service comes from
+
+Each service may name a country, as an ISO 3166-1 alpha-2 code such as `SE`.
+It is shown as a flag beside the label in the chart legend, the service
+filter and the catalog editor, and that is all it does: nothing is matched,
+counted or filtered by it. Every shipped service names the country of
+whoever runs it; leave it unset for one that belongs nowhere in particular.
+
+A code this build has never heard of is stored rather than refused, since
+the list changes — it then shows as the two letters instead of a flag.
+
 ### Reached, or merely talked to
 
 Each service is counted twice over, under two scopes:

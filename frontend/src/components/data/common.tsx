@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip } from '@/components/ui/overlay'
 import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/cn'
+import { countryName, flagUrl, normalCountry } from '@/lib/country'
 import { formatCount, formatDuration, formatExact } from '@/lib/format'
 import { severityColor, severityLabel } from '@/lib/severity'
 
@@ -22,6 +23,41 @@ export function SeverityBadge({ severity, className }: { severity: string | unde
     >
       {severityLabel(severity)}
     </span>
+  )
+}
+
+/**
+ * A country's flag, for beside the name of whatever it belongs to. The flag
+ * is the only thing saying which country it is, so it carries the country's
+ * name rather than being decorative; a code with no flag in the set falls
+ * back to the code itself, which reads as deliberate rather than missing.
+ */
+export function CountryFlag({ code, className }: { code: string | null | undefined; className?: string }) {
+  const country = normalCountry(code)
+  if (!country) return null
+  const name = countryName(country)
+  const url = flagUrl(country)
+  if (!url) {
+    return (
+      <span
+        title={name}
+        className={cn('text-subtle shrink-0 text-[10px] leading-none font-semibold tracking-wide', className)}
+      >
+        {country}
+      </span>
+    )
+  }
+  return (
+    <img
+      src={url}
+      alt={name}
+      title={name}
+      width={14}
+      height={14}
+      loading="lazy"
+      decoding="async"
+      className={cn('inline-block size-3.5 shrink-0 rounded-full', className)}
+    />
   )
 }
 

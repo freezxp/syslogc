@@ -8,6 +8,31 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.11.0 — 2026-10-29
+
+### Added
+
+- **A country flag beside each DNS service.** A service in the catalog can
+  name where it comes from, as an ISO 3166-1 alpha-2 code, and the flag is
+  shown beside its label in the chart legend, the service filter and the
+  catalog editor. Every shipped service names one; the field is editorial
+  and nothing is matched, counted or filtered by it.
+
+  The country is picked from a list of every country in the catalog editor,
+  so there is nothing to spell. A code stored through the API that this
+  build has no flag for is kept rather than refused — the list of countries
+  changes — and shows as the two letters.
+
+  The flags are images, not emoji. A flag emoji would cost nothing to ship,
+  but no font Windows includes contains one, so a Windows browser draws the
+  two letters instead — and every browser that signs in to this deployment
+  is Windows. The images add about 5 KB to the compressed bundle; each flag
+  is a separate file, so a page fetches only the handful it shows.
+
+  Upgrading changes nothing on its own: a catalog saved before this release
+  has no countries until you set them, and the shipped countries appear only
+  where the default catalog is still in use.
+
 ## 1.10.0 — 2026-10-29
 
 ### Added

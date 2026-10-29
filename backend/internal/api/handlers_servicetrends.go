@@ -60,7 +60,7 @@ func (s *Server) handleSetServiceCatalog(w http.ResponseWriter, r *http.Request,
 	if err := decodeJSON(w, r, &req, true); err != nil {
 		return err
 	}
-	catalog := servicetrends.Catalog{Services: req.Services}
+	catalog := servicetrends.Catalog{Services: req.Services}.Normalized()
 	if err := catalog.Validate(); err != nil {
 		return badRequest("validation_failed", "/services", "%v", err)
 	}

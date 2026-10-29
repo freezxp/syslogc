@@ -50,6 +50,12 @@ type Service struct {
 	// count is always a subset of the full one. Empty means the service has
 	// no separate main count.
 	MainDomains []string `json:"main_domains,omitempty"`
+	// Country is where the service comes from, as an ISO 3166-1 alpha-2
+	// code, and it is editorial: nothing is matched or counted by it. It is
+	// shown beside the label so a chart of services reads as more than a list
+	// of brands. Empty means nobody has said, which is not the same as "no
+	// country" — a service may be from nowhere in particular.
+	Country string `json:"country,omitempty"`
 	// Enabled is false to keep a service in the catalog without counting it.
 	Enabled bool `json:"enabled"`
 }
@@ -67,87 +73,87 @@ func DefaultCatalog() Catalog {
 		// too — so each app is matched on the domains only it uses. Adding
 		// the shared CDN to one of them would quietly fold the others back
 		// into it, which is the opposite of counting them separately.
-		{Name: "facebook", Label: "Facebook", Enabled: true, Domains: []string{
+		{Name: "facebook", Label: "Facebook", Country: "US", Enabled: true, Domains: []string{
 			"facebook.com", "fb.com", "fbsbx.com", "fb.watch", "messenger.com",
 		}, MainDomains: []string{"facebook.com", "fb.watch", "messenger.com"}},
-		{Name: "instagram", Label: "Instagram", Enabled: true, Domains: []string{
+		{Name: "instagram", Label: "Instagram", Country: "US", Enabled: true, Domains: []string{
 			"instagram.com", "cdninstagram.com", "ig.me",
 		}, MainDomains: []string{"instagram.com", "ig.me"}},
-		{Name: "threads", Label: "Threads", Enabled: true, Domains: []string{
+		{Name: "threads", Label: "Threads", Country: "US", Enabled: true, Domains: []string{
 			"threads.net", "threads.com",
 		}, MainDomains: []string{"threads.net", "threads.com"}},
-		{Name: "whatsapp", Label: "WhatsApp", Enabled: true, Domains: []string{
+		{Name: "whatsapp", Label: "WhatsApp", Country: "US", Enabled: true, Domains: []string{
 			"whatsapp.com", "whatsapp.net", "wa.me",
 		}, MainDomains: []string{"whatsapp.com", "wa.me"}},
-		{Name: "tiktok", Label: "TikTok", Enabled: true, Domains: []string{
+		{Name: "tiktok", Label: "TikTok", Country: "CN", Enabled: true, Domains: []string{
 			"tiktok.com", "tiktokv.com", "tiktokcdn.com", "tiktokcdn-us.com", "musical.ly", "byteoversea.com", "ibytedtos.com",
 		}, MainDomains: []string{"tiktok.com", "musical.ly"}},
-		{Name: "lemon8", Label: "Lemon8", Enabled: true, Domains: []string{
+		{Name: "lemon8", Label: "Lemon8", Country: "CN", Enabled: true, Domains: []string{
 			"lemon8-app.com", "lemon8.com",
 		}, MainDomains: []string{"lemon8-app.com", "lemon8.com"}},
-		{Name: "douyin", Label: "Douyin", Enabled: true, Domains: []string{
+		{Name: "douyin", Label: "Douyin", Country: "CN", Enabled: true, Domains: []string{
 			"douyin.com", "douyinpic.com", "douyinstatic.com", "douyinvod.com",
 		}, MainDomains: []string{"douyin.com"}},
-		{Name: "youtube", Label: "YouTube", Enabled: true, Domains: []string{
+		{Name: "youtube", Label: "YouTube", Country: "US", Enabled: true, Domains: []string{
 			"youtube.com", "youtu.be", "ytimg.com", "googlevideo.com", "youtubei.googleapis.com", "yt3.ggpht.com",
 		}, MainDomains: []string{"youtube.com", "youtu.be"}},
-		{Name: "x", Label: "X (Twitter)", Enabled: true, Domains: []string{
+		{Name: "x", Label: "X (Twitter)", Country: "US", Enabled: true, Domains: []string{
 			"x.com", "twitter.com", "twimg.com", "t.co",
 		}, MainDomains: []string{"x.com", "twitter.com", "t.co"}},
-		{Name: "linkedin", Label: "LinkedIn", Enabled: true, Domains: []string{
+		{Name: "linkedin", Label: "LinkedIn", Country: "US", Enabled: true, Domains: []string{
 			"linkedin.com", "licdn.com", "lnkd.in",
 		}, MainDomains: []string{"linkedin.com", "lnkd.in"}},
-		{Name: "reddit", Label: "Reddit", Enabled: true, Domains: []string{
+		{Name: "reddit", Label: "Reddit", Country: "US", Enabled: true, Domains: []string{
 			"reddit.com", "redd.it", "redditmedia.com", "redditstatic.com",
 		}, MainDomains: []string{"reddit.com", "redd.it"}},
-		{Name: "xiaohongshu", Label: "Xiaohongshu (RedNote)", Enabled: true, Domains: []string{
+		{Name: "xiaohongshu", Label: "Xiaohongshu (RedNote)", Country: "CN", Enabled: true, Domains: []string{
 			"xiaohongshu.com", "xhscdn.com", "xhslink.com", "rednote.com",
 		}, MainDomains: []string{"xiaohongshu.com", "xhslink.com", "rednote.com"}},
-		{Name: "weibo", Label: "Weibo", Enabled: true, Domains: []string{
+		{Name: "weibo", Label: "Weibo", Country: "CN", Enabled: true, Domains: []string{
 			"weibo.com", "weibo.cn", "weibocdn.com", "sinaimg.cn",
 		}, MainDomains: []string{"weibo.com", "weibo.cn"}},
-		{Name: "tumblr", Label: "Tumblr", Enabled: true, Domains: []string{
+		{Name: "tumblr", Label: "Tumblr", Country: "US", Enabled: true, Domains: []string{
 			"tumblr.com", "txmblr.com",
 		}, MainDomains: []string{"tumblr.com"}},
-		{Name: "pinterest", Label: "Pinterest", Enabled: true, Domains: []string{
+		{Name: "pinterest", Label: "Pinterest", Country: "US", Enabled: true, Domains: []string{
 			"pinterest.com", "pinimg.com", "pin.it",
 		}, MainDomains: []string{"pinterest.com", "pin.it"}},
-		{Name: "snapchat", Label: "Snapchat", Enabled: true, Domains: []string{
+		{Name: "snapchat", Label: "Snapchat", Country: "US", Enabled: true, Domains: []string{
 			"snapchat.com", "sc-cdn.net", "snap.com", "snapkit.com",
 		}, MainDomains: []string{"snapchat.com", "snap.com"}},
-		{Name: "quora", Label: "Quora", Enabled: true, Domains: []string{
+		{Name: "quora", Label: "Quora", Country: "US", Enabled: true, Domains: []string{
 			"quora.com", "quoracdn.net",
 		}, MainDomains: []string{"quora.com"}},
-		{Name: "bigolive", Label: "BIGO LIVE", Enabled: true, Domains: []string{
+		{Name: "bigolive", Label: "BIGO LIVE", Country: "SG", Enabled: true, Domains: []string{
 			"bigo.tv", "bigolive.tv", "bigo.sg", "bigocdn.com",
 		}, MainDomains: []string{"bigo.tv", "bigolive.tv"}},
-		{Name: "telegram", Label: "Telegram", Enabled: true, Domains: []string{
+		{Name: "telegram", Label: "Telegram", Country: "AE", Enabled: true, Domains: []string{
 			"telegram.org", "telegram.me", "t.me", "cdn-telegram.org",
 		}, MainDomains: []string{"telegram.org", "telegram.me", "t.me"}},
-		{Name: "wechat", Label: "WeChat", Enabled: true, Domains: []string{
+		{Name: "wechat", Label: "WeChat", Country: "CN", Enabled: true, Domains: []string{
 			"wechat.com", "weixin.qq.com", "wx.qq.com", "wechatapp.com",
 		}, MainDomains: []string{"wechat.com", "weixin.qq.com"}},
-		{Name: "line", Label: "LINE", Enabled: true, Domains: []string{
+		{Name: "line", Label: "LINE", Country: "JP", Enabled: true, Domains: []string{
 			"line.me", "line-apps.com", "line-scdn.net",
 		}, MainDomains: []string{"line.me"}},
-		{Name: "discord", Label: "Discord", Enabled: true, Domains: []string{
+		{Name: "discord", Label: "Discord", Country: "US", Enabled: true, Domains: []string{
 			"discord.com", "discordapp.com", "discord.gg", "discordapp.net",
 		}, MainDomains: []string{"discord.com", "discord.gg"}},
-		{Name: "twitch", Label: "Twitch", Enabled: true, Domains: []string{
+		{Name: "twitch", Label: "Twitch", Country: "US", Enabled: true, Domains: []string{
 			"twitch.tv", "ttvnw.net", "jtvnw.net",
 		}, MainDomains: []string{"twitch.tv"}},
-		{Name: "netflix", Label: "Netflix", Enabled: true, Domains: []string{
+		{Name: "netflix", Label: "Netflix", Country: "US", Enabled: true, Domains: []string{
 			"netflix.com", "nflxvideo.net", "nflxso.net", "nflximg.net",
 		}, MainDomains: []string{"netflix.com"}},
-		{Name: "spotify", Label: "Spotify", Enabled: true, Domains: []string{
+		{Name: "spotify", Label: "Spotify", Country: "SE", Enabled: true, Domains: []string{
 			"spotify.com", "scdn.co", "spotifycdn.com",
 		}, MainDomains: []string{"spotify.com"}},
 		// Not social, but useful next to it: these are what the working day
 		// looks like, and they make a consumer peak easy to read against.
-		{Name: "google", Label: "Google", Enabled: true, Domains: []string{
+		{Name: "google", Label: "Google", Country: "US", Enabled: true, Domains: []string{
 			"google.com", "gstatic.com", "googleapis.com", "gmail.com",
 		}, MainDomains: []string{"google.com", "gmail.com"}},
-		{Name: "microsoft365", Label: "Microsoft 365", Enabled: true, Domains: []string{
+		{Name: "microsoft365", Label: "Microsoft 365", Country: "US", Enabled: true, Domains: []string{
 			"office365.com", "office.com", "microsoft.com", "microsoftonline.com", "sharepoint.com", "teams.microsoft.com",
 		}, MainDomains: []string{"office.com", "office365.com", "teams.microsoft.com"}},
 	}}
@@ -198,8 +204,45 @@ func (c Catalog) Validate() error {
 				errs = append(errs, fmt.Errorf("%s: main domain %q is not one of its domains", where, d))
 			}
 		}
+		if err := validCountry(s.Country); err != nil {
+			errs = append(errs, fmt.Errorf("%s: country: %w", where, err))
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// validCountry accepts an empty country, or two letters. Whether those two
+// letters name a country that exists is not checked here: the list changes,
+// and a code this build has never heard of is better stored than refused.
+func validCountry(country string) error {
+	if country == "" {
+		return nil
+	}
+	if len(country) != 2 || !isLetters(country) {
+		return fmt.Errorf("must be a two-letter ISO 3166-1 code such as SE, or empty")
+	}
+	return nil
+}
+
+func isLetters(s string) bool {
+	for _, r := range s {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
+// Normalized returns the catalog as it should be stored: countries upper-cased
+// and trimmed, so "se" typed into the editor matches the "SE" a flag is looked
+// up by. Everything else is left exactly as it was given.
+func (c Catalog) Normalized() Catalog {
+	out := Catalog{Services: make([]Service, len(c.Services))}
+	copy(out.Services, c.Services)
+	for i := range out.Services {
+		out.Services[i].Country = strings.ToUpper(strings.TrimSpace(out.Services[i].Country))
+	}
+	return out
 }
 
 // Enabled returns the services that are counted, in a stable order.
