@@ -31,6 +31,20 @@ is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
   for counts and wrong for anything below 1 — a rate of 0.4/sec read as `0`.
   Charts that show fractions now say so.
 
+- **Dependency advisories cleared.** `seroval` and `seroval-plugins`
+  1.6.7 → 1.7.3 (CVE-2026-116580, CVE-2026-116581, CVE-2026-116584:
+  deserialization of untrusted input in `fromJSON`/`fromCrossJSON`). They
+  arrive under TanStack Router, which pins them, so they are pinned through
+  an `overrides` entry in `frontend/package.json` — remove it once the
+  router ships a version that depends on 1.7 itself. `golang.org/x/net`
+  v0.58.0 → v0.62.0 with `golang.org/x/crypto` v0.57.0 → v0.58.0 and the
+  usual `x/sync`, `x/sys`, `x/text` companions.
+
+  `govulncheck` reports nothing this code calls, and `npm audit` is clean
+  including dev dependencies. One advisory is left and cannot be fixed:
+  GO-2026-5932, the unmaintained `x/crypto/openpgp`, which has no fixed
+  release and is not reachable from this code.
+
 ## 1.9.1 — 2026-10-26
 
 ### Fixed

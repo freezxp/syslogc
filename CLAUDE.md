@@ -7,7 +7,7 @@ SCOPE (the department's tool catalog, github.com/freezxp/scope) scanned this rep
 
 **Critical/high in production dependencies**
 
-- [ ] **high** `seroval` 1.6.7 → **1.6.8** (frontend/package-lock.json): 3 advisories
+- [x] **high** `seroval` 1.6.7 → **1.7.3** (frontend/package-lock.json): 3 advisories
   - CVE-2026-116580 Seroval: Deserialization invokes attacker-chosen callables: AsyncIteratorFactoryInstance calls source.on(list…
   - CVE-2026-116581 Seroval: fromJSON deserializer trusts node-supplied array length and sequence doneAt (unauthenticated event-l…
   - CVE-2026-116584 Seroval `fromJSON`/`fromCrossJSON` denial of service via unvalidated array node length
