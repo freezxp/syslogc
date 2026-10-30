@@ -716,6 +716,26 @@ paths:
         "200": {description: OK, content: {application/json: {schema: {$ref: "#/components/schemas/ServiceCatalog"}}}}
         "422": {$ref: "#/components/responses/Problem"}
 
+  /api/v1/analytics/services/defaults:
+    get:
+      tags: [analytics]
+      summary: The service catalog this build ships with
+      description: |
+        Requires `analytics:manage`. What a deployment would start with, for
+        the editor to fill blanks from — a catalog saved before a field
+        existed has nothing in it. Reading this changes nothing; the editor
+        still has to save what it takes.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services: {type: array, items: {$ref: "#/components/schemas/DNSService"}}
+
   /api/v1/sources/adopt:
     post:
       tags: [sources]

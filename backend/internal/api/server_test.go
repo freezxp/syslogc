@@ -1463,6 +1463,23 @@ func TestServiceCatalog(t *testing.T) {
 		t.Errorf("stored catalog: %d %s", resp.StatusCode, body)
 	}
 
+	// The shipped catalog is still readable once a stored one has replaced
+	// it — that is the point: it is what the editor fills blanks from. The
+	// stored catalog above dropped every country, and this still has them.
+	resp, body = ops.do("GET", "/api/v1/analytics/services/defaults", nil, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), `"youtube"`) ||
+		!strings.Contains(string(body), `"country":"SE"`) {
+		t.Errorf("shipped catalog: %d %s", resp.StatusCode, body)
+	}
+	// Reading it is only useful while editing, so it needs leave to edit.
+	if resp, _ := viewer.do("GET", "/api/v1/analytics/services/defaults", nil, nil); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer reading the shipped catalog: %d", resp.StatusCode)
+	}
+	// Asking changed nothing.
+	if _, body := viewer.do("GET", "/api/v1/analytics/services", nil, nil); !strings.Contains(string(body), `"corporate"`) {
+		t.Errorf("reading the shipped catalog changed the stored one: %s", body)
+	}
+
 	for _, tc := range []struct {
 		name, want string
 		services   []map[string]any

@@ -8,6 +8,27 @@ endpoint, a migration that is not automatic. The minor number changes for a
 feature, the patch number for a fix. Every release is tagged `vX.Y.Z`, which
 is what builds and signs the images; see [docs/releasing.md](docs/releasing.md).
 
+## 1.12.0 — 2026-10-30
+
+### Added
+
+- **"Fill in countries" in the service catalog editor.** A catalog saved
+  before 1.11.0 has no countries in it, and the shipped ones only show where
+  the default catalog is still in use — so an upgraded deployment had to set
+  27 of them by hand. The button gives every service without a country the
+  one this build ships for it, matching on name.
+
+  It fills blanks only. A country already chosen is never overwritten, even
+  where the shipped catalog disagrees, and a service this build does not ship
+  is left alone rather than guessed at. Nothing is saved: the rows change,
+  the editor says what it did and which services it touched, and saving is
+  still a separate, deliberate click.
+
+- `GET /api/v1/analytics/services/defaults` returns the catalog this build
+  ships with, which is what the button fills from. It requires
+  `analytics:manage`, since it is only useful while editing, and reading it
+  changes nothing.
+
 ## 1.11.0 — 2026-10-29
 
 ### Added

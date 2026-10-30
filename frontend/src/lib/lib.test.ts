@@ -136,6 +136,7 @@ import {
 import {
   catalogProblemErrors,
   catalogToForm,
+  fillCountries,
   formToServices,
   hasCatalogErrors,
   parseDomains,
@@ -1841,6 +1842,46 @@ describe('service catalog', () => {
     expect(formToServices([service({ country: 'se' })])[0]?.country).toBe('SE')
     // Something that is not a country is dropped rather than sent on.
     expect(formToServices([service({ country: 'Sweden' })])[0]).not.toHaveProperty('country')
+  })
+
+  it('fills empty countries from the shipped catalog and overwrites nothing', () => {
+    const shipped = [
+      { name: 'tiktok', country: 'CN' },
+      { name: 'spotify', country: 'SE' },
+      { name: 'netflix', country: 'US' },
+      { name: 'nocountry', country: '' },
+    ]
+    const rows = [
+      service({ name: 'tiktok', label: 'TikTok', country: '' }),
+      // Already answered, and the deployment's own answer wins even where the
+      // shipped catalog says otherwise.
+      service({ name: 'spotify', label: 'Spotify', country: 'NO' }),
+      // Not a service this build ships: left alone rather than guessed at.
+      service({ name: 'intranet', label: 'Intranet', country: '' }),
+      // Shipped, but without a country of its own.
+      service({ name: 'nocountry', label: 'No country', country: '' }),
+    ]
+    const { rows: next, filled } = fillCountries(rows, shipped)
+    expect(next.map((r) => r.country)).toEqual(['CN', 'NO', '', ''])
+    // Reported by label, because that is what the person reading it sees.
+    expect(filled).toEqual(['TikTok'])
+  })
+
+  it('leaves the rows untouched when there is nothing to fill', () => {
+    const rows = [service({ name: 'tiktok', country: 'CN' })]
+    const { rows: next, filled } = fillCountries(rows, [{ name: 'tiktok', country: 'CN' }])
+    expect(filled).toEqual([])
+    // The same array, so the editor is not marked dirty over a no-op.
+    expect(next).toBe(rows)
+  })
+
+  it('matches a shipped service however its name is cased or spaced', () => {
+    const rows = [service({ name: ' TikTok ', label: '', country: '' })]
+    const { rows: next, filled } = fillCountries(rows, [{ name: 'tiktok', country: 'cn' }])
+    // The code is normalised on the way in, so a lower-case one still matches a flag.
+    expect(next[0]?.country).toBe('CN')
+    // No label to show, so the name stands in for it.
+    expect(filled).toEqual(['TikTok'])
   })
 
   it('refuses a main domain the service does not own', () => {

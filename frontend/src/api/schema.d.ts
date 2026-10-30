@@ -1643,6 +1643,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/services/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The service catalog this build ships with
+         * @description Requires `analytics:manage`. What a deployment would start with, for
+         *     the editor to fill blanks from — a catalog saved before a field
+         *     existed has nothing in it. Reading this changes nothing; the editor
+         *     still has to save what it takes.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            services: components["schemas"]["DNSService"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources/adopt": {
         parameters: {
             query?: never;

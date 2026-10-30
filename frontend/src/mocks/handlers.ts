@@ -2925,6 +2925,14 @@ export const handlers = [
     })
   }),
 
+  // What the editor fills blanks from. The mock's shipped catalog is the one
+  // it started with, before anything was edited in this session.
+  http.get(api('/analytics/services/defaults'), () => {
+    const auth = requireAuth()
+    if (auth) return auth
+    return HttpResponse.json({ services: TREND_PROFILES.map((p) => ({ ...p.service })) })
+  }),
+
   http.put(api('/analytics/services'), async ({ request }) => {
     const auth = requireAuth()
     if (auth) return auth

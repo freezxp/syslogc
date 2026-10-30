@@ -91,6 +91,35 @@ export function formToServices(forms: ServiceForm[]): TrendService[] {
   })
 }
 
+/**
+ * Fill empty countries from the shipped catalog, matching on name.
+ *
+ * Only blanks are filled. A country somebody chose is never overwritten, even
+ * when the shipped catalog disagrees — the deployment's own answer wins — and
+ * a service this build does not ship is left alone rather than guessed at.
+ * Nothing is saved here: the rows come back for the editor to show, and the
+ * person doing it decides.
+ */
+export function fillCountries(
+  rows: ServiceForm[],
+  shipped: Pick<TrendService, 'name' | 'country'>[],
+): { rows: ServiceForm[]; filled: string[] } {
+  const known = new Map<string, string>()
+  for (const s of shipped) {
+    const country = normalCountry(s.country)
+    if (country) known.set(s.name.trim().toLowerCase(), country)
+  }
+  const filled: string[] = []
+  const next = rows.map((row) => {
+    if (normalCountry(row.country)) return row
+    const country = known.get(row.name.trim().toLowerCase())
+    if (!country) return row
+    filled.push(row.label.trim() || row.name.trim())
+    return { ...row, country }
+  })
+  return { rows: filled.length ? next : rows, filled }
+}
+
 export interface CatalogErrors {
   /** Keyed by the row's position in the form, so a message lands on its row. */
   rows: Record<number, string>

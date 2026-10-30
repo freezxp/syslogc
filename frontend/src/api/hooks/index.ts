@@ -61,6 +61,7 @@ import type {
   TimeRange,
   TrendMetric,
   TrendScope,
+  TrendService,
   TrendWindow,
   UserCreateInput,
   UserUpdateInput,
@@ -351,6 +352,21 @@ export function useServiceCatalog() {
     queryKey: serviceCatalogKey,
     queryFn: ({ signal }) => unwrap(client.GET('/api/v1/analytics/services', { signal })) as Promise<ServiceCatalog>,
     staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/**
+ * The catalog this build ships with, for filling blanks in the editor. Asked
+ * for only when somebody asks: it is static, and nothing needs it to render.
+ */
+export function useDefaultServiceCatalog() {
+  return useQuery({
+    queryKey: ['analytics', 'services', 'defaults'] as const,
+    queryFn: ({ signal }) =>
+      unwrap(client.GET('/api/v1/analytics/services/defaults', { signal })) as Promise<{ services: TrendService[] }>,
+    enabled: false,
+    staleTime: Infinity,
     retry: false,
   })
 }

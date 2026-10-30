@@ -313,6 +313,13 @@ whoever runs it; leave it unset for one that belongs nowhere in particular.
 A code this build has never heard of is stored rather than refused, since
 the list changes — it then shows as the two letters instead of a flag.
 
+A catalog saved before countries existed has none, and a deployment with a
+stored catalog does not pick up the shipped ones. **Fill in countries** in
+the editor gives every service without a country the one this build ships
+for it, matching on name. It fills blanks only: a country already chosen is
+never overwritten, and a service of your own is left alone. Nothing is
+saved until you save the catalog.
+
 ### Reached, or merely talked to
 
 Each service is counted twice over, under two scopes:

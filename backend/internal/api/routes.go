@@ -84,6 +84,8 @@ func (s *Server) routes() []route {
 	add("POST /api/v1/analytics/service-trends", permitted, auth.PermLogsSearch, s.handleServiceTrends)
 	add("GET /api/v1/analytics/services", permitted, auth.PermLogsSearch, s.handleServiceCatalog)
 	add("PUT /api/v1/analytics/services", permitted, auth.PermAnalyticsManage, s.handleSetServiceCatalog)
+	// Only useful while editing, so it asks for the permission to edit.
+	add("GET /api/v1/analytics/services/defaults", permitted, auth.PermAnalyticsManage, s.handleDefaultServiceCatalog)
 
 	add("POST /api/v1/dashboard/overview", permitted, auth.PermDashboardView, s.handleOverview)
 	add("POST /api/v1/dashboard/volume", permitted, auth.PermDashboardView, s.handleVolume)

@@ -47,6 +47,18 @@ func (s *Server) handleServiceCatalog(w http.ResponseWriter, r *http.Request, _ 
 	return nil
 }
 
+// handleDefaultServiceCatalog returns the catalog this build ships with.
+//
+// It is what the editor fills blanks from: a deployment that saved its
+// catalog before a field existed has nothing in that field, and typing the
+// same answer into every row by hand is work the server can save. Nothing is
+// changed by asking — the reply is a suggestion, and the editor still has to
+// save it.
+func (s *Server) handleDefaultServiceCatalog(w http.ResponseWriter, _ *http.Request, _ *auth.Principal) error {
+	writeJSON(w, http.StatusOK, map[string]any{"services": servicetrends.DefaultCatalog().Services})
+	return nil
+}
+
 // handleSetServiceCatalog replaces the catalog. The change applies from the
 // next rollup; windows already recorded keep the counts they were recorded
 // with until they are recorded again.

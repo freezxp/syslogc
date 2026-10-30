@@ -4,11 +4,11 @@
  * how someone decides what "TikTok" means here — no configuration file, no
  * restart.
  */
-import { Plus, Trash2, Undo2 } from 'lucide-react'
+import { Flag, Plus, Trash2, Undo2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { ApiError } from '@/api/client'
-import { useUpdateServiceCatalog } from '@/api/hooks'
+import { useDefaultServiceCatalog, useUpdateServiceCatalog } from '@/api/hooks'
 import type { ServiceCatalog } from '@/api/types'
 import { CountryFlag, Panel } from '@/components/data/common'
 import { Button } from '@/components/ui/button'
@@ -19,6 +19,7 @@ import {
   catalogProblemErrors,
   catalogToForm,
   emptyCatalogErrors,
+  fillCountries,
   formToServices,
   hasCatalogErrors,
   newServiceForm,
@@ -36,13 +37,42 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
   const [rows, setRows] = useState<ServiceForm[]>(() => catalogToForm(catalog.services))
   const [errors, setErrors] = useState<CatalogErrors>(emptyCatalogErrors)
   const [saved, setSaved] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const update = useUpdateServiceCatalog()
+  const shipped = useDefaultServiceCatalog()
 
   function change(next: ServiceForm[]) {
     setRows(next)
     setDirty(true)
     setSaved(null)
+    setNotice(null)
+  }
+
+  /**
+   * Fill empty countries from the catalog this build ships with. Nothing is
+   * saved: the rows change and the editor is left dirty, so whoever clicked
+   * sees what it proposes and decides. A country already chosen is left alone.
+   */
+  async function fillFromShipped() {
+    setSaved(null)
+    setNotice(null)
+    const res = await shipped.refetch()
+    if (!res.data) {
+      setNotice(`The shipped catalog could not be read: ${res.error?.message ?? 'unknown error'}`)
+      return
+    }
+    const { rows: next, filled } = fillCountries(rows, res.data.services)
+    if (filled.length === 0) {
+      setNotice('Nothing to fill in: every service this build ships already has a country here.')
+      return
+    }
+    change(next)
+    const shown = filled.slice(0, 3).join(', ')
+    setNotice(
+      `Filled in ${filled.length === 1 ? 'one country' : `${filled.length} countries`} ` +
+        `(${shown}${filled.length > 3 ? ', …' : ''}). Nothing is saved until you save the catalog.`,
+    )
   }
 
   function replace(i: number, patch: Partial<ServiceForm>) {
@@ -54,6 +84,7 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
     setErrors(emptyCatalogErrors())
     setDirty(false)
     setSaved(null)
+    setNotice(null)
   }
 
   function save() {
@@ -92,6 +123,15 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
             <Button size="sm" onClick={() => change([...rows, newServiceForm()])}>
               <Plus /> Add service
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={shipped.isFetching || update.isPending}
+              title="Give any service without a country the one this build ships for it."
+              onClick={fillFromShipped}
+            >
+              <Flag /> {shipped.isFetching ? 'Reading…' : 'Fill in countries'}
+            </Button>
             <Button size="sm" variant="ghost" disabled={!dirty || update.isPending} onClick={revert}>
               <Undo2 /> Revert
             </Button>
@@ -125,6 +165,11 @@ export function ServiceCatalogPanel({ catalog, editable }: { catalog: ServiceCat
       {saved && (
         <p role="status" className="mb-2 text-sm text-success">
           {saved}
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="mb-2 text-sm text-muted">
+          {notice}
         </p>
       )}
 
